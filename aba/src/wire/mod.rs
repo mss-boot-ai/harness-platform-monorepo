@@ -1,7 +1,7 @@
 mod aad;
 
 pub use aad::{
-    ACP_BATCH_FLAG, AAD_V1_LENGTH, CRITICAL_FLAG_MASK, CryptoSuite, Direction, FrameAadV1,
+    AAD_V1_LENGTH, ACP_BATCH_FLAG, CRITICAL_FLAG_MASK, CryptoSuite, Direction, FrameAadV1,
     FrameType, WireValidationError,
 };
 

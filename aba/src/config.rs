@@ -248,9 +248,7 @@ fn valid_identifier(value: &str) -> bool {
         return false;
     }
     bytes.iter().all(|byte| {
-        byte.is_ascii_lowercase()
-            || byte.is_ascii_digit()
-            || matches!(*byte, b'.' | b'_' | b'-')
+        byte.is_ascii_lowercase() || byte.is_ascii_digit() || matches!(*byte, b'.' | b'_' | b'-')
     })
 }
 

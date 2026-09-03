@@ -124,7 +124,7 @@ impl FrameAadV1 {
 #[cfg(test)]
 mod tests {
     use super::{
-        ACP_BATCH_FLAG, AAD_V1_LENGTH, CRITICAL_FLAG_MASK, CryptoSuite, Direction, FrameAadV1,
+        AAD_V1_LENGTH, ACP_BATCH_FLAG, CRITICAL_FLAG_MASK, CryptoSuite, Direction, FrameAadV1,
         FrameType, WireValidationError,
     };
 
@@ -182,10 +182,7 @@ mod tests {
     fn rejects_unknown_critical_flags() {
         let mut aad = valid_aad();
         aad.flags |= CRITICAL_FLAG_MASK;
-        assert_eq!(
-            aad.encode(),
-            Err(WireValidationError::UnknownCriticalFlags)
-        );
+        assert_eq!(aad.encode(), Err(WireValidationError::UnknownCriticalFlags));
     }
 
     #[test]
@@ -196,10 +193,7 @@ mod tests {
 
         let mut aad = valid_aad();
         aad.key_generation = 0;
-        assert_eq!(
-            aad.encode(),
-            Err(WireValidationError::InvalidKeyGeneration)
-        );
+        assert_eq!(aad.encode(), Err(WireValidationError::InvalidKeyGeneration));
     }
 
     #[test]
