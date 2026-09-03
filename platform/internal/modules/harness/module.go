@@ -129,5 +129,6 @@ func registerRoutes(protectedAPI *gin.RouterGroup, runtime business.Runtime) err
 			SchemaMigration: store.SchemaMigrationID.String(),
 		})
 	})
+	registerManagementRoutes(group, runtime)
 	return nil
 }
