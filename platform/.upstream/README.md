@@ -13,15 +13,30 @@ source tree:   32ffcde4e8ca2f41a8c15c373217d06c1b35d9c0
 Go:            1.26.6
 ```
 
-Workflow:
+Import status:
 
-1. Run `scripts/import-mss-boot-admin.sh` from a clean topic branch.
-2. Review the imported tree and generated `import-manifest.txt`.
-3. Commit the import alone; do not mix ACP modifications into that commit.
-4. Change `import.status` to `complete` and set `import_commit_sha` in a following provenance checkpoint once the import commit is known.
-5. Run `scripts/verify-platform-upstream.sh --source` before modifying imported upstream files.
-6. Future Platform changes are normal commits whose ancestry preserves the exact import.
+```text
+status:                  complete
+isolated import commit:  bf0f73d5d9480288fd615045e4bdca72ead22012
+import manifest blob:    a979e59dd8fe5a9314860c4faf10c2ef05f6ec60
+verification workflow:   33775161473
+workflow conclusion:     success
+verified at UTC:         2026-09-03T15:52:14Z
+```
 
-The import script deletes the temporary `platform/README.md` scaffold because the upstream repository has its own root README. It preserves only this `.upstream` directory while replacing the rest of `platform/`.
+The import workflow performed the following against a clean topic-branch checkout:
 
-Never fetch or import upstream `main`, `latest`, or an unpeeled tag. An upstream change requires a new ADR and lock update.
+1. verified the lock file;
+2. resolved the annotated `v1.3.7` tag object and peeled commit;
+3. fetched the exact source commit;
+4. checked the exact source tree SHA;
+5. archived the locked tree into `platform/` while preserving `.upstream`;
+6. generated `import-manifest.txt` from `git ls-tree`;
+7. verified every imported path, Git blob identity, file type and executable mode;
+8. committed and pushed the imported source as one isolated commit.
+
+The one-time write-capable workflow was removed immediately after the successful import. The reusable scripts remain for future controlled imports and provenance checks.
+
+Future Platform modifications are expected to make the working `platform/` tree differ from the pristine upstream tree. The exact initial import remains provable from Git ancestry, the isolated import commit, this lock and the manifest. Do not rewrite that history.
+
+Never fetch or import upstream `main`, `latest`, or an unpeeled tag. An upstream change requires a new ADR and lock update, followed by migration and verification evidence.

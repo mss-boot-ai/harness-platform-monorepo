@@ -22,9 +22,13 @@ import:
   strategy: vendored-tree
   target_directory: platform
   preserve_directory: platform/.upstream
-  status: pending
-  import_commit_sha: null
+  status: complete
+  import_commit_sha: bf0f73d5d9480288fd615045e4bdca72ead22012
   import_manifest: platform/.upstream/import-manifest.txt
+  import_manifest_blob_sha: a979e59dd8fe5a9314860c4faf10c2ef05f6ec60
+  verified_workflow_run_id: 33775161473
+  verified_workflow_conclusion: success
+  verified_at_utc: 2026-09-03T15:52:14Z
 
 policy:
   allow_floating_branch: false
