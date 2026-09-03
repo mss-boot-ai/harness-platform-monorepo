@@ -1,11 +1,7 @@
-# Scripts
+# Repository scripts
 
-Repository scripts must be deterministic, fail closed, and safe to rerun. They may verify or import the exact pinned Platform upstream, validate protocol sources, and orchestrate local checks.
+- `check-docs.sh`：检查文档索引、术语和基线文件。
+- `check-protocol.sh`：编译 AWP v1 Schema 并检查协议边界。
+- `verify-platform-import.sh`：验证 `platform/` 是 mss-boot-admin v1.3.7 Thin Host，检查后端/前端精确依赖、Blueprint Manifest、禁止 vendored Foundation 与本地 replace。
 
-Rules:
-
-- no script may silently follow an upstream `main` or `latest` ref;
-- no secret may be printed or persisted;
-- a verification warning must not be treated as success;
-- scripts that mutate the tree must document their expected clean-tree precondition and output;
-- generated or imported code is committed only after provenance checks.
+Platform 创建与升级由官方 `mss v1.3.7` 工具负责。仓库不再提供复制完整 mss-boot-admin 源码的脚本。
