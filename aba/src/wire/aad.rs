@@ -149,12 +149,10 @@ mod tests {
 
     #[test]
     fn encodes_every_field_at_the_documented_offset() {
-        let encoded = match valid_aad().encode() {
-            Ok(value) => value,
-            Err(error) => {
-                assert!(false, "valid AAD did not encode: {error}");
-                return;
-            }
+        let result = valid_aad().encode();
+        assert!(result.is_ok(), "valid AAD did not encode: {result:?}");
+        let Ok(encoded) = result else {
+            return;
         };
 
         assert_eq!(encoded.len(), AAD_V1_LENGTH);
