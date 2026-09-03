@@ -1,110 +1,121 @@
-# mss-boot Complete Admin Distribution
+# Harness Platform
 
-[简体中文](./README.zh-CN.md)
+This repository is a Thin Host for `mss-boot-admin`
+`v1.3.7`. It imports the complete Admin backend and
+frontend packages and owns only business modules, configuration, tests, and
+composition glue.
 
-mss-boot is an agent-native management-system foundation. **v1.3.7 is the
-selected complete package-first release candidate, but it is not stable or
-adoptable.** Candidate surfaces may be at different public stages; use the
-remote release ledger as authority. Until stable promotion and the final
-policy/Docs reconciliation complete, do not install, create, or upgrade with
-v1.3.7. v1.3.5 and v1.3.6 are immutable partial trains. No identity from either
-train may be deleted, moved, recreated, reused, or completed.
+## Start development
 
-## Current availability
+Install the matching `mss` tool from the versioned release bundle, then run:
 
-The release policy still identifies **v1.3.2** as the current coordinated
-stable distribution. Its immutable release record remains the supported
-baseline for existing adopters.
+```shell
+mss doctor --strict
+mss setup
+mss dev --detach
+```
 
-The stopped identity namespaces remain explicit audit evidence:
+`mss setup` downloads the exact locked packages and idempotently initializes
+the local SQLite database. On an interactive terminal, the first migration
+prompts for the initial administrator password with hidden input. In
+non-interactive automation, inject `MSS_ADMIN_INITIAL_PASSWORD` from the CI
+secret store for that setup process only. Setup explicitly removes the value
+from dependency-install subprocesses and injects it only into the migration
+command; it is never placed in command arguments, reports, or generated files.
+Use 8-128 characters with at least one letter and one number.
+After the first migration succeeds, repeated setup runs do not require it.
 
-| Train | Framework | Admin | Official npm identity | Docs identity |
-| --- | --- | --- | --- | --- |
-| v1.3.5 | `github.com/mss-boot-io/mss-boot-admin/mss-boot@v1.3.5` | `github.com/mss-boot-io/mss-boot-admin/admin@v1.3.5` | `@mss-boot-io/admin-web@1.3.5` | `docs/v1.3.5` |
-| v1.3.6 | `github.com/mss-boot-io/mss-boot-admin/mss-boot@v1.3.6` | `github.com/mss-boot-io/mss-boot-admin/admin@v1.3.6` | `@mss-boot-io/admin-web@1.3.6` | `docs/v1.3.6` |
+The backend listens on `http://127.0.0.1:8080` and Admin Web on
+`http://127.0.0.1:8001`. Inspect detached services with `mss dev status`, read
+logs with `mss dev logs <service>`, and stop them with `mss dev stop`.
+Sign in to Admin Web as `admin` with the password supplied during the first
+setup. There is no default password.
 
-Some Go and GitHub identities in those rows exist while the npm or Docs
-identity may be absent. A named identity is not a claim that it was published.
+Before every pull request, run:
 
-v1.3.6 published only part of the intended train from exact commit
-`b1fe47a3a83209574e09d53526b122dd2cbc5277`:
+```shell
+mss verify --all
+```
 
-| Surface | v1.3.6 result | Availability |
-| --- | --- | --- |
-| Framework | `mss-boot/v1.3.6` | Public Go component and GitHub Release |
-| Admin | `admin/v1.3.6` | Public Go component and GitHub Release |
-| Admin Web | `web/antd-v6/v1.3.6` | GitHub Release and GitHub Packages; official npmjs is absent |
-| Root | `v1.3.6` | Public Root Release and tools; Root image is absent |
-| Docs | planned `docs/v1.3.6` | Not published |
+## Add business capabilities
 
-These component identities are immutable but do not form a complete Thin Host
-distribution. Do not combine them with v1.3.2, a source checkout, a local
-replacement, or an unpublished package.
+Write an `AdminModule` specification under `.mss/modules/`, review the dry-run,
+then apply the deterministic generator:
 
-v1.3.7 is the new candidate. It must first pass one non-publishing preview from
-an exact repaired merged-main commit, including a real Root OCI artifact and
-the exact credentialless npm Trusted Publisher binding for `npm-release.yml`
-and `npm-auto`. Its candidate surfaces then publish in governed stages and may
-not all be public at the same time. Until stable promotion and the final
-policy/Docs reconciliation complete, no v1.3.7 download, install, creation, or
-upgrade procedure is supported.
+```shell
+mss module generate .mss/modules/example.yaml
+mss module generate .mss/modules/example.yaml --write
+mss verify --module example
+```
 
-## Adopter status
+Custom backend files belong under `internal/modules/<name>/`. Register a
+handwritten module explicitly in `internal/modules/custom/modules.go`; the
+managed `internal/modules/registry.go` facade composes generated modules first.
+Custom frontend files belong under `web/src/business/`. Add handwritten Umi
+routes to `web/src/business/routes.config.ts` and the matching frontend-only
+server-path projections to `web/src/business/route-registrations.ts`. These
+registrations drive menu visibility; they do not write Admin Menu or Casbin rows
+and never authorize a backend request. The managed facades compose both
+registries, and the final Admin Web registry rejects duplicates across core,
+generated, and handwritten UI or server paths.
 
-There is no supported v1.3.5 or v1.3.6 installer, empty-directory application
-creation, local setup, or distribution-upgrade procedure. v1.3.7 is now the
-selected candidate for those package-first interfaces, but current onboarding continues
-to withhold executable commands until stable promotion, external Thin Host
-acceptance, and the final policy/Docs reconciliation have completed.
+Keep handwritten user-facing messages synchronized in
+`web/src/business/locales/zh-CN.ts` and
+`web/src/business/locales/en-US.ts`. Managed locale facades merge Admin core,
+generated module, and handwritten messages in that order, so business pages can
+add both languages without editing generated locale registries.
 
-Use the [v1.3.2 stable record](./docs/docs/releases/archive/v1-3-2.md)
-for the current stable boundary and the
-[v1.3.5 partial-release record](./docs/docs/releases/v1-3-5.md) and
-[v1.3.6 partial-release record](./docs/docs/releases/v1-3-6.md) for immutable
-audit evidence. The [v1.3.7 candidate record](./docs/docs/releases/v1-3-7.md)
-describes the recovery, migration, security, and rollback boundary without
-claiming publication.
+The protected backend group authenticates sessions but does not infer business
+permissions. Every handwritten module must add a forward migration that creates
+or validates permission metadata and default role policies, verify those records
+in readiness, and enforce the exact permission in each handler through the
+injected principal and request database. Cover both allowed and denied callers.
+Do not copy Foundation Admin, Framework, or Admin Web source into this repository.
 
-## Architecture boundary
+## Upgrade the Admin Distribution
 
-The v1.3.7 candidate keeps a generated application as a **Thin Host**: it pins
-one coordinated Admin Go module and Admin Web package, contains
-only composition glue and business-owned modules, and never copies Foundation
-core source. Business backend modules register at compile time, frontend
-business routes extend the packaged shell, and backend authorization remains
-authoritative. This candidate architecture contract does not make v1.3.7
-adoptable before the complete stable-promotion reconciliation and does not
-complete v1.3.5 or v1.3.6.
+Back up the repository and database, then install the `mss` tool whose version
+matches the requested Distribution. Confirm both binaries report that version
+and that this generated repository still contains
+`.mss/blueprint-manifest.json` before planning:
 
-## Documentation
+```shell
+mss --version
+mss-mcp --version
+mss upgrade status --format json
+mss upgrade admin v1.3.7 --format json
+mss upgrade admin v1.3.7 --apply --yes --format json
+mss upgrade status
+mss doctor --strict
+mss verify --all
+mss upgrade admin v1.3.7 --format json
+```
 
-The repository separates human guidance from executable Agent authority:
+The first command is read-only. Review every managed change and conflict before
+the confirmed apply; the final plan must contain no create, update, delete, or
+conflict operations. It may continue to report a customized default registry as
+`preserve`, which is read-only and must leave its bytes unchanged. Unknown
+business-owned files remain outside the managed Blueprint baseline. The three
+default handwritten registry files and two bilingual locale catalogs start in
+the baseline so new hosts compile; their explicit edits are preserved while the
+corresponding Blueprint defaults remain unchanged. A hand-assembled repository
+or one missing its manifest cannot
+use three-way upgrade: generate a clean target baseline in a new directory and
+migrate business-owned specifications and files instead of fabricating a
+manifest.
 
-| Audience | Start here |
-| --- | --- |
-| Adopters, operators, and contributors | README files and `docs/docs/**` |
-| Architecture maintainers | `docs/adr/**` |
-| Foundation AI Agents | nearest `AGENTS.md` -> `.mss/**` -> applicable `.agents/skills/**` |
-| Generated Thin Host AI Agents | the generated repository's `AGENTS.md`, `.mss/**`, and local Skills |
+## Configuration and security
 
-The public [Agent collaboration guide](./docs/docs/agent/index.md) explains this
-model for humans; it is not an executable instruction source and does not merge
-Foundation-maintainer Skills into Thin Host capabilities.
+Development uses the Distribution's embedded, redacted local defaults. Keep
+production credentials and environment-specific overlays outside source control. Backend
+authorization is authoritative; frontend permission checks are an experience
+layer only.
 
-- [Adopter and component status](./docs/docs/getting-started/index.md)
-- [Published components and import boundaries](./docs/docs/getting-started/packages.md)
-- [Tool publication status](./docs/docs/getting-started/tooling.md)
-- [mss-shop reference status](./docs/docs/getting-started/mss-shop.md)
-- [v1.3.7 release-candidate record](./docs/docs/releases/v1-3-7.md)
-- [v1.3.6 immutable partial-release record](./docs/docs/releases/v1-3-6.md)
-- [v1.3.5 immutable partial-release record](./docs/docs/releases/v1-3-5.md)
+For deployment, run the image's idempotent `migrate` command as an init job
+before starting `server`. A fresh database receives
+`MSS_ADMIN_INITIAL_PASSWORD` only from the deployment secret store for that
+job; do not keep it in the long-running server environment. A failed migration
+must block rollout.
 
-Foundation contributors should use
-[`CONTRIBUTING.md`](./docs/CONTRIBUTING.md) and the nearest `AGENTS.md`;
-source-checkout commands are
-deliberately kept out of adopter onboarding.
-
-## License and security
-
-Licensed under the [MIT License](./LICENSE). Report security issues through the
-private process in [`SECURITY.md`](./SECURITY.md), not a public issue.
+Generated by `mss` v1.3.7 from the management-system Thin
+Host Blueprint.

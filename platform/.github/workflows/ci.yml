@@ -1,328 +1,65 @@
-name: CI
+name: Thin Host CI
 
 on:
-  push:
-    branches:
-      - main
-    paths-ignore:
-      - 'docs/**'
-      - 'web/**'
-      - '.agents/**'
-      - '.codex/**'
-      - '.cursor/**'
-      - '**/*.md'
-      - '.github/workflows/agent-native-ci.yml'
-      - '.github/workflows/docs.yml'
-      - '.github/workflows/frontend-v6-ci.yml'
-      - '.github/workflows/swagger.yml'
   pull_request:
-    branches:
-      - main
-    # Branch protection requires the admin-ci context. Keep pull requests
-    # unfiltered so GitHub always creates that required check.
-  workflow_dispatch:
+  push:
+    branches: [main]
 
 permissions:
   contents: read
 
-concurrency:
-  group: admin-ci-${{ github.event.pull_request.number || github.ref }}
-  cancel-in-progress: ${{ !startsWith(github.ref, 'refs/tags/') }}
-
-env:
-  GOTOOLCHAIN: local
-
 jobs:
-  scope:
-    uses: ./.github/workflows/component-scope.yml
-
-  test:
-    name: admin-test
-    needs: scope
-    if: needs.scope.outputs.scope == 'admin' || needs.scope.outputs.scope == 'shared'
+  contracts:
     runs-on: ubuntu-24.04
-    timeout-minutes: 45
-    services:
-      redis:
-        image: redis:7-alpine
-        ports:
-          - 6379:6379
-        options: >-
-          --health-cmd "redis-cli ping"
-          --health-interval 5s
-          --health-timeout 3s
-          --health-retries 10
     steps:
-      - name: Checkout
-        uses: actions/checkout@v7
-
-      - name: Setup Go
-        uses: actions/setup-go@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7
         with:
-          go-version-file: admin/go.mod
+          go-version: 1.26.6
           cache: true
-          cache-dependency-path: |
-            admin/go.sum
-            mss-boot/go.sum
-            go.work.sum
-
-      - name: Test coordinated Admin module
-        if: github.event_name == 'pull_request'
-        working-directory: admin
-        run: go test -shuffle=on -count=1 ./...
-
-      - name: Test coverage policy tooling
-        if: github.event_name != 'pull_request'
-        run: python3 -m unittest scripts/test_check_go_coverage.py
-
-      - name: Test coordinated Admin module with atomic coverage
-        if: github.event_name != 'pull_request'
-        working-directory: admin
-        run: >-
-          go test -shuffle=on -count=1 -covermode=atomic -coverpkg=./...
-          -coverprofile="${RUNNER_TEMP}/admin.coverage.out" ./...
-
-      - name: Enforce Admin coverage policy
-        if: github.event_name != 'pull_request'
-        run: >-
-          python3 scripts/check-go-coverage.py
-          --profile "${RUNNER_TEMP}/admin.coverage.out"
-          --policy .mss/coverage.json
-          --component admin
-          --summary
-
-      - name: Upload Admin coverage profile
-        if: github.event_name != 'pull_request'
-        uses: actions/upload-artifact@v7
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7
         with:
-          name: admin-coverage
-          path: ${{ runner.temp }}/admin.coverage.out
-          if-no-files-found: error
-          retention-days: 14
-
-  race:
-    name: admin-race
-    needs: scope
-    if: >-
-      github.event_name != 'pull_request' &&
-      (needs.scope.outputs.scope == 'admin' || needs.scope.outputs.scope == 'shared')
-    runs-on: ubuntu-24.04
-    timeout-minutes: 55
-    services:
-      redis:
-        image: redis:7-alpine
-        ports:
-          - 6379:6379
-        options: >-
-          --health-cmd "redis-cli ping"
-          --health-interval 5s
-          --health-timeout 3s
-          --health-retries 10
-    steps:
-      - name: Checkout
-        uses: actions/checkout@v7
-
-      - name: Setup Go
-        uses: actions/setup-go@v7
-        with:
-          go-version-file: admin/go.mod
-          cache: true
-          cache-dependency-path: |
-            admin/go.sum
-            mss-boot/go.sum
-
-      - name: Race-test coordinated Admin module
-        working-directory: admin
-        run: go test -race -shuffle=on -count=1 ./...
-
-  static-and-module:
-    name: admin-static-and-module
-    needs: scope
-    if: >-
-      github.event_name != 'pull_request' &&
-      (needs.scope.outputs.scope == 'admin' || needs.scope.outputs.scope == 'shared')
-    runs-on: ubuntu-24.04
-    timeout-minutes: 30
-    steps:
-      - name: Checkout
-        uses: actions/checkout@v7
-
-      - name: Setup Go
-        uses: actions/setup-go@v7
-        with:
-          go-version-file: admin/go.mod
-          cache: true
-          cache-dependency-path: |
-            admin/go.sum
-            mss-boot/go.sum
-
-      - name: Vet Admin module
-        working-directory: admin
-        run: go vet ./...
-
-      - name: Verify Admin module metadata
-        run: bash tools/ci/verify-admin-module-metadata.sh
-
-      - name: Reject actual reverse Admin dependencies
+          node-version: 24.13.1
+          registry-url: https://registry.npmjs.org
+      - run: corepack enable
+      - run: corepack pnpm@10.34.5 --dir web install --frozen-lockfile
+      - name: Install exact mss release tools
         run: |
-          set -euo pipefail
-          admin_prefix='github.com/mss-boot-io/mss-boot-admin/admin'
-          if GOWORK=off go list -deps ./... | grep -E "^${admin_prefix}(/|$)"; then
-            echo 'Agent/Foundation module must not depend on Admin packages' >&2
-            exit 1
-          fi
-          if (cd mss-boot && GOWORK=off go list -deps ./...) | grep -E "^${admin_prefix}(/|$)"; then
-            echo 'mss-boot must not depend on Admin packages' >&2
-            exit 1
-          fi
+          curl --fail --location --silent --show-error \
+            --output "${RUNNER_TEMP}/install-mss.sh" \
+            https://github.com/mss-boot-io/mss-boot-admin/releases/download/v1.3.7/install-mss.sh
+          bash "${RUNNER_TEMP}/install-mss.sh" \
+            --version v1.3.7 \
+            --install-dir "${RUNNER_TEMP}/mss-bin"
+          echo "${RUNNER_TEMP}/mss-bin" >> "${GITHUB_PATH}"
+      - run: mss doctor --strict
+      - run: mss verify --all
 
-  compatibility:
-    name: admin-mss-boot-compatibility
-    needs: scope
-    if: >-
-      github.event_name != 'pull_request' &&
-      (needs.scope.outputs.scope == 'admin' ||
-      needs.scope.outputs.scope == 'framework' ||
-      needs.scope.outputs.scope == 'shared')
+  backend:
     runs-on: ubuntu-24.04
-    timeout-minutes: 25
-    services:
-      redis:
-        image: redis:7-alpine
-        ports:
-          - 6379:6379
-        options: >-
-          --health-cmd "redis-cli ping"
-          --health-interval 5s
-          --health-timeout 3s
-          --health-retries 10
     steps:
-      - name: Checkout
-        uses: actions/checkout@v7
-
-      - name: Setup Go
-        uses: actions/setup-go@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7
         with:
-          go-version-file: admin/go.mod
+          go-version: 1.26.6
           cache: true
-          cache-dependency-path: |
-            admin/go.sum
-            mss-boot/go.sum
-            go.work.sum
+      - run: GOWORK=off go test ./...
+      - run: GOWORK=off go vet ./...
+      - run: GOWORK=off go build ./cmd/server
 
-      - name: Verify workspace compatibility contract
-        run: go test -count=1 ./admin/compatibility
-
-      - name: Verify repository-external Admin consumer
-        run: bash tools/compatibility/test-admin-external-consumer.sh
-
-      - name: Verify workspace module graph
-        run: |
-          go list -m all > "${RUNNER_TEMP}/workspace-modules.txt"
-          grep -F 'github.com/mss-boot-io/mss-boot-admin/admin' "${RUNNER_TEMP}/workspace-modules.txt"
-          grep -F 'github.com/mss-boot-io/mss-boot-admin/mss-boot' "${RUNNER_TEMP}/workspace-modules.txt"
-
-  compile:
-    name: admin-build
-    needs: scope
-    if: >-
-      github.event_name != 'pull_request' &&
-      (needs.scope.outputs.scope == 'admin' || needs.scope.outputs.scope == 'shared')
+  frontend:
     runs-on: ubuntu-24.04
-    timeout-minutes: 25
+    defaults:
+      run:
+        working-directory: web
     steps:
-      - name: Checkout
-        uses: actions/checkout@v7
-
-      - name: Setup Go
-        uses: actions/setup-go@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7
         with:
-          go-version-file: admin/go.mod
-          cache: true
-          cache-dependency-path: |
-            admin/go.sum
-            mss-boot/go.sum
-
-      - name: Build coordinated Admin binary
-        working-directory: admin
-        env:
-          BINARY: ${{ runner.temp }}/mss-boot-admin
-        run: |
-          CGO_ENABLED=0 go build -trimpath -o "${BINARY}" .
-          "${BINARY}" --help >/dev/null
-          "${BINARY}" server --help >/dev/null
-          "${BINARY}" migrate --help >/dev/null
-
-  build:
-    # Use a repository-unique required context; several unrelated workflows
-    # also expose a generic "build" job and must not satisfy Admin CI.
-    name: admin-ci
-    if: ${{ always() }}
-    needs:
-      - scope
-      - test
-      - race
-      - static-and-module
-      - compatibility
-      - compile
-    runs-on: ubuntu-24.04
-    timeout-minutes: 5
-    steps:
-      - name: Require every Admin check to pass
-        env:
-          EVENT_NAME: ${{ github.event_name }}
-          COMPONENT_SCOPE: ${{ needs.scope.outputs.scope }}
-          SCOPE_RESULT: ${{ needs.scope.result }}
-          TEST_RESULT: ${{ needs.test.result }}
-          RACE_RESULT: ${{ needs.race.result }}
-          STATIC_RESULT: ${{ needs.static-and-module.result }}
-          COMPATIBILITY_RESULT: ${{ needs.compatibility.result }}
-          COMPILE_RESULT: ${{ needs.compile.result }}
-        run: |
-          echo "event=${EVENT_NAME}"
-          echo "scope=${SCOPE_RESULT}"
-          echo "component-scope=${COMPONENT_SCOPE}"
-          echo "test=${TEST_RESULT}"
-          echo "race=${RACE_RESULT}"
-          echo "static-and-module=${STATIC_RESULT}"
-          echo "compatibility=${COMPATIBILITY_RESULT}"
-          echo "compile=${COMPILE_RESULT}"
-          test "${SCOPE_RESULT}" = "success"
-          case "${COMPONENT_SCOPE}" in
-            admin|shared)
-              test "${TEST_RESULT}" = "success"
-              if test "${EVENT_NAME}" = "pull_request"; then
-                test "${RACE_RESULT}" = "skipped"
-                test "${STATIC_RESULT}" = "skipped"
-                test "${COMPATIBILITY_RESULT}" = "skipped"
-                test "${COMPILE_RESULT}" = "skipped"
-              else
-                test "${RACE_RESULT}" = "success"
-                test "${STATIC_RESULT}" = "success"
-                test "${COMPATIBILITY_RESULT}" = "success"
-                test "${COMPILE_RESULT}" = "success"
-              fi
-              ;;
-            framework)
-              test "${TEST_RESULT}" = "skipped"
-              test "${RACE_RESULT}" = "skipped"
-              test "${STATIC_RESULT}" = "skipped"
-              test "${COMPILE_RESULT}" = "skipped"
-              if test "${EVENT_NAME}" = "pull_request"; then
-                test "${COMPATIBILITY_RESULT}" = "skipped"
-              else
-                test "${COMPATIBILITY_RESULT}" = "success"
-              fi
-              ;;
-            docs|web)
-              test "${TEST_RESULT}" = "skipped"
-              test "${RACE_RESULT}" = "skipped"
-              test "${STATIC_RESULT}" = "skipped"
-              test "${COMPATIBILITY_RESULT}" = "skipped"
-              test "${COMPILE_RESULT}" = "skipped"
-              ;;
-            *)
-              echo "unsupported component scope: ${COMPONENT_SCOPE}" >&2
-              exit 1
-              ;;
-          esac
+          node-version: 24.13.1
+          registry-url: https://registry.npmjs.org
+      - run: corepack enable
+      - run: corepack pnpm@10.34.5 install --frozen-lockfile
+      - run: corepack pnpm@10.34.5 lint
+      - run: corepack pnpm@10.34.5 test
+      - run: corepack pnpm@10.34.5 build

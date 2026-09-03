@@ -1,62 +1,18 @@
-# If you prefer the allow list template instead of the deny list, see community template:
-# https://github.com/github/gitignore/blob/main/community/Golang/Go.AllowList.gitignore
-#
-# Binaries for programs and plugins
-*.exe
-*.exe~
-*.dll
-*.so
-*.dylib
-
-# Test binary, built with `go test -c`
-*.test
-
-# Output of the go coverage tool
-*.out
-coverage*
-.coverage/
-
-# Dependency directories are generated on demand.
-vendor/
-**/node_modules/
-__pycache__/
-*.py[cod]
-
-# IDE
-.vscode/
-.idea/
-
-# Local configuration and databases
-config/application-*
-admin/config/application-*
-!admin/config/application-e2e.yml
-!admin/config/application-local.yml
-*.db
-
-# Runtime and build output
 bin/
-!web/antd-v6/bin/
-!web/antd-v6/bin/mss-admin-web.cjs
-temp/
-test/
-public/
-!web/antd-v6/public/
-!web/antd-v6/public/**
-admin/public/
-dist/
-**/dist/
-mss-boot-admin
-mss-boot-admin.exe
-compose/**/**/datalogs/
-logs/
-
-# Frontend test output
-web/antd-v6/test-results/
-web/antd-v6/playwright-report/
-
-# Local agent-native reports, process state, logs, caches, and generated app output
+*.db
+*.out
 .mss/reports/
 .mss/run/
-.mss/logs/
 .mss/cache/
-.mss/output/
+.mss/logs/
+logs/
+web/node_modules/
+web/.pnpm-store/
+web/dist/
+web/.umi/
+web/.umi-production/
+web/src/.umi/
+web/src/.umi-production/
+web/test-results/
+web/playwright-report/
+config/application-*.yml

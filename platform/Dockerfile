@@ -1,40 +1,33 @@
-FROM --platform=$BUILDPLATFORM golang:1.26.6-alpine@sha256:af8d6740070b8906d12eae1c3e3ea0957fb63f492051ea05e354c38ef9fe88df AS builder
+# syntax=docker/dockerfile:1.7
 
-ARG VERSION=devel
-ARG COMMIT=unknown
+FROM --platform=$BUILDPLATFORM golang:1.26.6-alpine@sha256:3889b425f035be855a72fb4755265311293b6d414521f0a519d819df32222d83 AS backend
 ARG TARGETOS
 ARG TARGETARCH
-
-WORKDIR /workspace
-
+WORKDIR /src
+COPY go.mod go.sum ./
+RUN GOWORK=off go mod download
 COPY . .
+RUN CGO_ENABLED=0 GOOS=$TARGETOS GOARCH=$TARGETARCH GOWORK=off \
+    go build -trimpath -ldflags="-s -w" -o /out/admin ./cmd/server
 
-RUN CGO_ENABLED=0 GOOS=${TARGETOS} GOARCH=${TARGETARCH} go build \
-    -mod=vendor \
-    -trimpath \
-    -ldflags="-s -w -X github.com/mss-boot-io/mss-boot-admin/admin/pkg.Version=${VERSION} -X github.com/mss-boot-io/mss-boot-admin/admin/pkg.Commit=${COMMIT}" \
-    -o /out/mss-boot-admin \
-    ./admin
+FROM --platform=$BUILDPLATFORM node:24.19.0-bookworm-slim@sha256:3638d9a6fe4030bd716be989438248074489337ba3275657f93595428be4fc03 AS frontend
+WORKDIR /src/web
+RUN corepack enable
+COPY web/package.json web/pnpm-lock.yaml web/.npmrc ./
+RUN corepack pnpm@10.34.5 install --frozen-lockfile
+COPY web/ ./
+RUN corepack pnpm@10.34.5 build
 
 FROM alpine:3.24.1@sha256:28bd5fe8b56d1bd048e5babf5b10710ebe0bae67db86916198a6eec434943f8b
-
-ARG VERSION=devel
-ARG COMMIT=unknown
-
-LABEL org.opencontainers.image.source="https://github.com/mss-boot-io/mss-boot-admin" \
-      org.opencontainers.image.version="${VERSION}" \
-      org.opencontainers.image.revision="${COMMIT}"
-
 RUN apk add --no-cache ca-certificates tzdata \
     && addgroup -S admin \
     && adduser -S -G admin -h /app admin
-
 WORKDIR /app
-
-COPY --from=builder --chown=admin:admin /out/mss-boot-admin /app/mss-boot-admin
-COPY --from=builder --chown=admin:admin /workspace/admin/config /app/config
-
+COPY --from=backend --chown=admin:admin /out/admin /app/admin
+COPY --from=frontend --chown=admin:admin /src/web/dist /app/public
 USER admin
-
-ENTRYPOINT ["/app/mss-boot-admin"]
+EXPOSE 8080
+HEALTHCHECK --interval=30s --timeout=3s --start-period=10s --retries=3 \
+  CMD wget --quiet --spider http://127.0.0.1:8080/healthz || exit 1
+ENTRYPOINT ["/app/admin"]
 CMD ["server"]

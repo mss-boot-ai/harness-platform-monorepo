@@ -1,7 +1,7 @@
 apiVersion: mss.io/v1alpha1
 kind: DevelopmentEnvironment
 metadata:
-  project: mss-boot-admin
+  project: harness-platform
 spec:
   runtimeDirectory: .mss/run
   logDirectory: .mss/logs
@@ -9,37 +9,28 @@ spec:
   stopTimeout: 10s
   services:
     - id: backend
-      description: Go admin API and static development server
-      directory: admin
-      command:
-        - go
-        - run
-        - .
-        - server
-      required: true
+      description: Complete Admin backend with compiled business modules
+      directory: .
+      command: [go, run, ./cmd/server, server]
       environment:
-        MSS_DEV_MANAGED: "true"
-        STAGE: local
+        GOWORK: "off"
+        CONFIG_PROVIDER: fs
+      required: true
       health:
         url: http://127.0.0.1:8080/healthz
         interval: 500ms
         timeout: 90s
-        successStatus: [200, 204]
-
-    - id: frontend
-      description: Primary React 19 and Ant Design 6 development server
-      directory: web/antd-v6
-      command:
-        - corepack
-        - pnpm@10.34.5
-        - start:dev
-      required: true
-      dependsOn: [backend]
+        successStatus: [200]
+    - id: admin-web
+      description: Composed Admin Web development server
+      directory: web
+      command: [corepack, pnpm@10.34.5, run, dev]
       environment:
-        BROWSER: none
-        MSS_DEV_MANAGED: "true"
+        CI: "false"
+      dependsOn: [backend]
+      required: true
       health:
         url: http://127.0.0.1:8001/
         interval: 500ms
         timeout: 90s
-        successStatus: [200, 304]
+        successStatus: [200]
