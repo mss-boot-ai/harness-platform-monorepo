@@ -20,14 +20,14 @@ func TestScopedRevocationCannotCrossTenant(t *testing.T) {
 	if _, err := persistence.RevokeEndpointForOwner(ctx, value.ID, "owner", "tenant-b", now.Add(time.Second)); !domain.HasCode(err, domain.CodeNotFound) {
 		t.Fatalf("cross-tenant revoke error = %v", err)
 	}
-	stored, err := persistence.GetEndpoint(ctx, value.ID)
+	values, err := persistence.ListEndpoints(ctx, "owner", "tenant-a", 10)
 	if err != nil {
-		t.Fatalf("GetEndpoint: %v", err)
+		t.Fatalf("ListEndpoints after denied revoke: %v", err)
 	}
-	if stored.Status != domain.EndpointStatusActive {
-		t.Fatalf("cross-tenant revoke changed status to %s", stored.Status)
+	if len(values) != 1 || values[0].Status != domain.EndpointStatusActive {
+		t.Fatalf("cross-tenant revoke changed endpoint: %#v", values)
 	}
-	stored, err = persistence.RevokeEndpointForOwner(ctx, value.ID, "owner", "tenant-a", now.Add(2*time.Second))
+	stored, err := persistence.RevokeEndpointForOwner(ctx, value.ID, "owner", "tenant-a", now.Add(2*time.Second))
 	if err != nil {
 		t.Fatalf("RevokeEndpointForOwner: %v", err)
 	}
