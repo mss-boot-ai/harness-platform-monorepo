@@ -60,13 +60,18 @@ jobs:
         uses: actions/setup-node@v6
         with:
           node-version: '24'
-          cache: pnpm
-          cache-dependency-path: platform/web/pnpm-lock.yaml
+      - name: Activate pinned pnpm
+        if: steps.thin-host.outputs.ready == 'true'
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          corepack enable
+          corepack prepare pnpm@10.34.5 --activate
+          pnpm --version | grep -Fx '10.34.5'
       - name: Test Platform Admin Web extension
         if: steps.thin-host.outputs.ready == 'true'
         working-directory: platform/web
         run: |
-          corepack enable
           pnpm install --frozen-lockfile
           pnpm lint
           pnpm test
@@ -110,6 +115,7 @@ jobs:
             exit 0
           fi
           corepack enable
+          corepack prepare pnpm@10.34.5 --activate
           cd hc
           pnpm install --frozen-lockfile
           pnpm lint
