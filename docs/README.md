@@ -7,17 +7,18 @@
 1. [`../AGENT.md`](../AGENT.md)：仓库操作、安全边界和开发纪律。
 2. [`memory/project-memory.md`](memory/project-memory.md)：项目当前事实、命名、基线和状态。
 3. [`memory/decisions.md`](memory/decisions.md)：已经确认且不得擅自推翻的决策。
-4. [`product/PRD.md`](product/PRD.md)：完整产品需求、角色、场景、范围和验收标准。
-5. [`architecture/ARCHITECTURE.md`](architecture/ARCHITECTURE.md)：系统总体架构与组件边界。
-6. [`architecture/SECURITY.md`](architecture/SECURITY.md)：信任模型、身份、证书、密码学和轮换。
-7. [`architecture/PROTOCOL.md`](architecture/PROTOCOL.md)：ABA Wire Protocol、加密 Frame、状态机与可靠性语义。
-8. [`architecture/PLATFORM.md`](architecture/PLATFORM.md)：基于 mss-boot-admin v1.3.7 的 Platform 集成、数据模型和 API。
-9. [`architecture/ABA.md`](architecture/ABA.md)：Rust `acp-brige-agent` 的内部设计。
-10. [`architecture/HC.md`](architecture/HC.md)：Web、小程序和后续原生 HC 的设计。
-11. [`roadmap/IMPLEMENTATION.md`](roadmap/IMPLEMENTATION.md)：分阶段实施、分支和检查点计划。
-12. [`roadmap/VERIFICATION.md`](roadmap/VERIFICATION.md)：测试矩阵、验收门禁和证据要求。
-13. [`memory/work-log.md`](memory/work-log.md)：实际工作、提交、验证与未完成项记录。
-14. [`references.md`](references.md)：上游版本、标准和外部规范引用。
+4. [`adr/README.md`](adr/README.md)：重大架构、安全和协议决策记录。
+5. [`product/PRD.md`](product/PRD.md)：完整产品需求、角色、场景、范围和验收标准。
+6. [`architecture/ARCHITECTURE.md`](architecture/ARCHITECTURE.md)：系统总体架构与组件边界。
+7. [`architecture/SECURITY.md`](architecture/SECURITY.md)：信任模型、身份、证书、密码学和轮换。
+8. [`architecture/PROTOCOL.md`](architecture/PROTOCOL.md)：ABA Wire Protocol、加密 Frame、状态机与可靠性语义。
+9. [`architecture/PLATFORM.md`](architecture/PLATFORM.md)：基于 mss-boot-admin v1.3.7 的 Platform 集成、数据模型和 API。
+10. [`architecture/ABA.md`](architecture/ABA.md)：Rust `acp-brige-agent` 的内部设计。
+11. [`architecture/HC.md`](architecture/HC.md)：Web、小程序和后续原生 HC 的设计。
+12. [`roadmap/IMPLEMENTATION.md`](roadmap/IMPLEMENTATION.md)：分阶段实施、分支和检查点计划。
+13. [`roadmap/VERIFICATION.md`](roadmap/VERIFICATION.md)：测试矩阵、验收门禁和证据要求。
+14. [`memory/work-log.md`](memory/work-log.md)：实际工作、提交、验证与未完成项记录。
+15. [`references.md`](references.md)：上游版本、标准和外部规范引用。
 
 ## 2. 文档权威顺序
 
