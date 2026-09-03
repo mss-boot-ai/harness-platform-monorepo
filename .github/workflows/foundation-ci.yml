@@ -1,0 +1,105 @@
+name: Foundation CI
+
+on:
+  push:
+    branches:
+      - codex/bootstrap-harness-platform-foundation
+  pull_request:
+    branches:
+      - main
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: foundation-ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  documentation:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - name: Check documentation structure and baselines
+        shell: bash
+        run: ./scripts/check-docs.sh
+
+  platform-provenance:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - name: Check out full history
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+      - name: Verify pinned Platform ancestry and lock
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          ./scripts/verify-platform-upstream.sh --lock-only
+          test -f platform/go.mod
+          test -f platform/LICENSE
+          git merge-base --is-ancestor bf0f73d5d9480288fd615045e4bdca72ead22012 HEAD
+          test "$(git show bf0f73d5d9480288fd615045e4bdca72ead22012:platform/go.mod | git hash-object --stdin)" = "0395953a2915b452d366bfe8e0b777d084eb3694"
+          test "$(git show bf0f73d5d9480288fd615045e4bdca72ead22012:platform/LICENSE | git hash-object --stdin)" = "62ff2994787f18495f68803bed2b87d69c4449ca"
+
+  protocol:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - name: Install protobuf compiler
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends protobuf-compiler
+          protoc --version
+      - name: Compile AWP v1 schema
+        shell: bash
+        run: ./scripts/check-protocol.sh
+
+  aba-rust:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - name: Check ABA workspace when present
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          if [[ ! -f aba/Cargo.toml ]]; then
+            echo "ABA Cargo workspace is not initialized in this checkpoint."
+            exit 0
+          fi
+          rustup toolchain install 1.88.0 --profile minimal --component rustfmt,clippy
+          cd aba
+          cargo +1.88.0 fmt --all -- --check
+          cargo +1.88.0 clippy --workspace --all-targets --all-features -- -D warnings
+          cargo +1.88.0 test --workspace --all-targets
+
+  hc-typescript:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - name: Check HC workspace when present
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          if [[ ! -f hc/package.json ]]; then
+            echo "HC package workspace is not initialized in this checkpoint."
+            exit 0
+          fi
+          corepack enable
+          cd hc
+          pnpm install --frozen-lockfile
+          pnpm lint
+          pnpm typecheck
+          pnpm test
