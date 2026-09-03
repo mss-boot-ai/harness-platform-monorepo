@@ -20,6 +20,13 @@ if [[ "$(git branch --show-current)" == "main" ]]; then
   exit 2
 fi
 
+for command_name in git tar awk grep python3; do
+  command -v "${command_name}" >/dev/null 2>&1 || {
+    echo "error: required command is unavailable: ${command_name}" >&2
+    exit 2
+  }
+done
+
 lock_file="platform/.upstream/mss-boot-admin.lock.yaml"
 for expected in \
   "  tag: ${UPSTREAM_TAG}" \
@@ -66,9 +73,7 @@ find platform -mindepth 1 -maxdepth 1 ! -name .upstream -exec rm -rf -- {} +
 git -C "${tmp_dir}" archive --format=tar FETCH_HEAD | tar -xf - -C platform
 
 manifest_tmp="${tmp_dir}/import-manifest.txt"
-git -C "${tmp_dir}" ls-tree -r --full-tree "${SOURCE_TREE_SHA}" \
-  | awk '{print $3 "  " substr($0, index($0, $4))}' \
-  > "${manifest_tmp}"
+git -C "${tmp_dir}" ls-tree -r --full-tree "${SOURCE_TREE_SHA}" > "${manifest_tmp}"
 mv "${manifest_tmp}" platform/.upstream/import-manifest.txt
 
 ./scripts/verify-platform-upstream.sh --source

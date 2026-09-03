@@ -43,12 +43,17 @@ if [[ "${mode}" == "--lock-only" ]]; then
   exit 0
 fi
 
+command -v python3 >/dev/null 2>&1 || {
+  echo "error: python3 is required for exact import-manifest verification" >&2
+  exit 2
+}
+
 check_blob() {
   local path="$1"
   local expected="$2"
   [[ -f "${path}" ]] || { echo "error: missing imported file ${path}" >&2; exit 5; }
   local actual
-  actual="$(git hash-object "${path}")"
+  actual="$(git hash-object --no-filters "${path}")"
   if [[ "${actual}" != "${expected}" ]]; then
     echo "error: imported source differs at ${path}: expected ${expected}, got ${actual}" >&2
     exit 6
@@ -73,26 +78,97 @@ fi
 manifest="platform/.upstream/import-manifest.txt"
 [[ -s "${manifest}" ]] || { echo "error: missing non-empty import manifest" >&2; exit 8; }
 
-# Rebuild a tree from the imported source without .upstream to prove the initial import.
-tmp_index="$(mktemp)"
-rm -f "${tmp_index}"
-cleanup() { rm -f "${tmp_index}"; }
-trap cleanup EXIT
+python3 - "${manifest}" <<'PY'
+from __future__ import annotations
 
-while IFS= read -r path; do
-  [[ -n "${path}" ]] || continue
-  GIT_INDEX_FILE="${tmp_index}" git update-index --add --cacheinfo \
-    "$(git ls-files -s -- "platform/${path}" | awk 'NR == 1 {print $1}')" \
-    "$(git hash-object "platform/${path}")" \
-    "${path}" >/dev/null
-done < <(find platform -type f ! -path 'platform/.upstream/*' -printf '%P\n' | LC_ALL=C sort)
+import hashlib
+import os
+import stat
+import sys
+from pathlib import Path
 
-actual_tree="$(GIT_INDEX_FILE="${tmp_index}" git write-tree)"
-if [[ "${actual_tree}" != "${SOURCE_TREE_SHA}" ]]; then
-  echo "error: imported Platform tree differs from the locked source tree" >&2
-  echo "expected: ${SOURCE_TREE_SHA}" >&2
-  echo "actual:   ${actual_tree}" >&2
-  exit 9
-fi
+manifest_path = Path(sys.argv[1])
+platform_root = Path("platform")
 
-echo "Platform source exactly matches ${UPSTREAM_TAG} (${SOURCE_COMMIT_SHA})."
+expected: dict[str, tuple[str, str, str]] = {}
+for line_number, raw_line in enumerate(manifest_path.read_text(encoding="utf-8").splitlines(), start=1):
+    try:
+        metadata, path = raw_line.split("\t", 1)
+        mode, object_type, object_sha = metadata.split(" ", 2)
+    except ValueError as exc:
+        raise SystemExit(f"error: malformed import manifest line {line_number}: {exc}") from exc
+    if not path or path.startswith("/") or ".." in Path(path).parts:
+        raise SystemExit(f"error: unsafe path in import manifest line {line_number}: {path!r}")
+    if object_type != "blob":
+        raise SystemExit(
+            f"error: unsupported upstream object type {object_type!r} at {path}; "
+            "gitlinks require an explicit import design"
+        )
+    if path in expected:
+        raise SystemExit(f"error: duplicate path in import manifest: {path}")
+    expected[path] = (mode, object_type, object_sha)
+
+actual_paths: set[str] = set()
+for root, directory_names, file_names in os.walk(platform_root, topdown=True, followlinks=False):
+    root_path = Path(root)
+    if root_path == platform_root:
+        directory_names[:] = [name for name in directory_names if name != ".upstream"]
+    for name in file_names:
+        path = root_path / name
+        actual_paths.add(path.relative_to(platform_root).as_posix())
+    # os.walk lists symlinked directories in directory_names. Treat each as a leaf blob.
+    retained_directories: list[str] = []
+    for name in directory_names:
+        path = root_path / name
+        if path.is_symlink():
+            actual_paths.add(path.relative_to(platform_root).as_posix())
+        else:
+            retained_directories.append(name)
+    directory_names[:] = retained_directories
+
+expected_paths = set(expected)
+missing = sorted(expected_paths - actual_paths)
+extra = sorted(actual_paths - expected_paths)
+if missing or extra:
+    if missing:
+        print("error: imported Platform is missing paths:", file=sys.stderr)
+        for path in missing[:20]:
+            print(f"  {path}", file=sys.stderr)
+    if extra:
+        print("error: imported Platform has unexpected paths:", file=sys.stderr)
+        for path in extra[:20]:
+            print(f"  {path}", file=sys.stderr)
+    raise SystemExit(9)
+
+
+def git_blob_sha(data: bytes) -> str:
+    header = f"blob {len(data)}\0".encode("ascii")
+    return hashlib.sha1(header + data).hexdigest()  # noqa: S324 - Git object identity is SHA-1 by design.
+
+
+for relative_path, (expected_mode, _, expected_sha) in sorted(expected.items()):
+    path = platform_root / relative_path
+    file_stat = path.lstat()
+    if stat.S_ISLNK(file_stat.st_mode):
+        actual_mode = "120000"
+        data = os.fsencode(os.readlink(path))
+    elif stat.S_ISREG(file_stat.st_mode):
+        actual_mode = "100755" if file_stat.st_mode & 0o111 else "100644"
+        data = path.read_bytes()
+    else:
+        raise SystemExit(f"error: unsupported imported file type at {relative_path}")
+
+    actual_sha = git_blob_sha(data)
+    if actual_mode != expected_mode:
+        raise SystemExit(
+            f"error: mode mismatch at {relative_path}: expected {expected_mode}, got {actual_mode}"
+        )
+    if actual_sha != expected_sha:
+        raise SystemExit(
+            f"error: blob mismatch at {relative_path}: expected {expected_sha}, got {actual_sha}"
+        )
+
+print(f"Verified {len(expected)} imported paths against the locked manifest.")
+PY
+
+echo "Platform source exactly matches ${UPSTREAM_TAG} (${SOURCE_COMMIT_SHA}, tree ${SOURCE_TREE_SHA})."
