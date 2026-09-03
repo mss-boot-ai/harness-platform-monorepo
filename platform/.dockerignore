@@ -1,0 +1,12 @@
+.git
+.github
+.mss/reports
+.mss/run
+bin
+web
+docs
+**/node_modules
+**/dist
+**/.cache
+coverage.out
+*.log

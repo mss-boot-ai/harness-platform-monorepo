@@ -1,0 +1,178 @@
+server:
+  addr: 0.0.0.0:8080
+  metrics: true
+  healthz: true
+  readyz: true
+  pprof: true
+monitor:
+  sampleInterval: 5s
+  sampleTimeout: 3s
+  historySize: 120
+presentation:
+  # Startup-only emergency bypass. When true, effective presentation reads
+  # return no stored layers and every page uses its compiled defaults.
+  recoveryMode: false
+  # disabled returns compiled defaults; shadow validates stored layers without
+  # applying them; active applies only pages listed in activePages.
+  adoptionMode: active
+  activePages:
+    - user.list
+    - role.list
+    - menu.list
+    - department.list
+    - post.list
+    - task.list
+    - notice.list
+    - language.list
+    - option.list
+    - system-config.list
+    - online-session.list
+    - log.login
+    - log.audit
+    - log.runtime
+application:
+  mode: dev
+  origin: http://127.0.0.1:8080
+  # Empty disables forwarded client IP headers. Production deployments behind
+  # a reverse proxy must list only the exact proxy IP/CIDR hops they control.
+  trustedProxies: []
+#  ui:
+#    enabled: true
+#    addr: 0.0.0.0:8001
+#    path: dist
+  staticPath:
+    /public: public
+  labels:
+    app: mss-boot-admin
+    namespace: local
+    cluster: local
+cors:
+  # Credentialed V6 browser requests require exact origins.
+  # Deployments must narrow this list to their exact HTTPS frontend origin.
+  allowOrigins:
+    - 'http://localhost:8001'
+    - 'http://127.0.0.1:8001'
+    - 'https://admin-alpha.mss-boot-io.top'
+    - 'https://admin-beta.mss-boot-io.top'
+    - 'https://admin.mss-boot-io.top'
+  allowMethods:
+    - GET
+    - POST
+    - PUT
+    - PATCH
+    - DELETE
+    - OPTIONS
+  allowHeaders:
+    - Authorization
+    - Content-Type
+    - If-Match
+    - Idempotency-Key
+    - X-CSRF-Token
+  exposeHeaders:
+    - ETag
+  maxAge: 12h
+logger:
+  path: logs
+  stdout: file
+  level: info
+  json: false
+  addSource: true
+#  loki:
+#    url: http://loki:3100
+#    interval: 5s
+database:
+  driver: sqlite
+  source: 'mss-boot-admin-local.db?_pragma=busy_timeout(30000)&_pragma=journal_mode(WAL)&_txlock=immediate'
+  name: mss-boot-admin-local
+  config:
+    disableForeignKeyConstraintWhenMigrating: true
+  casbinModel: |
+    [request_definition]
+    r = sub, tp, obj, act
+
+    [policy_definition]
+    p = sub, tp, obj, act
+
+    [policy_effect]
+    e = some(where (p.eft == allow))
+
+    [matchers]
+    m = r.sub == p.sub && r.tp == p.tp && keyMatch(r.obj, p.obj) && regexMatch(r.act, p.act)
+  timeout: 10s
+auth:
+  realm: 'mss-boot-admin zone'
+  key: 'mss-boot-admin-secret'
+  timeout: '12h'
+  maxRefresh: '2160h'
+  identityKey: 'mss-boot-admin-identity-key'
+  # V6 browser sessions are mandatory. Production must override the development
+  # key, use an exact HTTPS origin, and enable Secure cookies before startup.
+  browserSession:
+    secure: false
+    sameSite: lax
+    webSocketTicketTTL: 30s
+runtime:
+  resources:
+    main:
+      provider:
+        kind: redis
+        redis:
+          mode: standalone
+          standalone:
+            endpoint: '127.0.0.1:6379'
+          credentials:
+            kind: password
+            password:
+              passwordRef: env://MSS_RUNTIME_REDIS_PASSWORD
+challenge:
+  enabled: false
+  required: false
+  resourceRef: main
+  keySecretRef: env://MSS_CHALLENGE_KEY_SECRET
+  currentPepper:
+    version: v1
+    secretRef: env://MSS_CHALLENGE_PEPPER_V1
+  activeTTL: 5m
+  pendingLease: 30s
+  resendCooldown: 1m
+  issueWindow: 1h
+  issueLimit: 5
+  maxAttempts: 5
+  idempotencyLease: 2m
+  callerWindow: 10m
+  callerLimit: 10
+  globalWindow: 10m
+  globalLimit: 1000
+pyroscope:
+  enabled: false
+  applicationName: mss-boot-admin
+  serverAddress: http://pyroscope:4040
+cache:
+  queryCache: false
+  queryCacheDuration: 1h
+  queryCacheKeys: []
+#  memory: ''
+  redis:
+    addr: '127.0.0.1:6379'
+    password: 123456
+queue:
+  memory:
+    poolSize: 10
+notification:
+  email:
+    enabled: false
+    host: ""
+    port: 587
+    username: ""
+    password: ""
+    from: ""
+  dingtalk:
+    enabled: false
+    webhook: ""
+    secret: ""
+  wechat:
+    enabled: false
+    webhook: ""
+task:
+  enable: true
+  spec: "0 */1 * * * *"

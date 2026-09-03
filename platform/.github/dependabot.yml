@@ -1,0 +1,76 @@
+version: 2
+updates:
+  - package-ecosystem: gomod
+    directory: /
+    schedule: { interval: weekly }
+    open-pull-requests-limit: 2
+    groups:
+      agent-go-non-major:
+        patterns: ['*']
+        update-types: [minor, patch]
+    labels: [area/devops, type/security]
+  - package-ecosystem: gomod
+    directory: /admin
+    schedule: { interval: weekly }
+    open-pull-requests-limit: 3
+    groups:
+      admin-go-non-major:
+        patterns: ['*']
+        update-types: [minor, patch]
+    labels: [area/backend, type/security]
+  - package-ecosystem: gomod
+    directory: /mss-boot
+    schedule: { interval: weekly }
+    open-pull-requests-limit: 3
+    groups:
+      framework-go-non-major:
+        patterns: ['*']
+        update-types: [minor, patch]
+    labels: [area/backend, type/security]
+    ignore:
+      - dependency-name: github.com/casbin/gorm-adapter/v3
+        update-types: [version-update:semver-minor, version-update:semver-patch]
+  - package-ecosystem: gomod
+    directory: /compose/consul
+    schedule: { interval: weekly }
+    open-pull-requests-limit: 2
+    groups:
+      consul-go-non-major:
+        patterns: ['*']
+        update-types: [minor, patch]
+    labels: [area/devops, type/security]
+  - package-ecosystem: gomod
+    directory: /compose/kafka
+    schedule: { interval: weekly }
+    open-pull-requests-limit: 2
+    groups:
+      kafka-go-non-major:
+        patterns: ['*']
+        update-types: [minor, patch]
+    labels: [area/devops, type/security]
+  - package-ecosystem: npm
+    directory: /web/antd-v6
+    schedule: { interval: weekly }
+    open-pull-requests-limit: 3
+    groups:
+      frontend-v6-non-major:
+        patterns: ['*']
+        update-types: [minor, patch]
+    labels: [area/frontend, type/security]
+  - package-ecosystem: npm
+    directory: /docs
+    schedule: { interval: weekly }
+    open-pull-requests-limit: 3
+    groups:
+      docs-non-major:
+        patterns: ['*']
+        update-types: [minor, patch]
+    labels: [area/docs, type/security]
+  - package-ecosystem: github-actions
+    directory: /
+    schedule: { interval: weekly }
+    open-pull-requests-limit: 3
+    groups:
+      github-actions:
+        patterns: ['*']
+    labels: [area/devops, type/security]

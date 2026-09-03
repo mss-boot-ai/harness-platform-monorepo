@@ -1,0 +1,192 @@
+name: mss-boot CI
+
+on:
+  push:
+    branches:
+      - main
+    paths:
+      - 'mss-boot/**'
+      - '.mss/coverage.json'
+      - 'scripts/check-go-coverage.py'
+      - 'scripts/test_check_go_coverage.py'
+      - 'go.work'
+      - 'go.work.sum'
+      - 'Makefile'
+      - '.github/workflows/mss-boot-ci.yml'
+  pull_request:
+    branches:
+      - main
+    paths:
+      - 'mss-boot/**'
+      - '.mss/coverage.json'
+      - 'scripts/check-go-coverage.py'
+      - 'scripts/test_check_go_coverage.py'
+      - 'go.work'
+      - 'go.work.sum'
+      - 'Makefile'
+      - '.github/workflows/mss-boot-ci.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: mss-boot-ci-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: ${{ !startsWith(github.ref, 'refs/tags/') }}
+
+env:
+  GOTOOLCHAIN: local
+  GOWORK: 'off'
+
+jobs:
+  test:
+    name: test
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
+    services:
+      redis:
+        image: redis:7-alpine
+        ports:
+          - 6379:6379
+        options: >-
+          --health-cmd "redis-cli ping"
+          --health-interval 5s
+          --health-timeout 3s
+          --health-retries 10
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+
+      - name: Setup Go
+        uses: actions/setup-go@v7
+        with:
+          go-version-file: mss-boot/go.mod
+          cache: true
+          cache-dependency-path: mss-boot/go.sum
+
+      - name: Run framework tests
+        if: ${{ github.event_name == 'pull_request' }}
+        working-directory: mss-boot
+        run: go test -shuffle=on -count=1 ./...
+
+      - name: Test coverage policy tooling
+        if: ${{ github.event_name != 'pull_request' }}
+        run: python3 -m unittest scripts/test_check_go_coverage.py
+
+      - name: Run framework tests with atomic coverage
+        if: ${{ github.event_name != 'pull_request' }}
+        working-directory: mss-boot
+        run: >-
+          go test -shuffle=on -count=1 -covermode=atomic -coverpkg=./...
+          -coverprofile="${RUNNER_TEMP}/mss-boot.coverage.out" ./...
+
+      - name: Enforce framework coverage policy
+        if: ${{ github.event_name != 'pull_request' }}
+        run: >-
+          python3 scripts/check-go-coverage.py
+          --profile "${RUNNER_TEMP}/mss-boot.coverage.out"
+          --policy .mss/coverage.json
+          --component mss-boot
+          --summary
+
+      - name: Upload framework coverage profile
+        if: ${{ github.event_name != 'pull_request' }}
+        uses: actions/upload-artifact@v7
+        with:
+          name: mss-boot-coverage
+          path: ${{ runner.temp }}/mss-boot.coverage.out
+          if-no-files-found: error
+          retention-days: 14
+
+  race:
+    name: race
+    if: ${{ github.event_name != 'pull_request' }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 55
+    services:
+      redis:
+        image: redis:7-alpine
+        ports:
+          - 6379:6379
+        options: >-
+          --health-cmd "redis-cli ping"
+          --health-interval 5s
+          --health-timeout 3s
+          --health-retries 10
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+
+      - name: Setup Go
+        uses: actions/setup-go@v7
+        with:
+          go-version-file: mss-boot/go.mod
+          cache: true
+          cache-dependency-path: mss-boot/go.sum
+
+      - name: Run framework race tests
+        working-directory: mss-boot
+        run: go test -race -shuffle=on -count=1 ./...
+
+  static-and-module:
+    name: static-and-module
+    if: ${{ github.event_name != 'pull_request' }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 35
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+
+      - name: Setup Go
+        uses: actions/setup-go@v7
+        with:
+          go-version-file: mss-boot/go.mod
+          cache: true
+          cache-dependency-path: mss-boot/go.sum
+
+      - name: Vet framework
+        working-directory: mss-boot
+        run: go vet ./...
+
+      - name: Verify framework module metadata
+        working-directory: mss-boot
+        run: |
+          go mod tidy
+          git diff --exit-code -- go.mod go.sum
+
+      - name: Reject Admin imports
+        run: |
+          if grep -R --line-number --include='*.go' \
+            'github.com/mss-boot-io/mss-boot-admin/admin/' mss-boot; then
+            echo 'mss-boot must remain independent from Admin business packages' >&2
+            exit 1
+          fi
+
+  required:
+    name: mss-boot
+    if: ${{ always() }}
+    needs:
+      - test
+      - race
+      - static-and-module
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    steps:
+      - name: Require every framework check to pass
+        env:
+          EVENT_NAME: ${{ github.event_name }}
+          TEST_RESULT: ${{ needs.test.result }}
+          RACE_RESULT: ${{ needs.race.result }}
+          STATIC_RESULT: ${{ needs.static-and-module.result }}
+        run: |
+          echo "test=${TEST_RESULT}"
+          echo "race=${RACE_RESULT}"
+          echo "static-and-module=${STATIC_RESULT}"
+          test "${TEST_RESULT}" = "success"
+          if [[ "${EVENT_NAME}" == "pull_request" ]]; then
+            test "${RACE_RESULT}" = "skipped"
+            test "${STATIC_RESULT}" = "skipped"
+          else
+            test "${RACE_RESULT}" = "success"
+            test "${STATIC_RESULT}" = "success"
+          fi

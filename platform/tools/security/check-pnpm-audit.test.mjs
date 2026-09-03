@@ -1,0 +1,303 @@
+import assert from 'node:assert/strict';
+import test from 'node:test';
+
+import {
+  assertSpawnCompleted,
+  buildAuditArguments,
+  classifyAuditAdvisory,
+  validateAcceptanceDocument,
+  validateAuditReport,
+  validateBuildOnlyAcceptanceCoverage,
+  validateBuildOnlyResolutionCoverage,
+  validateDistributionDependencyContract,
+  validatePnpmVersion,
+} from './check-pnpm-audit.mjs';
+
+const validAcceptance = () => ({
+  schemaVersion: 1,
+  acceptances: [
+    {
+      advisory: 'GHSA-w3rx-r6r6-pgpr',
+      package: 'image-size',
+      severity: 'high',
+      patchedVersions: '<0.0.0',
+      scopes: ['docs', 'web/antd-v6'],
+      expiresOn: '2026-11-08',
+      reason: 'No patched release exists and this is build-only.',
+    },
+  ],
+});
+
+const validReport = () => ({
+  actions: [],
+  advisories: {
+    1: {
+      github_advisory_id: 'GHSA-w3rx-r6r6-pgpr',
+      module_name: 'image-size',
+      severity: 'high',
+      patched_versions: '<0.0.0',
+      findings: [{ version: '1.0.0', paths: ['root>image-size'] }],
+    },
+  },
+  muted: [],
+  metadata: {
+    vulnerabilities: { info: 0, low: 0, moderate: 0, high: 1, critical: 0 },
+    dependencies: 10,
+    devDependencies: 20,
+    optionalDependencies: 0,
+    totalDependencies: 30,
+  },
+});
+
+const validDistributionPackage = () => ({
+  dependencies: {
+    '@umijs/max': '4.7.7',
+    react: '19.2.8',
+  },
+  devDependencies: {
+    '@playwright/test': '1.62.1',
+  },
+  mssAdminDistribution: {
+    dependencyClasses: {
+      runtime: ['react'],
+      tooling: ['@umijs/max'],
+    },
+    buildOnlyDependencies: {
+      'image-size': ['0.5.5'],
+    },
+  },
+});
+
+test('accepts valid acceptance and audit documents', () => {
+  assert.equal(validateAcceptanceDocument(validAcceptance()).acceptances.length, 1);
+  assert.equal(validateAuditReport(validReport()).length, 1);
+});
+
+test('requests complete advisory details from pnpm audit', () => {
+  assert.deepEqual(buildAuditArguments(false), ['audit', '--json']);
+  assert.deepEqual(buildAuditArguments(true), ['audit', '--json', '--prod']);
+  assert.equal(buildAuditArguments(false).includes('--audit-level=critical'), false);
+});
+
+test('requires complete, disjoint, and stable Admin Web dependency classes', () => {
+  const contract = validateDistributionDependencyContract(validDistributionPackage());
+  assert.deepEqual([...contract.runtimeRoots], ['react']);
+  assert.deepEqual([...contract.toolingRoots], ['@umijs/max']);
+  assert.deepEqual([...contract.developmentRoots], ['@playwright/test']);
+  assert.deepEqual([...contract.buildOnlyResolutions], [
+    ['image-size', new Set(['0.5.5'])],
+  ]);
+
+  const missing = validDistributionPackage();
+  missing.mssAdminDistribution.dependencyClasses.tooling = [];
+  assert.throws(() => validateDistributionDependencyContract(missing), /non-empty array/);
+
+  const overlap = validDistributionPackage();
+  overlap.mssAdminDistribution.dependencyClasses.tooling = ['react'];
+  assert.throws(() => validateDistributionDependencyContract(overlap), /classes overlap/);
+
+  const unclassified = validDistributionPackage();
+  unclassified.dependencies.antd = '6.6.1';
+  assert.throws(() => validateDistributionDependencyContract(unclassified), /missing=antd/);
+
+  const unsorted = validDistributionPackage();
+  unsorted.mssAdminDistribution.buildOnlyDependencies['image-size'] = ['2.0.0', '0.5.5'];
+  assert.throws(() => validateDistributionDependencyContract(unsorted), /stable sorted order/);
+});
+
+test('classifies every advisory path from the published dependency boundary', () => {
+  const contract = validateDistributionDependencyContract(validDistributionPackage());
+  const advisory = validReport().advisories[1];
+
+  advisory.findings = [{ version: '1.0.0', paths: ['.>@umijs/max>image-size'] }];
+  assert.equal(classifyAuditAdvisory(advisory, contract), 'tooling');
+
+  advisory.findings = [{ version: '1.0.0', paths: ['.>@playwright/test>image-size'] }];
+  assert.equal(classifyAuditAdvisory(advisory, contract), 'tooling');
+
+  advisory.findings = [
+    {
+      version: '1.0.0',
+      paths: ['.>@umijs/max>image-size', '.>react>image-size'],
+    },
+  ];
+  assert.equal(classifyAuditAdvisory(advisory, contract), 'runtime');
+
+  advisory.findings = [{ version: '1.0.0', paths: ['.>unknown>image-size'] }];
+  assert.throws(() => classifyAuditAdvisory(advisory, contract), /unclassified dependency root/);
+});
+
+test('binds build-only package declarations to exact scoped acceptances', () => {
+  const contract = validateDistributionDependencyContract(validDistributionPackage());
+  const accepted = new Map([
+    [
+      'GHSA-w3rx-r6r6-pgpr',
+      { advisory: 'GHSA-w3rx-r6r6-pgpr', package: 'image-size' },
+    ],
+  ]);
+  assert.doesNotThrow(() => validateBuildOnlyAcceptanceCoverage(accepted, contract));
+
+  accepted.set('GHSA-c27g-q93r-2cwf', {
+    advisory: 'GHSA-c27g-q93r-2cwf',
+    package: 'vite',
+  });
+  assert.throws(
+    () => validateBuildOnlyAcceptanceCoverage(accepted, contract),
+    /missing=vite/,
+  );
+});
+
+test('binds accepted build-only advisories to exact installed versions', () => {
+  const contract = validateDistributionDependencyContract(validDistributionPackage());
+  const advisory = validReport().advisories[1];
+  advisory.findings = [
+    { version: '0.5.5', paths: ['.>@umijs/max>less>image-size'] },
+  ];
+  assert.doesNotThrow(() => validateBuildOnlyResolutionCoverage([advisory], contract));
+
+  advisory.findings[0].version = '0.5.6';
+  assert.throws(
+    () => validateBuildOnlyResolutionCoverage([advisory], contract),
+    /observed undeclared image-size@0.5.6/,
+  );
+
+  assert.throws(
+    () => validateBuildOnlyResolutionCoverage([], contract),
+    /expected=0.5.5; observed=<none>/,
+  );
+});
+
+test('requires each package pin and subprocess to use its governed pnpm version', () => {
+  assert.doesNotThrow(() => validatePnpmVersion('pnpm@9.15.9', '9.15.9\n', '9.15.9'));
+  assert.doesNotThrow(() => validatePnpmVersion('pnpm@10.34.5', '10.34.5\n', '10.34.5'));
+  assert.throws(() => validatePnpmVersion('pnpm@9.15.8', '9.15.9', '9.15.9'), /must pin/);
+  assert.throws(
+    () => validatePnpmVersion('pnpm@9.15.9', '10.0.0', '9.15.9'),
+    /subprocess reported 10.0.0/,
+  );
+  assert.throws(
+    () => validatePnpmVersion('pnpm@10.34.5', '', '10.34.5'),
+    /subprocess reported <empty>/,
+  );
+});
+
+test('rejects unknown or missing acceptance fields', () => {
+  const document = validAcceptance();
+  document.extra = true;
+  assert.throws(() => validateAcceptanceDocument(document), /unknown fields: extra/);
+
+  const missing = validAcceptance();
+  delete missing.acceptances[0].reason;
+  assert.throws(() => validateAcceptanceDocument(missing), /missing fields: reason/);
+});
+
+test('rejects invalid dates, scopes, empty reasons, and duplicate advisories', () => {
+  const invalidDate = validAcceptance();
+  invalidDate.acceptances[0].expiresOn = '2026-02-30';
+  assert.throws(() => validateAcceptanceDocument(invalidDate), /real date/);
+
+  const duplicateScope = validAcceptance();
+  duplicateScope.acceptances[0].scopes = ['docs', 'docs'];
+  assert.throws(() => validateAcceptanceDocument(duplicateScope), /duplicate scope/);
+
+  const unknownScope = validAcceptance();
+  unknownScope.acceptances[0].scopes = ['unknown'];
+  assert.throws(() => validateAcceptanceDocument(unknownScope), /unsupported scope/);
+
+  const emptyReason = validAcceptance();
+  emptyReason.acceptances[0].reason = '  ';
+  assert.throws(() => validateAcceptanceDocument(emptyReason), /reason must be a non-empty string/);
+
+  const duplicateAdvisory = validAcceptance();
+  duplicateAdvisory.acceptances.push({ ...duplicateAdvisory.acceptances[0] });
+  assert.throws(() => validateAcceptanceDocument(duplicateAdvisory), /Duplicate.*advisory/);
+});
+
+test('rejects audit error reports and malformed advisory metadata', () => {
+  assert.throws(
+    () => validateAuditReport({ error: { summary: 'registry unavailable' } }),
+    /registry unavailable/,
+  );
+
+  const mismatch = validReport();
+  mismatch.metadata.vulnerabilities.high = 0;
+  assert.throws(() => validateAuditReport(mismatch), /high count mismatch/);
+
+  const unknownReportField = validReport();
+  unknownReportField.extra = true;
+  assert.throws(() => validateAuditReport(unknownReportField), /unknown fields: extra/);
+
+  const unknownMetadataField = validReport();
+  unknownMetadataField.metadata.extra = 0;
+  assert.throws(() => validateAuditReport(unknownMetadataField), /unknown fields: extra/);
+
+  const totalMismatch = validReport();
+  totalMismatch.metadata.totalDependencies = 31;
+  assert.throws(() => validateAuditReport(totalMismatch), /dependency count mismatch/);
+
+  const invalidIdentifier = validReport();
+  invalidIdentifier.advisories[1].github_advisory_id = 'not-a-ghsa';
+  assert.throws(() => validateAuditReport(invalidIdentifier), /valid GitHub advisory identifier/);
+
+  const unknownSeverity = validReport();
+  unknownSeverity.advisories[1].severity = 'unknown';
+  assert.throws(() => validateAuditReport(unknownSeverity), /severity is unsupported/);
+
+  const missingFindings = validReport();
+  delete missingFindings.advisories[1].findings;
+  assert.throws(() => validateAuditReport(missingFindings), /findings must be a non-empty array/);
+
+  const missingPaths = validReport();
+  missingPaths.advisories[1].findings = [{ version: '1.0.0', paths: [] }];
+  assert.throws(() => validateAuditReport(missingPaths), /paths must be a non-empty array/);
+
+  const duplicate = validReport();
+  duplicate.advisories[2] = { ...duplicate.advisories[1] };
+  duplicate.metadata.vulnerabilities.high = 2;
+  assert.throws(() => validateAuditReport(duplicate), /duplicate advisory/);
+});
+
+test('accepts pnpm unique-advisory and finding-path metadata semantics', () => {
+  const report = validReport();
+  report.advisories[1].findings[0].paths.push('root>build-tool>image-size');
+  report.metadata.vulnerabilities.high = 2;
+  assert.equal(validateAuditReport(report).length, 1);
+
+  report.metadata.vulnerabilities.high = 1;
+  assert.equal(validateAuditReport(report).length, 1);
+
+  report.metadata.vulnerabilities.high = 3;
+  assert.throws(
+    () => validateAuditReport(report),
+    /metadata=3, uniqueAdvisories=1, findingPaths=2/,
+  );
+});
+
+test('rejects every abnormal spawn termination', () => {
+  assert.throws(
+    () => assertSpawnCompleted({ error: new Error('ENOENT'), signal: null, status: null }, 'pnpm'),
+    /failed to start: ENOENT/,
+  );
+  assert.throws(
+    () => assertSpawnCompleted({ error: undefined, signal: 'SIGTERM', status: null }, 'pnpm'),
+    /terminated by signal SIGTERM/,
+  );
+  assert.throws(
+    () => assertSpawnCompleted({ error: undefined, signal: null, status: null }, 'pnpm'),
+    /did not return an exit status/,
+  );
+  assert.throws(
+    () => assertSpawnCompleted({ error: undefined, signal: null, status: 2, stderr: 'bad' }, 'pnpm'),
+    /exited with status 2: bad/,
+  );
+  assert.doesNotThrow(() =>
+    assertSpawnCompleted({ error: undefined, signal: null, status: 0, stderr: '' }, 'pnpm'),
+  );
+  assert.doesNotThrow(() =>
+    assertSpawnCompleted(
+      { error: undefined, signal: null, status: 1, stderr: '' },
+      'pnpm audit',
+      new Set([0, 1]),
+    ),
+  );
+});

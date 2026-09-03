@@ -1,0 +1,314 @@
+apiVersion: mss.io/v1alpha1
+kind: CommandCatalog
+metadata:
+  project: mss-boot-admin
+spec:
+  conventions:
+    shell: sh
+    workingDirectory: repository-root
+    nonInteractive: true
+    productionCredentialsRequired: false
+  commands:
+    context:
+      command: go run ./cmd/mss context
+      description: Print the normalized project and capability context.
+      outputFormats: [text, json]
+      category: agent
+
+    doctor:
+      command: go run ./cmd/mss doctor
+      description: Check toolchain, repository, ports, and optional local dependencies.
+      outputFormats: [text, json]
+      category: environment
+
+    setup:
+      command: go run ./cmd/mss setup
+      description: Install repository dependencies and create safe local development state.
+      category: environment
+      idempotent: true
+
+    admin-api-registry-sync:
+      command: cd admin && STAGE=local go run . server -a
+      description: One-shot synchronization of mounted Admin routes into the API registry required by menu API binding.
+      category: environment
+      idempotent: true
+
+    dev-start:
+      command: go run ./cmd/mss dev --detach
+      description: Start the canonical backend and frontend development services.
+      outputFormats: [text, json]
+      category: environment
+      idempotent: true
+
+    dev-status:
+      command: go run ./cmd/mss dev status
+      description: Inspect managed development process state and HTTP readiness.
+      outputFormats: [text, json]
+      category: environment
+
+    dev-stop:
+      command: go run ./cmd/mss dev stop
+      description: Stop managed development process trees in reverse dependency order.
+      outputFormats: [text, json]
+      category: environment
+      idempotent: true
+
+    dev-logs:
+      command: go run ./cmd/mss dev logs
+      description: Read or follow one managed development service log.
+      category: environment
+
+    new-app-plan:
+      command: go run ./cmd/mss new app <name> --module <go-module> --format json
+      description: Build a conflict-aware dry-run plan for a complete downstream management-system repository.
+      outputFormats: [text, json]
+      category: blueprint
+      dryRunByDefault: true
+      idempotent: true
+
+    new-app-write:
+      command: go run ./cmd/mss new app <name> --module <go-module> --write --format json
+      description: Write a conflict-free downstream application and its upgrade baseline.
+      outputFormats: [text, json]
+      category: blueprint
+      idempotent: true
+
+    upgrade-status:
+      command: go run ./cmd/mss upgrade status --format json
+      description: Print the downstream application's recorded foundation baseline.
+      outputFormats: [text, json]
+      category: upgrade
+
+    upgrade-plan:
+      command: go run ./cmd/mss upgrade plan --format json
+      description: Perform a read-only three-way comparison against the version-matched embedded Foundation; --foundation remains an explicit contributor override.
+      outputFormats: [text, json]
+      category: upgrade
+      dryRunByDefault: true
+      idempotent: true
+
+    upgrade-apply:
+      command: go run ./cmd/mss upgrade apply --yes --format json
+      description: Apply a reviewed conflict-free foundation upgrade and commit the new baseline last.
+      outputFormats: [text, json]
+      category: upgrade
+      idempotent: true
+
+    admin-distribution-upgrade-plan:
+      command: go run ./cmd/mss --root <downstream> upgrade admin <version> --format json
+      description: Plan one coordinated Admin Distribution upgrade and report backend, frontend, host, module, conflict, preservation, and validation impacts.
+      outputFormats: [text, json]
+      category: upgrade
+      dryRunByDefault: true
+      idempotent: true
+
+    admin-distribution-upgrade-apply:
+      command: go run ./cmd/mss --root <downstream> upgrade admin <version> --apply --yes --format json
+      description: Apply a reviewed conflict-free Admin Distribution upgrade and commit the new snapshot pair last.
+      outputFormats: [text, json]
+      category: upgrade
+      idempotent: true
+
+    skills-list:
+      command: go run ./cmd/mss skills list
+      description: List repository-local Agent Skills.
+      outputFormats: [text, json]
+      category: agent
+
+    skills-validate:
+      command: go run ./cmd/mss skills validate
+      description: Validate Agent Skill metadata, portability, and command references.
+      outputFormats: [text, json]
+      category: agent
+
+    backend-build:
+      command: make build
+      description: Build the admin backend.
+      category: backend
+
+    backend-test:
+      command: make test
+      description: Run root backend tests and write coverage.out.
+      category: backend
+
+    framework-test:
+      command: make test-framework
+      description: Run reusable framework tests.
+      category: framework
+
+    go-test-all:
+      command: make test-all
+      description: Run root backend and framework tests.
+      category: backend
+
+    go-test-evidence:
+      command: "go run ./cmd/mss test evidence --directory <module-dir> --package ./<single-package> --run '^(TestOne|TestTwo)$' --count <n> --go-work off --require TestOne --require TestTwo"
+      description: Run one repository-local Go package and reject external or multi-package selection plus missing, skipped, failed, cached, or inexact JSON evidence.
+      outputFormats: [json]
+      category: verification
+
+    provider-evidence:
+      command: go run ./cmd/mss provider evidence --required --format json
+      description: Validate provider-specific exact-commit fixture evidence and reject empty, zero-hit, skipped, failed, partial, or cached-only required results.
+      outputFormats: [text, json]
+      category: verification
+
+    backend-lint:
+      command: make lint
+      description: Run Go lint checks.
+      category: backend
+
+    frontend-install:
+      command: make web-install
+      description: Install the primary Ant Design 6 frontend dependencies with its frozen lockfile.
+      category: frontend
+
+    frontend-lint:
+      command: make web-lint
+      description: Run Biome and TypeScript checks for the primary Ant Design 6 frontend.
+      category: frontend
+
+    frontend-test:
+      command: make web-test
+      description: Run Vitest for the primary Ant Design 6 frontend.
+      category: frontend
+
+    frontend-build:
+      command: make web-build
+      description: Build and validate the primary Ant Design 6 release profile.
+      category: frontend
+
+    frontend-v6-install:
+      command: make web-v6-install
+      description: Install the independent Ant Design 6 frontend from its frozen lockfile.
+      category: frontend
+
+    frontend-v6-lint:
+      command: make web-v6-lint
+      description: Run Biome and TypeScript checks for the independent Ant Design 6 frontend.
+      category: frontend
+
+    frontend-v6-test:
+      command: make web-v6-test
+      description: Run Vitest for the independent Ant Design 6 frontend.
+      category: frontend
+
+    frontend-v6-build:
+      command: make web-v6-build
+      description: Build and validate the independently releasable Ant Design 6 frontend.
+      category: frontend
+
+    frontend-v6-qualify:
+      command: make web-v6-qualify
+      description: Run the authoritative local ordered V6 lint, unit test, release build, delivery smoke, and browser qualification sequence; the hosted Frontend v6 CI matrix is an explicitly dispatched diagnostic, not a routine post-merge gate.
+      category: release
+
+    docs-install:
+      command: make docs-install
+      description: Install documentation dependencies with the frozen lockfile.
+      category: docs
+
+    docs-build:
+      command: make docs-build
+      description: Build the documentation site.
+      category: docs
+
+    verify-changed:
+      command: go run ./cmd/mss verify --changed
+      description: Compute and execute the minimum development-checkpoint checks for the current Git diff; this never authorizes a release.
+      outputFormats: [text, json]
+      category: verification
+
+    verify-all:
+      command: go run ./cmd/mss verify --all
+      description: Execute the complete local quality suite, including strict contracts, Agent builds, Admin and Framework race/coverage/vet/metadata checks, standalone next-Foundation generation and upgrade, CLI/MCP/doctor identity parity, deterministic conflict and empty second upgrade, evals, dependency policy, frontend delivery and browser behavior, both packaged and real external Thin Hosts, release workflow contracts, and docs checks. This local suite owns broad quality; hosted Agent and frontend matrices are explicit diagnostics. Use verify-release-evidence for the frozen merged-main release gate.
+      outputFormats: [text, json]
+      category: verification
+
+    verify-release-evidence:
+      command: go run ./cmd/mss verify --all --release-evidence --expect-commit <full-sha>
+      description: Execute the complete local suite and fail closed unless HEAD remains the supplied full commit and tracked files remain clean before and after; verify.json and verify.md bind the result to that commit and record both clean-state checks, while the external Thin Host check persists sanitized detailed reports and an evidence manifest in a recorded system-temporary directory.
+      outputFormats: [text, json]
+      category: verification
+
+    release-policy-check:
+      command: python3 tools/release/check_release_policy.py --component <root|framework|admin|frontend|docs|npm> --version <version> --tag <tag> --intent <qualify|publish|promote> [--commit <full-sha>]
+      description: Validate the reviewed target and namespace; qualify permits candidate work, publish requires enabled immutable publication workflows, promote additionally requires a reviewed exact stable-promotion version and commit for Root or official npm aliases, and Docs revisions require a reviewed exact revision plus source commit pair.
+      outputFormats: [text]
+      category: release
+
+    release-source-verify:
+      command: python3 tools/release/verify_release_source.py --repository <owner/repository> --commit <full-sha> [--tag <tag>] [--source-mode <release|promotion>]
+      description: Fail closed unless the clean exact checkout is the reviewed merged-PR source, any supplied remote tag peels exactly to it, and it is contained in fresh origin/main; release mode additionally requires the current main tip, while promotion mode is reserved for an already-tagged exact ancestor whose later reviewed policy is read separately.
+      outputFormats: [text]
+      category: release
+      idempotent: true
+
+    framework-admin-checksum-verify:
+      command: python3 tools/release/verify_framework_admin_checksum.py --version <version> [--write]
+      description: Fail closed on source drift, generate replace-free local Go proxies from exact HEAD blobs, and verify or deterministically refresh the approved Framework-to-Admin-to-Thin-Host checksum metadata.
+      outputFormats: [json]
+      category: release
+      idempotent: true
+
+    remote-release-governance-verify:
+      command: bash tools/release/verify_remote_release_governance.sh --repository <owner/repository> --release-actor-login lwnmengjing
+      description: As any authenticated repository administrator, emit sanitized metadata proving that Root, component, and Docs tag creation belongs only to lwnmengjing, stopped v1.3.5 refs have a creation-only no-bypass freeze, every release tag remains immutable, active publishing environments have exact tag policies with no reviewer pause or administrator bypass, and retired environments allow no ref; the organization-managed Docs credential must be available to this repository without repository or environment overrides, and no secret value is read.
+      outputFormats: [json]
+      category: release
+      idempotent: true
+
+    root-release-preview:
+      command: gh workflow run release.yml --ref main -f version=<version>
+      description: Build and verify only the unique non-publishing Root binaries, archives, packages, SBOMs, checksums, portable delivery paths, Thin Host composition, and multi-platform image candidate after a self-bound local release-evidence result on the same merged-main commit; this is artifact staging, not a second broad quality suite.
+      outputFormats: [text]
+      category: release
+
+    official-npm-stable-promotion:
+      command: gh workflow run npm-release.yml --ref <exact-root-tag> -f version=<version>
+      description: After every immutable component, Root, image, Go module, package, and Docs candidate surface reconciles, dispatch the reviewed exact Root tag to publish or reconcile official npm latest through Trusted Publishing; the workflow verifies npm identity and provenance before moving GitHub Latest.
+      outputFormats: [text]
+      category: release
+      idempotent: true
+
+    direct-verify-all:
+      command: make verify-all
+      description: Make alias for the canonical complete local mss verification suite.
+      category: verification
+
+    module-spec-validate:
+      command: go run ./cmd/mss spec validate
+      description: Validate an AdminModuleSpec against schema and semantic rules.
+      category: generation
+
+    module-generate:
+      command: go run ./cmd/mss module generate
+      description: Generate or synchronize a vertical admin module for the only supported antd-v6 frontend target.
+      category: generation
+      dryRunByDefault: true
+      idempotent: true
+
+    module-generate-v6:
+      command: go run ./cmd/mss module generate --frontend-target antd-v6
+      description: Generate or drift-check the isolated Ant Design 6 projection declared by an AdminModule specification.
+      category: generation
+      dryRunByDefault: true
+      idempotent: true
+
+    eval-list:
+      command: go run ./cmd/mss eval list
+      description: List repository Agent evaluation cases.
+      outputFormats: [text, json]
+      category: eval
+
+    eval-run:
+      command: go run ./cmd/mss eval run
+      description: Execute selected Agent evaluation cases; the complete --all matrix is local release-preparation evidence and is not repeated by candidate packaging.
+      outputFormats: [text, markdown, json]
+      category: eval
+
+    eval-report:
+      command: go run ./cmd/mss eval report
+      description: Read the latest persisted Agent evaluation report.
+      outputFormats: [text, markdown, json]
+      category: eval

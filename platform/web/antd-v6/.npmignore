@@ -1,0 +1,20 @@
+# The package consumes the reusable core source and the generated Foundation
+# core presentation registry, but not application-owned business fixtures.
+src/generated/locales/
+src/generated/modules/
+src/generated/presentation-registry.generated.ts
+src/generated/routes.ts
+src/pages/generated/
+src/shared/presentation/supplier.prototype.ts
+src/**/*.test.ts
+src/**/*.test.tsx
+src/**/*.spec.ts
+src/**/*.spec.tsx
+src/**/__snapshots__/
+coverage/
+dist/
+e2e/
+playwright-report/
+test-results/
+node_modules/
+*.log
