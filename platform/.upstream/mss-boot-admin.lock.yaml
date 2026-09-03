@@ -1,0 +1,35 @@
+schema_version: 1
+
+upstream:
+  repository: https://github.com/mss-boot-io/mss-boot-admin.git
+  repository_full_name: mss-boot-io/mss-boot-admin
+  tag: v1.3.7
+  tag_object_sha: 41c6517950f7f5f642418f5d4a49386e9c200b15
+  source_commit_sha: 77b53d41092741eac62fa6418c0bdbf87413c7cd
+  source_tree_sha: 32ffcde4e8ca2f41a8c15c373217d06c1b35d9c0
+  source_commit_signature_verified: true
+  go_version: 1.26.6
+  license: MIT
+
+source_blobs:
+  go_mod: 0395953a2915b452d366bfe8e0b777d084eb3694
+  license: 62ff2994787f18495f68803bed2b87d69c4449ca
+  auth_middleware: cd5a6ed0d9ef41dff92651fa5b578c031b57d55c
+  websocket_api: 1095302d91dee10fcefaabbedda46be285fc7255
+  task_server: 3504aa49dc3abb15963111347d8c374a9a0f9ff1
+
+import:
+  strategy: vendored-tree
+  target_directory: platform
+  preserve_directory: platform/.upstream
+  status: pending
+  import_commit_sha: null
+  import_manifest: platform/.upstream/import-manifest.txt
+
+policy:
+  allow_floating_branch: false
+  allow_floating_tag: false
+  require_clean_worktree: true
+  require_license_preservation: true
+  require_separate_import_commit: true
+  require_upgrade_adr: true
