@@ -12,7 +12,7 @@ use rand_core::OsRng;
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
 use url::Url;
-use zeroize::Zeroizing;
+use zeroize::{Zeroize, ZeroizeOnDrop, Zeroizing};
 
 use crate::crypto::P256PublicJwk;
 
@@ -32,12 +32,24 @@ pub struct IdentitySummary {
     pub assurance: &'static str,
 }
 
-#[derive(Serialize, Deserialize)]
+#[derive(Serialize, Deserialize, Zeroize, ZeroizeOnDrop)]
 #[serde(deny_unknown_fields)]
 struct StoredIdentity {
     version: u32,
     signing_d: String,
     kem_d: String,
+    #[serde(default)]
+    credentials: Option<EndpointCredentials>,
+}
+
+#[derive(Serialize, Deserialize, Zeroize, ZeroizeOnDrop)]
+pub struct EndpointCredentials {
+    pub endpoint_id: String,
+    pub credential_id: String,
+    pub access_token: String,
+    pub access_expires_at: String,
+    pub refresh_token: String,
+    pub refresh_expires_at: String,
 }
 
 #[derive(Debug, Error)]
@@ -101,6 +113,7 @@ impl DevFileKeyStore {
             version: STATE_VERSION,
             signing_d: signing_d.to_string(),
             kem_d: kem_d.to_string(),
+            credentials: None,
         };
         let encoded =
             Zeroizing::new(serde_json::to_vec(&state).map_err(|_| KeyStoreError::Invalid)?);
@@ -143,6 +156,38 @@ impl DevFileKeyStore {
             kem: SecretKey::from_slice(&kem).map_err(|_| KeyStoreError::Key)?,
         })
     }
+
+    pub fn save_credentials(&self, credentials: EndpointCredentials) -> Result<(), KeyStoreError> {
+        validate_private_file(&self.path)?;
+        let mut state = read_stored_identity(&self.path)?;
+        state.credentials = Some(credentials);
+        let encoded =
+            Zeroizing::new(serde_json::to_vec(&state).map_err(|_| KeyStoreError::Invalid)?);
+        let parent = self.path.parent().ok_or(KeyStoreError::UnsafePath)?;
+        let mut temporary = tempfile::NamedTempFile::new_in(parent)?;
+        #[cfg(unix)]
+        temporary
+            .as_file()
+            .set_permissions(fs::Permissions::from_mode(0o600))?;
+        temporary.write_all(&encoded)?;
+        temporary.as_file().sync_all()?;
+        temporary
+            .persist(&self.path)
+            .map_err(|error| KeyStoreError::Io(error.error))?;
+        restrict_file(&self.path)
+    }
+}
+
+fn read_stored_identity(path: &Path) -> Result<StoredIdentity, KeyStoreError> {
+    let mut file = fs::File::open(path)?;
+    let mut encoded = Zeroizing::new(Vec::new());
+    Read::by_ref(&mut file)
+        .take(MAX_STATE_BYTES + 1)
+        .read_to_end(&mut encoded)?;
+    if encoded.is_empty() || encoded.len() as u64 > MAX_STATE_BYTES {
+        return Err(KeyStoreError::Invalid);
+    }
+    serde_json::from_slice(&encoded).map_err(|_| KeyStoreError::Invalid)
 }
 
 impl EndpointIdentity {

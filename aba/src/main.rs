@@ -3,6 +3,7 @@ use std::process::ExitCode;
 
 use aba::config::AgentConfig;
 use aba::identity::DevFileKeyStore;
+use aba::identity::enrollment::EnrollmentClient;
 use aba::version::{PRODUCT_NAME, build_info};
 use clap::{Args, Parser, Subcommand};
 use url::Url;
@@ -26,6 +27,19 @@ enum Command {
     Config(ConfigArgs),
     /// Manage the ABA endpoint identity.
     Identity(IdentityArgs),
+    /// Enroll this ABA with a loopback development Platform.
+    Enroll {
+        #[arg(long, value_name = "PATH")]
+        store: PathBuf,
+        #[arg(long, value_name = "URL")]
+        platform: Url,
+        #[arg(long, default_value = "Local ABA")]
+        name: String,
+        #[arg(long)]
+        insecure_dev_keystore: bool,
+        #[arg(long, default_value_t = 600)]
+        timeout_seconds: u64,
+    },
 }
 
 #[derive(Debug, Args)]
@@ -134,6 +148,28 @@ fn execute(cli: Cli) -> Result<(), Box<dyn std::error::Error>> {
                 print_identity_summary(&summary, json)?;
             }
         },
+        Command::Enroll {
+            store,
+            platform,
+            name,
+            insecure_dev_keystore,
+            timeout_seconds,
+        } => {
+            let store = DevFileKeyStore::new(store, &platform, insecure_dev_keystore)?;
+            let identity = store.load()?;
+            let endpoint_id = EnrollmentClient::new(platform)?.enroll(
+                &identity,
+                &store,
+                &name,
+                std::time::Duration::from_secs(timeout_seconds.clamp(10, 900)),
+                |display| {
+                    println!("verification-uri: {}", display.verification_uri);
+                    println!("user-code: {}", display.user_code);
+                    println!("waiting for approval...");
+                },
+            )?;
+            println!("enrollment complete: endpoint {endpoint_id}");
+        }
     }
     Ok(())
 }

@@ -1,3 +1,6 @@
+pub mod enrollment;
 pub mod keystore;
 
-pub use keystore::{DevFileKeyStore, EndpointIdentity, IdentitySummary, KeyStoreError};
+pub use keystore::{
+    DevFileKeyStore, EndpointCredentials, EndpointIdentity, IdentitySummary, KeyStoreError,
+};

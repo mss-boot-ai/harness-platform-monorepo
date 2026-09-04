@@ -20,16 +20,15 @@ base64 = "0.22.1"
 clap = { version = "4.5", features = ["derive"] }
 p256 = { version = "0.13.2", features = ["ecdsa"] }
 rand_core = { version = "0.6.4", features = ["getrandom"] }
+reqwest = { version = "0.13.4", default-features = false, features = ["blocking", "json", "rustls"] }
 serde = { version = "1.0", features = ["derive"] }
 serde_json = "1.0"
 sha2 = "0.10.9"
 thiserror = "2.0"
 toml = "0.8"
 url = { version = "2.5", features = ["serde"] }
-zeroize = "1.9.0"
-
-[dev-dependencies]
 tempfile = "3.27.0"
+zeroize = { version = "1.9.0", features = ["derive"] }
 
 [lints.rust]
 unsafe_code = "forbid"
