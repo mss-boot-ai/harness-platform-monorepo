@@ -257,6 +257,24 @@ func (session *Session) MarkUncertain(now time.Time) error {
 	return nil
 }
 
+func (session *Session) Fail(now time.Time) error {
+	if session == nil {
+		return NewProblem(CodeInvalidArgument, "session is required", nil)
+	}
+	if session.Status == SessionStatusFailed {
+		return nil
+	}
+	switch session.Status {
+	case SessionStatusCreating, SessionStatusWaitingKey, SessionStatusRekeyRequired:
+	default:
+		return invalidTransition("session", string(session.Status), string(SessionStatusFailed))
+	}
+	session.Status = SessionStatusFailed
+	session.UpdatedAt = now
+	session.RowVersion++
+	return nil
+}
+
 func (session *Session) StartDraining(now time.Time) error {
 	return session.move(SessionStatusActive, SessionStatusDraining, now)
 }
