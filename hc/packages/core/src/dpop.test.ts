@@ -87,4 +87,23 @@ describe('DPoP proof creation', () => {
       }),
     ).rejects.toThrow('nonce');
   });
+
+  it('creates a token-endpoint proof without ath when the credential is HttpOnly', async () => {
+    const privateKey = await crypto.subtle.importKey(
+      'jwk',
+      vector.privateJwk as JsonWebKey,
+      { name: 'ECDSA', namedCurve: 'P-256' },
+      false,
+      ['sign'],
+    );
+    const result = await createDpopProof({
+      htm: 'POST',
+      htu: 'https://platform.example/gateway/v1/tokens/refresh',
+      nonce: vector.dpop.claims.nonce,
+      privateKey,
+      publicJwk: vector.publicJwk as P256PublicJwk,
+    });
+    const payload = decodeDpopSegment<Record<string, unknown>>(result.proof.split('.')[1]!);
+    expect(Object.hasOwn(payload, 'ath')).toBe(false);
+  });
 });

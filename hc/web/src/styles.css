@@ -70,11 +70,12 @@ button:disabled { cursor: not-allowed; opacity: .48; }
 .pending-text { color: #8c5b1e !important; }
 .registered-text { color: #25684c !important; }
 .platform-copy, .registered-card p { color: #64716b; font-size: 13px; line-height: 1.6; margin: 16px 0 0; }
-.login-form { display: grid; grid-template-columns: 1fr 1fr auto; gap: 12px; align-items: end; margin-top: 22px; }
+.login-form { display: grid; grid-template-columns: 1fr 1fr auto auto; gap: 12px; align-items: end; margin-top: 22px; }
 .login-form label { display: grid; gap: 7px; color: #5d6963; font-size: 12px; font-weight: 700; }
 .login-form input { width: 100%; min-height: 47px; color: #17251f; background: #f8faf7; border: 1px solid #cbd5ce; border-radius: 11px; padding: 0 13px; font: inherit; }
 .login-form input:focus { border-color: #39775f; box-shadow: 0 0 0 3px rgba(57,119,95,.12); outline: none; }
 .login-form .primary-button { min-width: 170px; }
+.login-form .restore-button { min-width: 150px; min-height: 49px; }
 .login-form .error-banner { grid-column: 1 / -1; margin: 0; }
 .registered-card { display: flex; justify-content: space-between; align-items: center; gap: 22px; }
 .gateway-button { margin-top: 20px; }

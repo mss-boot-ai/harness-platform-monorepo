@@ -113,6 +113,31 @@ export async function issueWebSocketTicket(
   return parseWebSocketTicket(await response.json());
 }
 
+export async function refreshEndpointSession(identity: EndpointIdentity): Promise<RegistrationSession> {
+  const path = '/gateway/v1/tokens/refresh';
+  const challengeResponse = await fetch(path, { credentials: 'include', method: 'POST' });
+  const nonce = challengeResponse.headers.get('DPoP-Nonce');
+  if (challengeResponse.status !== 401 || nonce === null || nonce === '') {
+    throw await gatewayFailure(challengeResponse);
+  }
+  const proof = await createDpopProof({
+    htm: 'POST',
+    htu: new URL(path, window.location.origin).toString(),
+    nonce,
+    privateKey: identity.signing.privateKey,
+    publicJwk: identity.signing.publicJwk,
+  });
+  const response = await fetch(path, {
+    credentials: 'include',
+    headers: { Accept: 'application/json', DPoP: proof.proof },
+    method: 'POST',
+  });
+  if (!response.ok) {
+    throw await gatewayFailure(response);
+  }
+  return parseRegistration(await response.json());
+}
+
 async function requestJson<T>(path: string, init: RequestInit): Promise<T> {
   const headers = new Headers(init.headers);
   headers.set('Accept', 'application/json');

@@ -192,7 +192,11 @@ func (verifier Verifier) Verify(ctx context.Context, proof string, requirements 
 	} else if !equalSecret(claims.Nonce, requirements.ExpectedNonce) {
 		return Result{}, fail(CodeRequestMismatch, errors.New("nonce does not match"))
 	}
-	if requirements.AccessToken == "" || !equalSecret(claims.AccessTokenHash, awpcrypto.AccessTokenHash(requirements.AccessToken)) {
+	if requirements.AccessToken == "" {
+		if claims.AccessTokenHash != "" {
+			return Result{}, fail(CodeRequestMismatch, errors.New("ath is not allowed without an access token"))
+		}
+	} else if !equalSecret(claims.AccessTokenHash, awpcrypto.AccessTokenHash(requirements.AccessToken)) {
 		return Result{}, fail(CodeRequestMismatch, errors.New("ath does not match access token"))
 	}
 

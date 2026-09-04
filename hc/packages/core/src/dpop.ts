@@ -2,7 +2,7 @@ import { base64UrlDecode, base64UrlEncode, signP1363LowS } from './crypto';
 import { parseP256PublicJwk, type P256PublicJwk } from './identity';
 
 export interface DpopProofInput {
-  readonly accessToken: string;
+  readonly accessToken?: string;
   readonly htm: string;
   readonly htu: string;
   readonly nonce: string;
@@ -13,7 +13,7 @@ export interface DpopProofInput {
 }
 
 export interface DpopProof {
-  readonly ath: string;
+  readonly ath?: string;
   readonly htm: string;
   readonly htu: string;
   readonly issuedAt: number;
@@ -24,7 +24,7 @@ export interface DpopProof {
 const textEncoder = new TextEncoder();
 
 export async function createDpopProof(input: DpopProofInput): Promise<DpopProof> {
-  if (input.accessToken.length === 0) {
+  if (input.accessToken !== undefined && input.accessToken.length === 0) {
     throw new Error('DPoP access token is required');
   }
   if (input.nonce.length === 0) {
@@ -44,16 +44,23 @@ export async function createDpopProof(input: DpopProofInput): Promise<DpopProof>
   if (!Number.isSafeInteger(issuedAt)) {
     throw new Error('DPoP issued-at time is invalid');
   }
-  const ath = await accessTokenHash(input.accessToken);
+  const ath = input.accessToken === undefined ? undefined : await accessTokenHash(input.accessToken);
   const header = { alg: 'ES256', jwk: publicJwk, typ: 'dpop+jwt' };
-  const claims = { ath, htm: method, htu, iat: issuedAt, jti, nonce: input.nonce };
+  const claims = {
+    ...(ath === undefined ? {} : { ath }),
+    htm: method,
+    htu,
+    iat: issuedAt,
+    jti,
+    nonce: input.nonce,
+  };
   const protectedSegment = base64UrlEncode(textEncoder.encode(JSON.stringify(header)));
   const payloadSegment = base64UrlEncode(textEncoder.encode(JSON.stringify(claims)));
   const signingInput = `${protectedSegment}.${payloadSegment}`;
   const signature = await signP1363LowS(input.privateKey, textEncoder.encode(signingInput));
 
   return {
-    ath,
+    ...(ath === undefined ? {} : { ath }),
     htm: method,
     htu,
     issuedAt,

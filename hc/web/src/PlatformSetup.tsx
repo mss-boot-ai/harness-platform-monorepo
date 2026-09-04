@@ -3,6 +3,7 @@ import { useState, type FormEvent } from 'react';
 import {
   HcApiError,
   loginBrowserSession,
+  refreshEndpointSession,
   registerBrowserEndpoint,
   type RegistrationSession,
 } from './api';
@@ -37,6 +38,22 @@ export function PlatformSetup({ identity, onRegistered, registration }: Platform
         setError(`${cause.message}（${cause.code}）`);
       } else {
         setError('Platform 注册失败，请确认本地服务与网络状态。');
+      }
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const restore = async () => {
+    setBusy(true);
+    setError(null);
+    try {
+      onRegistered(await refreshEndpointSession(identity));
+    } catch (cause) {
+      if (cause instanceof HcApiError) {
+        setError(`${cause.message}（${cause.code}）`);
+      } else {
+        setError('端点恢复失败，请重新登录注册。');
       }
     } finally {
       setBusy(false);
@@ -89,6 +106,9 @@ export function PlatformSetup({ identity, onRegistered, registration }: Platform
         {error === null ? null : <p className="error-banner" role="alert">{error}</p>}
         <button className="primary-button" type="submit" disabled={busy}>
           {busy ? '正在建立身份…' : '登录并注册此端点'}
+        </button>
+        <button className="secondary-button restore-button" type="button" disabled={busy} onClick={() => void restore()}>
+          恢复已注册端点
         </button>
       </form>
     </section>

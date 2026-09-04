@@ -26,7 +26,7 @@ import (
 
 func TestTicketEndpointRequiresNonceBoundDPoPAndCreatesSingleUseTicket(t *testing.T) {
 	now := time.Unix(1_800_000_000, 0).UTC()
-	persistence, endpoint, credential, accessToken, signingKey, publicJWK := gatewayFixture(t, now)
+	persistence, endpoint, credential, accessToken, _, signingKey, publicJWK := gatewayFixture(t, now)
 	handler, err := NewHandler(Config{
 		AllowedOrigin: "http://127.0.0.1:8001", ExternalOrigin: "http://127.0.0.1:8082",
 	}, persistence, deterministicGatewayBytes(512), func() time.Time { return now })
@@ -80,7 +80,7 @@ func TestTicketEndpointRequiresNonceBoundDPoPAndCreatesSingleUseTicket(t *testin
 
 func TestGatewayRejectsAdminCookieAndUntrustedOrigin(t *testing.T) {
 	now := time.Unix(1_800_000_000, 0).UTC()
-	persistence, _, _, accessToken, _, _ := gatewayFixture(t, now)
+	persistence, _, _, accessToken, _, _, _ := gatewayFixture(t, now)
 	handler, err := NewHandler(Config{
 		AllowedOrigin: "http://127.0.0.1:8001", ExternalOrigin: "http://127.0.0.1:8082",
 	}, persistence, deterministicGatewayBytes(256), func() time.Time { return now })
@@ -105,10 +105,62 @@ func TestGatewayRejectsAdminCookieAndUntrustedOrigin(t *testing.T) {
 	}
 }
 
+func TestRefreshEndpointRotatesFamilyAndDetectsOldCredentialReuse(t *testing.T) {
+	now := time.Unix(1_800_000_000, 0).UTC()
+	persistence, endpoint, _, _, refreshToken, signingKey, publicJWK := gatewayFixture(t, now)
+	handler, err := NewHandler(Config{
+		AllowedOrigin: "http://127.0.0.1:8001", ExternalOrigin: "http://127.0.0.1:8082",
+	}, persistence, deterministicGatewayBytes(1024), func() time.Time { return now })
+	if err != nil {
+		t.Fatalf("NewHandler: %v", err)
+	}
+	challengeResponse := httptest.NewRecorder()
+	handler.ServeHTTP(challengeResponse, gatewayRefreshRequest(refreshToken, ""))
+	nonce := challengeResponse.Header().Get("DPoP-Nonce")
+	if challengeResponse.Code != http.StatusUnauthorized || nonce == "" {
+		t.Fatalf("refresh nonce status=%d headers=%v body=%s", challengeResponse.Code, challengeResponse.Header(), challengeResponse.Body.String())
+	}
+	proof := signRefreshDPoP(t, signingKey, publicJWK, nonce, now, "00000000-0000-4000-8000-000000000201")
+	refreshResponse := httptest.NewRecorder()
+	handler.ServeHTTP(refreshResponse, gatewayRefreshRequest(refreshToken, proof))
+	if refreshResponse.Code != http.StatusOK || refreshResponse.Header().Get("DPoP-Nonce") == "" {
+		t.Fatalf("refresh status=%d headers=%v body=%s", refreshResponse.Code, refreshResponse.Header(), refreshResponse.Body.String())
+	}
+	var response struct {
+		AccessToken string `json:"accessToken"`
+		EndpointID  string `json:"endpointId"`
+	}
+	if err := json.Unmarshal(refreshResponse.Body.Bytes(), &response); err != nil {
+		t.Fatalf("decode refresh response: %v", err)
+	}
+	accessRaw, err := base64.RawURLEncoding.Strict().DecodeString(response.AccessToken)
+	if err != nil || response.EndpointID != endpoint.ID.String() {
+		t.Fatalf("rotated response=%#v decode=%v", response, err)
+	}
+	if _, _, err := persistence.AuthenticateAccessToken(context.Background(), sha256.Sum256(accessRaw), now); err != nil {
+		t.Fatalf("rotated access token did not authenticate: %v", err)
+	}
+	cookies := refreshResponse.Result().Cookies()
+	if len(cookies) != 1 || cookies[0].Value == "" || cookies[0].Value == refreshToken || !cookies[0].HttpOnly {
+		t.Fatalf("rotated refresh cookie=%#v", cookies)
+	}
+
+	reuseNonce := refreshResponse.Header().Get("DPoP-Nonce")
+	reuseProof := signRefreshDPoP(t, signingKey, publicJWK, reuseNonce, now, "00000000-0000-4000-8000-000000000202")
+	reuseResponse := httptest.NewRecorder()
+	handler.ServeHTTP(reuseResponse, gatewayRefreshRequest(refreshToken, reuseProof))
+	if reuseResponse.Code != http.StatusForbidden {
+		t.Fatalf("refresh reuse status=%d body=%s", reuseResponse.Code, reuseResponse.Body.String())
+	}
+	if _, _, err := persistence.AuthenticateAccessToken(context.Background(), sha256.Sum256(accessRaw), now); !domain.HasCode(err, domain.CodeRevoked) {
+		t.Fatalf("rotated family access error=%v, want revoked", err)
+	}
+}
+
 func gatewayFixture(
 	t *testing.T,
 	now time.Time,
-) (*store.Store, domain.Endpoint, domain.EndpointCredential, string, *ecdsa.PrivateKey, awpcrypto.P256PublicJWK) {
+) (*store.Store, domain.Endpoint, domain.EndpointCredential, string, string, *ecdsa.PrivateKey, awpcrypto.P256PublicJWK) {
 	t.Helper()
 	db, err := gorm.Open(sqlite.Open(fmt.Sprintf("file:%s?mode=memory&cache=shared", t.Name())), &gorm.Config{Logger: logger.Default.LogMode(logger.Silent)})
 	if err != nil {
@@ -146,9 +198,11 @@ func gatewayFixture(
 		Scopes: []string{"endpoint:connect"}, Status: domain.CredentialStatusActive,
 		ExpiresAt: now.Add(time.Hour), CreatedAt: now, UpdatedAt: now,
 	}
+	refreshRaw := bytes.Repeat([]byte{8}, 32)
+	refreshToken := base64.RawURLEncoding.EncodeToString(refreshRaw)
 	refresh := domain.RefreshCredential{
 		ID: gatewayID(4), EndpointID: endpoint.ID, FamilyID: endpoint.CredentialFamilyID,
-		TokenHash: sha256.Sum256([]byte("refresh")), SigningJKT: signingJKT,
+		TokenHash: sha256.Sum256(refreshRaw), SigningJKT: signingJKT,
 		Status: domain.CredentialStatusActive, ExpiresAt: now.Add(time.Hour), CreatedAt: now, UpdatedAt: now,
 	}
 	challenge := domain.HCRegistrationChallenge{
@@ -170,13 +224,23 @@ func gatewayFixture(
 	); err != nil {
 		t.Fatalf("ConsumeHCRegistrationChallenge: %v", err)
 	}
-	return persistence, endpoint, credential, accessToken, signingKey, publicJWK
+	return persistence, endpoint, credential, accessToken, refreshToken, signingKey, publicJWK
 }
 
 func gatewayRequest(accessToken, proof string) *http.Request {
 	request := httptest.NewRequest(http.MethodPost, "/gateway/v1/ws/tickets", nil)
 	request.Header.Set("Origin", "http://127.0.0.1:8001")
 	request.Header.Set("Authorization", "DPoP "+accessToken)
+	if proof != "" {
+		request.Header.Set("DPoP", proof)
+	}
+	return request
+}
+
+func gatewayRefreshRequest(refreshToken, proof string) *http.Request {
+	request := httptest.NewRequest(http.MethodPost, "/gateway/v1/tokens/refresh", nil)
+	request.Header.Set("Origin", "http://127.0.0.1:8001")
+	request.AddCookie(&http.Cookie{Name: "harness_hc_refresh", Value: refreshToken})
 	if proof != "" {
 		request.Header.Set("DPoP", proof)
 	}
@@ -202,6 +266,28 @@ func signDPoP(
 	signature, err := awpcrypto.SignP1363LowS(key, []byte(signingInput))
 	if err != nil {
 		t.Fatalf("sign DPoP proof: %v", err)
+	}
+	return signingInput + "." + base64.RawURLEncoding.EncodeToString(signature)
+}
+
+func signRefreshDPoP(
+	t *testing.T,
+	key *ecdsa.PrivateKey,
+	publicJWK awpcrypto.P256PublicJWK,
+	nonce string,
+	now time.Time,
+	jti string,
+) string {
+	t.Helper()
+	header, _ := json.Marshal(map[string]any{"alg": "ES256", "jwk": publicJWK, "typ": "dpop+jwt"})
+	claims, _ := json.Marshal(map[string]any{
+		"htm": "POST", "htu": "http://127.0.0.1:8082/gateway/v1/tokens/refresh",
+		"iat": now.Unix(), "jti": jti, "nonce": nonce,
+	})
+	signingInput := base64.RawURLEncoding.EncodeToString(header) + "." + base64.RawURLEncoding.EncodeToString(claims)
+	signature, err := awpcrypto.SignP1363LowS(key, []byte(signingInput))
+	if err != nil {
+		t.Fatalf("sign refresh DPoP proof: %v", err)
 	}
 	return signingInput + "." + base64.RawURLEncoding.EncodeToString(signature)
 }

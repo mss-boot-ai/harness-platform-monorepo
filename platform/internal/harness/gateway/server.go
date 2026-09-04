@@ -32,6 +32,8 @@ type Persistence interface {
 	GetEndpointNonceHash(context.Context, domain.ID, time.Time) ([32]byte, error)
 	PutEndpointNonce(context.Context, domain.ID, [32]byte, time.Time, time.Time) error
 	RotateEndpointNonce(context.Context, domain.ID, [32]byte, [32]byte, time.Time, time.Time) error
+	InspectRefreshCredential(context.Context, [32]byte, time.Time) (domain.Endpoint, domain.RefreshCredential, error)
+	RotateRefreshCredential(context.Context, [32]byte, string, domain.EndpointCredential, domain.RefreshCredential, domain.SecurityAuditEvent, time.Time) error
 	UseDPoPReplay(context.Context, string, string, time.Time, time.Time, int64) error
 }
 
@@ -41,6 +43,8 @@ type Config struct {
 	NonceTTL         time.Duration
 	TicketTTL        time.Duration
 	ReplayMaxEntries int64
+	AccessTTL        time.Duration
+	RefreshTTL       time.Duration
 }
 
 type Server struct {
@@ -73,6 +77,12 @@ func NewHandler(config Config, persistence Persistence, random io.Reader, now fu
 	if config.ReplayMaxEntries <= 0 {
 		config.ReplayMaxEntries = defaultReplayMax
 	}
+	if config.AccessTTL <= 0 || config.AccessTTL > 15*time.Minute {
+		config.AccessTTL = 10 * time.Minute
+	}
+	if config.RefreshTTL <= 0 || config.RefreshTTL > 30*24*time.Hour {
+		config.RefreshTTL = 24 * time.Hour
+	}
 	if random == nil {
 		random = rand.Reader
 	}
@@ -84,7 +94,127 @@ func NewHandler(config Config, persistence Persistence, random io.Reader, now fu
 	mux.HandleFunc("GET /gateway/v1/health", server.health)
 	mux.HandleFunc("POST /gateway/v1/ws/tickets", server.issueTicket)
 	mux.HandleFunc("OPTIONS /gateway/v1/ws/tickets", server.preflight)
+	mux.HandleFunc("POST /gateway/v1/tokens/refresh", server.refreshToken)
+	mux.HandleFunc("OPTIONS /gateway/v1/tokens/refresh", server.preflight)
 	return server.cors(mux), nil
+}
+
+func (server *Server) refreshToken(writer http.ResponseWriter, request *http.Request) {
+	now := server.now().UTC()
+	refreshCookie, err := request.Cookie("harness_hc_refresh")
+	if err != nil {
+		writeGatewayError(writer, http.StatusUnauthorized, "REFRESH_CREDENTIAL_REQUIRED", "refresh credential is required")
+		return
+	}
+	refreshRaw, err := base64.RawURLEncoding.Strict().DecodeString(refreshCookie.Value)
+	if err != nil || len(refreshRaw) != 32 {
+		clearRefreshCookie(writer, server.config.ExternalOrigin)
+		writeGatewayError(writer, http.StatusUnauthorized, "REFRESH_CREDENTIAL_INVALID", "refresh credential is invalid")
+		return
+	}
+	refreshHash := sha256.Sum256(refreshRaw)
+	endpoint, currentRefresh, err := server.persistence.InspectRefreshCredential(request.Context(), refreshHash, now)
+	if err != nil {
+		clearRefreshCookie(writer, server.config.ExternalOrigin)
+		writeDomainError(writer, err)
+		return
+	}
+	nonceHash, err := server.persistence.GetEndpointNonceHash(request.Context(), endpoint.ID, now)
+	proofHeaders := request.Header.Values("DPoP")
+	if err != nil {
+		if !domain.HasCode(err, domain.CodeNotFound) && !domain.HasCode(err, domain.CodeExpired) {
+			writeDomainError(writer, err)
+			return
+		}
+		server.writeNonceChallenge(writer, request.Context(), endpoint.ID, now)
+		return
+	}
+	if len(proofHeaders) == 0 || (len(proofHeaders) == 1 && strings.TrimSpace(proofHeaders[0]) == "") {
+		server.writeNonceChallenge(writer, request.Context(), endpoint.ID, now)
+		return
+	}
+	if len(proofHeaders) != 1 {
+		writeGatewayError(writer, http.StatusBadRequest, "DPOP_MALFORMED", "exactly one DPoP header is required")
+		return
+	}
+	verifier := dpop.Verifier{Replay: storeReplayCache{persistence: server.persistence, maxEntries: server.config.ReplayMaxEntries}}
+	_, err = verifier.Verify(request.Context(), proofHeaders[0], dpop.Requirements{
+		ExpectedJKT: endpoint.SigningJKT, ExpectedNonceHash: nonceHash,
+		HTM: request.Method, HTU: server.config.ExternalOrigin + request.URL.RequestURI(), Now: now,
+	})
+	if err != nil {
+		server.writeDPoPError(writer, request.Context(), endpoint.ID, now, err)
+		return
+	}
+	nextNonce, _, err := server.newOpaqueValue()
+	if err != nil {
+		writeGatewayError(writer, http.StatusServiceUnavailable, "GATEWAY_RANDOM_UNAVAILABLE", "Gateway is temporarily unavailable")
+		return
+	}
+	if err := server.persistence.RotateEndpointNonce(
+		request.Context(), endpoint.ID, nonceHash, sha256.Sum256([]byte(nextNonce)), now, now.Add(server.config.NonceTTL),
+	); err != nil {
+		writeGatewayError(writer, http.StatusConflict, "DPOP_NONCE_CHANGED", "DPoP nonce changed concurrently")
+		return
+	}
+	accessToken, accessHash, err := server.newOpaqueValue()
+	if err != nil {
+		writeGatewayError(writer, http.StatusServiceUnavailable, "GATEWAY_RANDOM_UNAVAILABLE", "Gateway is temporarily unavailable")
+		return
+	}
+	refreshToken, nextRefreshHash, err := server.newOpaqueValue()
+	if err != nil {
+		writeGatewayError(writer, http.StatusServiceUnavailable, "GATEWAY_RANDOM_UNAVAILABLE", "Gateway is temporarily unavailable")
+		return
+	}
+	accessID, err := domain.NewID(server.random)
+	if err != nil {
+		writeGatewayError(writer, http.StatusServiceUnavailable, "GATEWAY_RANDOM_UNAVAILABLE", "Gateway is temporarily unavailable")
+		return
+	}
+	refreshID, err := domain.NewID(server.random)
+	if err != nil {
+		writeGatewayError(writer, http.StatusServiceUnavailable, "GATEWAY_RANDOM_UNAVAILABLE", "Gateway is temporarily unavailable")
+		return
+	}
+	auditID, err := domain.NewID(server.random)
+	if err != nil {
+		writeGatewayError(writer, http.StatusServiceUnavailable, "GATEWAY_RANDOM_UNAVAILABLE", "Gateway is temporarily unavailable")
+		return
+	}
+	accessExpiresAt := now.Add(server.config.AccessTTL)
+	refreshExpiresAt := now.Add(server.config.RefreshTTL)
+	nextAccess := domain.EndpointCredential{
+		ID: accessID, EndpointID: endpoint.ID, FamilyID: endpoint.CredentialFamilyID,
+		TokenHash: accessHash, SigningJKT: endpoint.SigningJKT,
+		Scopes: []string{"endpoint:connect", "relay:write", "session:manage"},
+		Status: domain.CredentialStatusActive, ExpiresAt: accessExpiresAt, CreatedAt: now, UpdatedAt: now,
+	}
+	nextRefresh := domain.RefreshCredential{
+		ID: refreshID, EndpointID: endpoint.ID, FamilyID: endpoint.CredentialFamilyID,
+		TokenHash: nextRefreshHash, SigningJKT: endpoint.SigningJKT, Status: domain.CredentialStatusActive,
+		ExpiresAt: refreshExpiresAt, RotatedFrom: currentRefresh.ID, CreatedAt: now, UpdatedAt: now,
+	}
+	audit := domain.SecurityAuditEvent{
+		ID: auditID, OwnerUserID: endpoint.OwnerUserID, TenantID: endpoint.TenantID,
+		ActorType: domain.AuditActorEndpoint, ActorID: endpoint.ID.String(), Action: "endpoint.token.refresh",
+		ObjectType: "endpoint", ObjectID: endpoint.ID.String(), Result: "success", Metadata: map[string]string{}, CreatedAt: now,
+	}
+	if err := server.persistence.RotateRefreshCredential(
+		request.Context(), refreshHash, endpoint.SigningJKT, nextAccess, nextRefresh, audit, now,
+	); err != nil {
+		if domain.HasCode(err, domain.CodeRevoked) {
+			clearRefreshCookie(writer, server.config.ExternalOrigin)
+		}
+		writeDomainError(writer, err)
+		return
+	}
+	setRefreshCookie(writer, refreshToken, refreshExpiresAt, server.config.ExternalOrigin)
+	writer.Header().Set("DPoP-Nonce", nextNonce)
+	writeJSON(writer, http.StatusOK, map[string]any{
+		"endpointId": endpoint.ID.String(), "tokenType": "DPoP", "accessToken": accessToken,
+		"accessExpiresAt": accessExpiresAt, "signingJkt": endpoint.SigningJKT, "kemJkt": endpoint.KEMJKT,
+	})
 }
 
 func (server *Server) health(writer http.ResponseWriter, _ *http.Request) {
@@ -278,6 +408,26 @@ func websocketURL(origin string) string {
 		return "wss://" + strings.TrimPrefix(origin, "https://")
 	}
 	return "ws://" + strings.TrimPrefix(origin, "http://")
+}
+
+func setRefreshCookie(writer http.ResponseWriter, token string, expiresAt time.Time, externalOrigin string) {
+	maxAge := int(time.Until(expiresAt).Seconds())
+	if maxAge < 1 {
+		maxAge = 1
+	}
+	http.SetCookie(writer, &http.Cookie{
+		Name: "harness_hc_refresh", Value: token, Path: "/gateway/v1/tokens/refresh",
+		Expires: expiresAt, MaxAge: maxAge, HttpOnly: true,
+		Secure: strings.HasPrefix(externalOrigin, "https://"), SameSite: http.SameSiteStrictMode,
+	})
+}
+
+func clearRefreshCookie(writer http.ResponseWriter, externalOrigin string) {
+	http.SetCookie(writer, &http.Cookie{
+		Name: "harness_hc_refresh", Value: "", Path: "/gateway/v1/tokens/refresh",
+		Expires: time.Unix(1, 0), MaxAge: -1, HttpOnly: true,
+		Secure: strings.HasPrefix(externalOrigin, "https://"), SameSite: http.SameSiteStrictMode,
+	})
 }
 
 func writeDomainError(writer http.ResponseWriter, err error) {
