@@ -1,8 +1,93 @@
 # Harness Platform 工作与验证日志
 
 - **状态**：Append-only operational memory
-- **时区约定**：每条记录必须写明时区；本轮日期按 2026-09-03 记录。
+- **时区约定**：每条记录必须写明日期、时间和时区。
 - **纪律**：记录实际完成的工作、远端提交和验证证据；失败与未执行项同样保留。不要把本文件改写成只显示成功的宣传材料。
+
+---
+
+## 2026-09-04 10:29 +08:00 — Foundation 与 Platform M1 Draft PR 检查点
+
+### 请求范围
+
+- 补齐功能分支从 Monorepo Foundation 到现有 Platform M1 后端的工作与验证记录。
+- 把当前成果建立为面向 `main` 的 Draft PR 检查点，不把它描述为完整 MVP 或可运行的远程 Agent 平台。
+- 记录后续工作和当前问题，作为下一开发会话的稳定起点。
+
+### 开工检查
+
+```text
+repository:    mss-boot-ai/harness-platform-monorepo
+branch:        codex/bootstrap-harness-platform-foundation
+main SHA:      234cd9a9d6457318188d9007895fced38af4949c
+branch SHA:    8c5f00f135acd914b7aa20702562c49f81affd9a
+ahead/behind:  30 / 0 against origin/main
+remote branch: exists at the same SHA
+existing PR:   none
+worktree:      clean before this documentation change
+```
+
+已执行 `git fetch --all --prune`、远端 `ls-remote`、本地状态检查、分支差异检查、GitHub PR 查询和 Actions 查询。未发现需要覆盖的未知本地改动，也未发现同分支 PR。本文档不包含真实 Token、Ticket、私钥、恢复码、用户数据或生产地址。
+
+### 已设计、编写并 push 的检查点
+
+| 范围 | 远端提交 | 状态与边界 |
+| --- | --- | --- |
+| Monorepo 与 CI 骨架 | `1e7b2cab230e4af194cc567ee1e7ddb22f593afc` | 已编写并 push；创建根目录、组件目录和初始工作流 |
+| Platform v1.3.7 Thin Host | `88da744cb80356801ee010b2e39537961ab9f6c2` | 已编写并 push；用官方 Thin Host 替换错误的 vendored Foundation，固定 Go/npm 依赖边界 |
+| AWP v1 Proto | `847b54000c4ef6f414f98f78fcfa08b18742d6ba` | 已编写并 push；当前只证明 Schema 可编译，不是跨语言兼容验证 |
+| ABA Rust/AAD Foundation | `56acbe7fc459e7ebe7961190a7a3f373806f50b6` | 已编写并 push；Rust 1.88、SDK 2.0.0 锁、严格配置和 148 字节 AAD；没有 Enrollment/WSS/加密/ACP Proxy |
+| MVP 产品与架构契约 M0 | `083000c1008bb39a5a16cc76c3a6d8e0c028c072` | 已设计、编写并 push；MVP PRD、实现架构、实施与验证计划 |
+| Platform Pure Domain M1.1 | `f3611d5b24b1f45d6a97668cf14898d45707575a` | 已编写并 push；Endpoint、Enrollment、Credential、Session、Ticket、Frame、ACK 等状态和单元测试 |
+| Platform Repository/Migration M1.2 | `180a50e56efd97749c3b2bfa1212d94c2bf95603` | 已编写并 push；显式 Migration、SQLite Store、Enrollment/Ticket/Frame/ACK/Revocation 事务测试 |
+| Platform Admin Module 后端 M1.3 | `8c5f00f135acd914b7aa20702562c49f81affd9a` | 已编写并 push；模块注册、Overview、Enrollment、Endpoint、Session、Delivery API 和 owner/tenant 隔离 |
+
+分支相对 `main` 共 30 个提交、109 个文件变更，统计约为 27,944 行新增和 2,074 行删除。分支名仍为 Foundation，但 `docs/roadmap/IMPLEMENTATION.md` 已把目标扩展到 M0–M6 完整 MVP；本检查点只覆盖 Foundation、M0 和 M1 的部分后端范围。
+
+### 远端 CI 证据
+
+当前实现 HEAD `8c5f00f135acd914b7aa20702562c49f81affd9a` 对应 GitHub Actions Run `33813060590`，结论为 `success`。实际通过的 Job 与命令范围：
+
+- `documentation`：`./scripts/check-docs.sh`；
+- `platform-import`：Thin Host import boundary、`go test -count=1 ./...`、`go vet ./...`、Platform Admin Web `pnpm install --frozen-lockfile`、`pnpm lint`、`pnpm test`、`pnpm build`；
+- `protocol`：安装 `protoc` 后运行 `./scripts/check-protocol.sh`；
+- `aba-rust`：Rust 1.88.0 locked metadata、fmt、Clippy `-D warnings` 和 workspace tests；
+- `hc-typescript`：Job 成功，但由于 `hc/package.json` 不存在而显式跳过，不能记为 HC 构建或测试通过。
+
+历史失败保留如下，均使用后续新提交修复，没有改写远端历史：
+
+- `c28d50afc9657cf177074577aaca167e06209ced` 的 Run `33811622386` 失败；随后以 `f2af0aded8949179488b25007e4686c3ca3affbc` 增加 Delivery Frame 映射。
+- `f2af0aded8949179488b25007e4686c3ca3affbc` 的 Run `33811823581` 仍失败；随后以 `816f2fc623267ce18c5799d4bb0431d50bef4c6a` 修复持久化行解码，Run `33812007872` 通过。
+- `6a222b004c247b1c69bc12cf419b3fd7606edc68` 的 Run `33812913067` 失败；随后以 `8c5f00f135acd914b7aa20702562c49f81affd9a` 改用公开 Store API 验证 tenant-scoped revoke，Run `33813060590` 通过。
+
+本次补日志前只读取并核对上述远端 CI 证据，没有在本地重新运行完整构建或测试。本工作日志自身的提交和 push 发生后，必须等待该新 SHA 的 CI 结果，不能沿用 `8c5f00f` 的成功结论。
+
+### 当前问题与未完成项
+
+- M1 尚不能标记为完整完成：`harness_session_key_packages`、`harness_audit_events`、`harness_idempotency_records` 及对应服务/事务尚未实现。
+- Admin Business Module 只有后端 API；中英文 Overview、Enrollment、Endpoint、Session、Delivery 页面仍不存在。
+- 当前管理写 API 尚未形成计划要求的持久化 Audit 与完整 `Idempotency-Key` 行为。
+- M2 的 JWK/ES256、Credential 签发、DPoP、Token Family、Ticket HTTP API 和 WSS Gateway 未实现。
+- M3/M4 的 HPKE、Session 控制、密文 Relay、ABA Journal、Resume、故障恢复和在线吊销闭环未实现。
+- ABA 仍是 Foundation：没有 Secure Store、Enrollment、WSS Connector、Process Supervisor、Journal 或 ACP Proxy。
+- HC 仅有 README；没有 TypeScript Workspace、Endpoint、Crypto、Session 或 UI。
+- 没有 Test Agent、Compose 演示环境或 `HC -> Platform -> ABA -> ACP Agent` 端到端链路。
+- 尚未执行浏览器、微信真机、跨语言 Golden Vector、Race Detector、`mss verify --all`、Thin Host no-op upgrade、Opaque Canary、负向安全、故障注入、容量、依赖、许可证、SBOM 或正式秘密扫描。
+- `docs/memory/project-memory.md` 的 Platform 引入方式和当前阶段仍描述旧的 vendored/Phase 0 状态，已被 ADR-0004 和 MVP 文档取代；后续应单独校正，避免在本日志提交中混入第二个意图。
+
+### 安全与兼容性判断
+
+- 当前提交没有实现可远程建立的 Endpoint 数据面，因此不能宣称 Token、Ticket、WSS、E2EE、重放防护或在线吊销已经安全验证。
+- 已有 Store 测试覆盖 owner/tenant 隔离、Ticket 单消费者、Frame 冲突、ACK 单调和吊销的数据库状态级联；这不等于连接、Token、Rekey 或多实例行为已经验证。
+- Platform 仍使用 ADR-0004 固定的 mss-boot-admin/admin-web v1.3.7 Thin Host 模式；本检查点没有更改 AWP Wire 字段号或密码学套件。
+
+### 下一安全检查点
+
+1. 提交并 push 本工作日志，等待新 SHA 的完整 CI。
+2. 创建面向 `main` 的 Draft PR，标题和正文明确这是 Foundation + Platform M1 后端检查点，不是 MVP 完成 PR；不自动合并。
+3. 在 PR 中优先审查 Thin Host 边界、Migration/Store 事务、owner/tenant 授权和管理 API 安全投影。
+4. 后续用独立提交补齐 M1 Audit、Idempotency、Key Package 持久化与 Admin 页面，再决定合并检查点还是进入 M2。
+5. M2 从共享 JWK/ES256/DPoP Golden Vector 开始，不先搭建可绕过身份验证的 WSS 通道。
 
 ---
 
