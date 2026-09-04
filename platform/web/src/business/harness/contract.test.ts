@@ -31,4 +31,37 @@ describe('Harness response contracts', () => {
       'Harness session is invalid',
     );
   });
+
+  it('maps the numeric AWP direction enum and rejects unknown values', () => {
+    const session = {
+      abaEndpointId: 'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa',
+      createdAt: '2026-09-04T10:00:00Z',
+      hcEndpointId: 'bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb',
+      id: 'cccccccccccccccccccccccccccccccc',
+      keyGeneration: 1,
+      requestedCapabilities: ['prompt'],
+      runtimeProfileId: 'local-acp',
+      status: 'ACTIVE',
+      workspaceId: 'h5-debug',
+    };
+    const frame = {
+      channelId: 'dddddddddddddddddddddddddddddddd',
+      ciphertextBytes: 8,
+      direction: 1,
+      keyGeneration: 1,
+      messageId: 'eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee',
+      receivedAt: '2026-09-04T10:00:01Z',
+      receiverEndpointId: session.abaEndpointId,
+      senderEndpointId: session.hcEndpointId,
+      sequence: 1,
+      status: 'STORED',
+    };
+
+    expect(parseHarnessDelivery({ acks: [], frames: [frame], session }).frames[0]?.direction).toBe(
+      'HC_TO_ABA',
+    );
+    expect(() =>
+      parseHarnessDelivery({ acks: [], frames: [{ ...frame, direction: 3 }], session }),
+    ).toThrow('direction is invalid');
+  });
 });

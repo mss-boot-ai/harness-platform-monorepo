@@ -52,7 +52,7 @@ export interface HarnessFrame {
   acknowledgedAt?: string;
   channelId: string;
   ciphertextBytes: number;
-  direction: string;
+  direction: HarnessDirection;
   keyGeneration: number;
   messageId: string;
   receivedAt: string;
@@ -63,7 +63,7 @@ export interface HarnessFrame {
 }
 
 export interface HarnessAck {
-  direction: string;
+  direction: HarnessDirection;
   highestContiguousSequence: number;
   keyGeneration: number;
   receiverEndpointId: string;
@@ -76,6 +76,8 @@ export interface HarnessDelivery {
   frames: HarnessFrame[];
   session: HarnessSession;
 }
+
+export type HarnessDirection = 'ABA_TO_HC' | 'HC_TO_ABA';
 
 function record(value: unknown, label: string): JsonRecord {
   if (typeof value !== 'object' || value === null || Array.isArray(value)) {
@@ -99,6 +101,17 @@ function countValue(value: unknown, label: string): number {
     throw new Error(`${label} is invalid`);
   }
   return value;
+}
+
+function directionValue(value: unknown): HarnessDirection {
+  switch (value) {
+    case 1:
+      return 'HC_TO_ABA';
+    case 2:
+      return 'ABA_TO_HC';
+    default:
+      throw new Error('direction is invalid');
+  }
 }
 
 function listValue<T>(value: unknown, label: string, parse: (item: unknown) => T): T[] {
@@ -177,7 +190,7 @@ function parseHarnessFrame(value: unknown): HarnessFrame {
     acknowledgedAt: optionalString(source.acknowledgedAt, 'acknowledgedAt'),
     channelId: stringValue(source.channelId, 'channelId'),
     ciphertextBytes: countValue(source.ciphertextBytes, 'ciphertextBytes'),
-    direction: stringValue(source.direction, 'direction'),
+    direction: directionValue(source.direction),
     keyGeneration: countValue(source.keyGeneration, 'keyGeneration'),
     messageId: stringValue(source.messageId, 'messageId'),
     receivedAt: stringValue(source.receivedAt, 'receivedAt'),
@@ -191,7 +204,7 @@ function parseHarnessFrame(value: unknown): HarnessFrame {
 function parseHarnessAck(value: unknown): HarnessAck {
   const source = record(value, 'Harness ACK');
   return {
-    direction: stringValue(source.direction, 'direction'),
+    direction: directionValue(source.direction),
     highestContiguousSequence: countValue(
       source.highestContiguousSequence,
       'highestContiguousSequence',
