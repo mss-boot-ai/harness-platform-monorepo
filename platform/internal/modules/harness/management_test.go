@@ -19,6 +19,7 @@ import (
 	"github.com/mss-boot-ai/harness-platform-monorepo/platform/internal/harness/domain"
 	"github.com/mss-boot-ai/harness-platform-monorepo/platform/internal/harness/store"
 	"github.com/mss-boot-io/mss-boot-admin/admin/business"
+	"github.com/mss-boot-io/mss-boot-admin/admin/models"
 	"github.com/mss-boot-io/mss-boot-admin/mss-boot/pkg/security"
 	"gorm.io/gorm"
 	"gorm.io/gorm/logger"
@@ -43,6 +44,9 @@ func managementRouter(t *testing.T, principal security.Verifier) (*gin.Engine, *
 	t.Cleanup(func() { _ = sqlDB.Close() })
 	if err := store.CreateAllSchema(db); err != nil {
 		t.Fatalf("CreateAllSchema: %v", err)
+	}
+	if err := db.AutoMigrate(new(models.CasbinRule)); err != nil {
+		t.Fatalf("create Admin authorization test schema: %v", err)
 	}
 	persistence, err := store.New(db)
 	if err != nil {
