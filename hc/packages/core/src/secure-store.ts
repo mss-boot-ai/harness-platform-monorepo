@@ -4,10 +4,27 @@ import {
   type EndpointIdentity,
 } from './identity';
 
-const DATABASE_VERSION = 2;
+const DATABASE_VERSION = 3;
 const IDENTITY_STORE = 'endpoint-identities';
 const TRUST_PIN_STORE = 'trust-pins';
+const SESSION_INBOX_STORE = 'session-inbox';
 const GATEWAY_ROOT_PIN = 'gateway-root';
+const MAX_INBOX_FRAMES = 4096;
+
+export interface InboxFrame {
+  readonly contentHash: Uint8Array;
+  readonly direction: 1 | 2;
+  readonly messageId: Uint8Array;
+  readonly plaintext: Uint8Array;
+  readonly receivedAt: string;
+  readonly sequence: bigint;
+  readonly sessionId: string;
+}
+
+interface StoredInboxFrame extends Omit<InboxFrame, 'sequence'> {
+  readonly id: string;
+  readonly sequence: string;
+}
 
 export interface SecureStoreProbe {
   readonly assurance: 'web-software' | 'unsupported';
@@ -57,6 +74,10 @@ export class IndexedDbSecureStore {
           }
           if (!request.result.objectStoreNames.contains(TRUST_PIN_STORE)) {
             request.result.createObjectStore(TRUST_PIN_STORE, { keyPath: 'id' });
+          }
+          if (!request.result.objectStoreNames.contains(SESSION_INBOX_STORE)) {
+            const inbox = request.result.createObjectStore(SESSION_INBOX_STORE, { keyPath: 'id' });
+            inbox.createIndex('sessionId', 'sessionId', { unique: false });
           }
         },
         { once: true },
@@ -171,6 +192,67 @@ export class IndexedDbSecureStore {
     }
   }
 
+  public async putInboxFrame(frame: InboxFrame): Promise<'duplicate' | 'stored'> {
+    validateInboxFrame(frame);
+    const database = await this.open();
+    const transaction = database.transaction(SESSION_INBOX_STORE, 'readwrite');
+    try {
+      const objectStore = transaction.objectStore(SESSION_INBOX_STORE);
+      const id = inboxFrameId(frame.sessionId, frame.direction, frame.sequence);
+      const existing = await requestResult(
+        objectStore.get(id) as IDBRequest<StoredInboxFrame | undefined>,
+      );
+      if (existing !== undefined) {
+        if (!equalBytes(existing.messageId, frame.messageId) || !equalBytes(existing.contentHash, frame.contentHash)) {
+          throw new Error('HC inbox sequence conflict');
+        }
+        await transactionComplete(transaction);
+        return 'duplicate';
+      }
+      const count = await requestResult(objectStore.count());
+      if (count >= MAX_INBOX_FRAMES) {
+        throw new Error('HC inbox capacity reached');
+      }
+      objectStore.put({
+        ...frame,
+        contentHash: frame.contentHash.slice(),
+        id,
+        messageId: frame.messageId.slice(),
+        plaintext: frame.plaintext.slice(),
+        sequence: frame.sequence.toString(),
+      } satisfies StoredInboxFrame);
+      await transactionComplete(transaction);
+      return 'stored';
+    } catch (error) {
+      try {
+        transaction.abort();
+      } catch {
+        // A completed transaction needs no rollback.
+      }
+      throw error;
+    } finally {
+      database.close();
+    }
+  }
+
+  public async deleteSessionInbox(sessionId: string): Promise<void> {
+    if (!/^[0-9a-f]{32}$/u.test(sessionId)) {
+      throw new Error('HC inbox session ID is invalid');
+    }
+    const database = await this.open();
+    const transaction = database.transaction(SESSION_INBOX_STORE, 'readwrite');
+    try {
+      const objectStore = transaction.objectStore(SESSION_INBOX_STORE);
+      const keys = await requestResult(objectStore.index('sessionId').getAllKeys(sessionId));
+      for (const key of keys) {
+        objectStore.delete(key);
+      }
+      await transactionComplete(transaction);
+    } finally {
+      database.close();
+    }
+  }
+
   private async put(identity: EndpointIdentity): Promise<void> {
     const database = await this.open();
     try {
@@ -181,4 +263,29 @@ export class IndexedDbSecureStore {
       database.close();
     }
   }
+}
+
+function validateInboxFrame(frame: InboxFrame): void {
+  if (
+    !/^[0-9a-f]{32}$/u.test(frame.sessionId) ||
+    ![1, 2].includes(frame.direction) ||
+    frame.sequence <= 0n ||
+    frame.messageId.length !== 16 ||
+    frame.messageId.every((byte) => byte === 0) ||
+    frame.contentHash.length !== 32 ||
+    frame.contentHash.every((byte) => byte === 0) ||
+    frame.plaintext.length === 0 ||
+    frame.plaintext.length > 1_048_560 ||
+    !Number.isFinite(Date.parse(frame.receivedAt))
+  ) {
+    throw new Error('HC inbox frame is invalid');
+  }
+}
+
+function inboxFrameId(sessionId: string, direction: 1 | 2, sequence: bigint): string {
+  return `${sessionId}:${direction}:${sequence.toString().padStart(20, '0')}`;
+}
+
+function equalBytes(left: Uint8Array, right: Uint8Array): boolean {
+  return left.length === right.length && left.every((value, index) => value === right[index]);
 }

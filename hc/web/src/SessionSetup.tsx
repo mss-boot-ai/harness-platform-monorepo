@@ -1,6 +1,9 @@
 import {
   createSessionKeyPackageAckPacket,
   createHCToABAFramePacket,
+  createHCAckFramePacket,
+  Direction,
+  IndexedDbSecureStore,
   openABAToHCFramePacket,
   openSessionKeyPackagePacket,
   type EndpointIdentity,
@@ -28,11 +31,13 @@ export function SessionSetup({
   identity,
   onRegistration,
   registration,
+  secureStore,
 }: {
   readonly connection: ReadyGatewayConnection;
   readonly identity: EndpointIdentity;
   readonly onRegistration: (registration: RegistrationSession) => void;
   readonly registration: RegistrationSession;
+  readonly secureStore: IndexedDbSecureStore | null;
 }) {
   const [endpoints, setEndpoints] = useState<readonly ABAEndpointSummary[]>([]);
   const [selectedABA, setSelectedABA] = useState('');
@@ -109,11 +114,40 @@ export function SessionSetup({
         encoded,
       );
       if (frame !== null) {
-        if (frame.sequence !== inboundFrameSequence.current + 1n) {
+        if (frame.sequence > inboundFrameSequence.current + 1n) {
           throw new Error('ABA frame sequence is not contiguous');
         }
-        inboundFrameSequence.current = frame.sequence;
         const value = JSON.parse(new TextDecoder().decode(frame.plaintext)) as Record<string, unknown>;
+        if (secureStore === null) {
+          throw new Error('HC inbox is unavailable');
+        }
+        const stored = await secureStore.putInboxFrame({
+          contentHash: frame.contentHash,
+          direction: Direction.ABA_TO_HC,
+          messageId: frame.messageId,
+          plaintext: frame.plaintext,
+          receivedAt: new Date().toISOString(),
+          sequence: frame.sequence,
+          sessionId: session.sessionId,
+        });
+        if (frame.sequence === inboundFrameSequence.current + 1n) {
+          inboundFrameSequence.current = frame.sequence;
+        } else if (stored !== 'duplicate') {
+          throw new Error('HC inbox cursor is inconsistent');
+        }
+        const acknowledgment = await createHCAckFramePacket(
+          identity,
+          { abaEndpointId: aba.id, hcEndpointId: registration.endpointId, sessionId: session.sessionId },
+          Direction.ABA_TO_HC,
+          inboundFrameSequence.current,
+        );
+        if (connection.socket.readyState !== WebSocket.OPEN) {
+          throw new Error('Gateway connection closed before frame acknowledgment');
+        }
+        connection.socket.send(new Uint8Array(acknowledgment).buffer);
+        if (stored === 'duplicate') {
+          return;
+        }
         const update = value.params as { update?: { content?: { text?: unknown } } } | undefined;
         const text = update?.update?.content?.text;
         if (typeof text === 'string') {
@@ -143,7 +177,7 @@ export function SessionSetup({
       }
     }
     return () => connection.socket.removeEventListener('message', message);
-  }, [connection.socket, endpoints, identity, registration.endpointId, session]);
+  }, [connection.socket, endpoints, identity, registration.endpointId, secureStore, session]);
 
   useEffect(() => () => zeroOpenedPackage(openedPackage.current), []);
 
@@ -267,6 +301,7 @@ export function SessionSetup({
     setError(null);
     try {
       const closed = await closeEndpointSession(session.sessionId);
+      await secureStore?.deleteSessionInbox(session.sessionId);
       zeroOpenedPackage(openedPackage.current);
       openedPackage.current = null;
       setKeyReady(false);

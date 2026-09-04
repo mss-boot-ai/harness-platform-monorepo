@@ -234,6 +234,7 @@ export function App() {
                   identity={identity}
                   onRegistration={setRegistration}
                   registration={registration}
+                  secureStore={store}
                 />
               ) : null}
             </>

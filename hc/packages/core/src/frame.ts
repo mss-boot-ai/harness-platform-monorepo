@@ -1,6 +1,7 @@
 import { create, fromBinary, toBinary } from '@bufbuild/protobuf';
 import { importP256VerifyingKey, signP1363LowS, verifyP1363LowS } from './crypto';
 import {
+  AckFrameSchema,
   Direction,
   EncryptedFrameSchema,
   FrameType,
@@ -81,8 +82,118 @@ export async function createHCToABAFramePacket(
 }
 
 export interface OpenedFrame {
+  readonly contentHash: Uint8Array;
+  readonly messageId: Uint8Array;
   readonly plaintext: Uint8Array;
   readonly sequence: bigint;
+}
+
+export async function createHCAckFramePacket(
+  identity: EndpointIdentity,
+  binding: FrameBinding,
+  acknowledgedDirection: Direction,
+  highestContiguousSequence: bigint,
+  keyGeneration = 1n,
+  now = new Date(),
+): Promise<Uint8Array> {
+  if (
+    acknowledgedDirection !== Direction.ABA_TO_HC ||
+    highestContiguousSequence <= 0n ||
+    keyGeneration <= 0n
+  ) {
+    throw new Error('HC ACK input is invalid');
+  }
+  const sessionId = decodeHexId(binding.sessionId);
+  const abaEndpointId = decodeHexId(binding.abaEndpointId);
+  const hcEndpointId = decodeHexId(binding.hcEndpointId);
+  const ackId = crypto.getRandomValues(new Uint8Array(16));
+  const channelId = await sessionChannelId(sessionId, abaEndpointId, hcEndpointId);
+  const createdAtMs = BigInt(now.getTime());
+  const transcript = buildAckTranscript({
+    ackId,
+    acknowledgedDirection,
+    channelId,
+    createdAtMs,
+    endpointId: hcEndpointId,
+    highestContiguousSequence,
+    keyGeneration,
+    sessionId,
+  });
+  return toBinary(WirePacketSchema, create(WirePacketSchema, {
+    body: {
+      case: 'ack',
+      value: create(AckFrameSchema, {
+        ackId,
+        acknowledgedDirection,
+        channelId,
+        createdAtMs,
+        endpointId: hcEndpointId,
+        highestContiguousSequence,
+        keyGeneration,
+        sessionId,
+        signature: await signP1363LowS(identity.signing.privateKey, transcript),
+      }),
+    },
+    packetId: crypto.getRandomValues(new Uint8Array(16)),
+    wireMajor: 1,
+    wireMinor: 0,
+  }));
+}
+
+interface AckTranscriptInput {
+  readonly ackId: Uint8Array;
+  readonly acknowledgedDirection: Direction;
+  readonly channelId: Uint8Array;
+  readonly createdAtMs: bigint;
+  readonly endpointId: Uint8Array;
+  readonly highestContiguousSequence: bigint;
+  readonly keyGeneration: bigint;
+  readonly receivedRanges?: readonly { readonly end: bigint; readonly start: bigint }[];
+  readonly sessionId: Uint8Array;
+}
+
+export function buildAckTranscript(input: AckTranscriptInput): Uint8Array {
+  for (const value of [input.ackId, input.channelId, input.sessionId, input.endpointId]) {
+    if (value.length !== 16 || value.every((byte) => byte === 0)) {
+      throw new Error('ACK identifier is invalid');
+    }
+  }
+  const ranges = input.receivedRanges ?? [];
+  if (
+    ![Direction.HC_TO_ABA, Direction.ABA_TO_HC].includes(input.acknowledgedDirection) ||
+    input.highestContiguousSequence < 0n ||
+    input.keyGeneration <= 0n ||
+    input.createdAtMs < 0n ||
+    ranges.length > 32 ||
+    (input.highestContiguousSequence === 0n && ranges.length === 0)
+  ) {
+    throw new Error('ACK field is invalid');
+  }
+  let previous = input.highestContiguousSequence;
+  for (const range of ranges) {
+    if (range.start <= previous || range.start > range.end) {
+      throw new Error('ACK range is invalid');
+    }
+    previous = range.end;
+  }
+  const output = new Uint8Array(114 + ranges.length * 16);
+  output.set(textEncoder.encode('mss-awp-ack-v1'), 0);
+  output.set(input.ackId, 14);
+  output.set(input.channelId, 30);
+  output.set(input.sessionId, 46);
+  output.set(input.endpointId, 62);
+  output[78] = input.acknowledgedDirection;
+  const view = new DataView(output.buffer);
+  view.setBigUint64(86, input.highestContiguousSequence, false);
+  view.setBigUint64(94, input.keyGeneration, false);
+  view.setBigInt64(102, input.createdAtMs, false);
+  view.setUint32(110, ranges.length, false);
+  ranges.forEach((range, index) => {
+    const offset = 114 + index * 16;
+    view.setBigUint64(offset, range.start, false);
+    view.setBigUint64(offset + 8, range.end, false);
+  });
+  return output;
 }
 
 export async function openABAToHCFramePacket(
@@ -146,7 +257,16 @@ export async function openABAToHCFramePacket(
   );
   const text = new TextDecoder('utf-8', { fatal: true }).decode(plaintext);
   JSON.parse(text) as unknown;
-  return { plaintext, sequence: frame.sequence };
+  const contentHash = new Uint8Array(await crypto.subtle.digest(
+    'SHA-256',
+    asArrayBuffer(concatenate([aad, frame.ciphertext, frame.signature])),
+  ));
+  return {
+    contentHash,
+    messageId: frame.messageId.slice(),
+    plaintext,
+    sequence: frame.sequence,
+  };
 }
 
 interface FrameAADInput {

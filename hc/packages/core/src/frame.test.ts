@@ -1,7 +1,9 @@
 import { create, fromBinary, toBinary } from '@bufbuild/protobuf';
-import { signP1363LowS } from './crypto';
+import { signP1363LowS, verifyP1363LowS } from './crypto';
 import {
+  buildAckTranscript,
   buildFrameAAD,
+  createHCAckFramePacket,
   createHCToABAFramePacket,
   openABAToHCFramePacket,
   sessionChannelId,
@@ -45,6 +47,39 @@ describe('Suite 0001 encrypted frames', () => {
     const opened = await openABAToHCFramePacket(abaSigningJwk, keys, binding, abaPacket);
     expect(opened?.sequence).toBe(1n);
     expect(opened?.plaintext).toEqual(response);
+    expect(opened?.messageId).toEqual(new Uint8Array(16).fill(9));
+    expect(opened?.contentHash).toHaveLength(32);
+
+    const ackPacket = await createHCAckFramePacket(
+      identity,
+      binding,
+      Direction.ABA_TO_HC,
+      1n,
+      1n,
+      new Date(1_800_000_000_000),
+    );
+    const decodedACK = fromBinary(WirePacketSchema, ackPacket);
+    expect(decodedACK.body.case).toBe('ack');
+    if (decodedACK.body.case !== 'ack') {
+      throw new Error('HC packet is not an ACK');
+    }
+    const ack = decodedACK.body.value;
+    expect(ack.endpointId).toEqual(hex(binding.hcEndpointId));
+    expect(ack.acknowledgedDirection).toBe(Direction.ABA_TO_HC);
+    expect(ack.highestContiguousSequence).toBe(1n);
+    const transcript = buildAckTranscript({
+      ackId: ack.ackId,
+      acknowledgedDirection: ack.acknowledgedDirection,
+      channelId: ack.channelId,
+      createdAtMs: ack.createdAtMs,
+      endpointId: ack.endpointId,
+      highestContiguousSequence: ack.highestContiguousSequence,
+      keyGeneration: ack.keyGeneration,
+      receivedRanges: ack.receivedRanges,
+      sessionId: ack.sessionId,
+    });
+    expect(transcript).toHaveLength(114);
+    await expect(verifyP1363LowS(identity.signing.publicKey, transcript, ack.signature)).resolves.toBe(true);
   });
 });
 
