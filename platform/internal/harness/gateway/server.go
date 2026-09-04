@@ -134,13 +134,13 @@ func (server *Server) issueTicket(writer http.ResponseWriter, request *http.Requ
 		server.writeDPoPError(writer, request.Context(), endpoint.ID, now, err)
 		return
 	}
-	nextNonce, nextHash, err := server.newOpaqueValue()
+	nextNonce, _, err := server.newOpaqueValue()
 	if err != nil {
 		writeGatewayError(writer, http.StatusServiceUnavailable, "GATEWAY_RANDOM_UNAVAILABLE", "Gateway is temporarily unavailable")
 		return
 	}
 	if err := server.persistence.RotateEndpointNonce(
-		request.Context(), endpoint.ID, nonceHash, nextHash, now, now.Add(server.config.NonceTTL),
+		request.Context(), endpoint.ID, nonceHash, sha256.Sum256([]byte(nextNonce)), now, now.Add(server.config.NonceTTL),
 	); err != nil {
 		writeGatewayError(writer, http.StatusConflict, "DPOP_NONCE_CHANGED", "DPoP nonce changed concurrently")
 		return
@@ -178,12 +178,12 @@ func (server *Server) writeNonceChallenge(
 	endpointID domain.ID,
 	now time.Time,
 ) {
-	nonce, hash, err := server.newOpaqueValue()
+	nonce, _, err := server.newOpaqueValue()
 	if err != nil {
 		writeGatewayError(writer, http.StatusServiceUnavailable, "GATEWAY_RANDOM_UNAVAILABLE", "Gateway is temporarily unavailable")
 		return
 	}
-	if err := server.persistence.PutEndpointNonce(ctx, endpointID, hash, now, now.Add(server.config.NonceTTL)); err != nil {
+	if err := server.persistence.PutEndpointNonce(ctx, endpointID, sha256.Sum256([]byte(nonce)), now, now.Add(server.config.NonceTTL)); err != nil {
 		writeDomainError(writer, err)
 		return
 	}
@@ -207,8 +207,8 @@ func (server *Server) writeDPoPError(
 		status = http.StatusConflict
 	}
 	if status == http.StatusUnauthorized {
-		nonce, hash, randomErr := server.newOpaqueValue()
-		if randomErr == nil && server.persistence.PutEndpointNonce(ctx, endpointID, hash, now, now.Add(server.config.NonceTTL)) == nil {
+		nonce, _, randomErr := server.newOpaqueValue()
+		if randomErr == nil && server.persistence.PutEndpointNonce(ctx, endpointID, sha256.Sum256([]byte(nonce)), now, now.Add(server.config.NonceTTL)) == nil {
 			writer.Header().Set("DPoP-Nonce", nonce)
 		}
 	}
