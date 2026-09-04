@@ -6,6 +6,18 @@
 
 ---
 
+## 2026-09-05 02:35 +08:00 — ABA Enrollment、认证 Connector 与 HC/ABA 双端 READY
+
+实现并验证 loopback-only ABA 开发 KeyStore、Device Enrollment、原生 Refresh、原生 Ticket Origin、Rust Protobuf Connector、Trust Manifest 验签/Root Pin 与签名 WSS Challenge/READY。主要提交从 `1c3c9b42d3dae97903ec61287fa17895ea350655` 到 `fa9fe7abb26ded4aee12b8690fe3cdde2407eb6d`；最终 push/PR CI `33906015241`/`33906021011` 的五个 Job 均成功。
+
+真实 Enrollment 第一次等待 300 秒超时，第二次在内置浏览器审批后成功创建 ABA Endpoint `3f32d5624086cc6adaf7c5c4499820f2`。随后同一 Gateway 进程下，HC H5 通过 `localhost:8001` 同源代理保持 READY（Generation 6），ABA 直连 `127.0.0.1:8082` 到达 READY（Generation 2）；两端验证同一持久 Root。KeyStore 与 Signer 目录/文件仍为 0700/0600，Token、Ticket和私钥未进入输出或文档。
+
+联调发现单一 External Origin 不能同时满足 H5 代理与 ABA 直连 DPoP HTU，`fa9fe7a...` 分离 Browser/Native External Origin 后复测通过。Rust 共享 Wire fixture 的无 padding Base64 解码失败由 `205f808...` 独立修复。部分中间 CI 因后续提交触发 `cancel-in-progress` 被取消，不计为成功；最终 SHA 完整 CI 已补齐。
+
+详细交付、命令、失败链和边界见 `docs/roadmap/verification/2026-09-05-aba-enrollment-connector.md`。下一检查点进入 M3：先补 Session Create/Control 与 ABA 常驻事件循环，再做 Suite 0001 HPKE/KDF/AEAD、Test Agent、Opaque Relay/ACK/Journal。
+
+---
+
 ## 2026-09-05 01:15 +08:00 — DPoP Ticket、Refresh 与签名 WSS READY
 
 实现并验证数据库共享 DPoP Replay/Nonce、Access/Refresh Family rotation、独立 Gateway、一次性 Ticket、Go/TS 生成 Proto Binding、Root-signed Trust Manifest、双向签名 WSS Challenge、持久 Connection Generation、权限受限持久 Signer 与 H5 Root Pin。关键提交从 `c5ee16c3426990729724dd8e2460e0125a882959` 到 `e5e405e0659548f16f725082d23543adc8c95755`；当前 push/PR CI `33901119145`/`33901125467` 均成功。

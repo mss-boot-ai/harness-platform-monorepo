@@ -74,4 +74,4 @@ mss upgrade admin v1.3.7 --format json
 - 本地 Signer 已权限受限持久化；生产 KMS/HSM Adapter 和 Root/Online 轮换仍未实现；
 - Connection Generation 已持久化；Fencing 的活动连接目录与跨实例 Kick 尚未实现；
 - READY 后业务 Packet 当前明确关闭连接并返回 relay 未启用，不会静默 ACK；
-- ABA Enrollment/Connector、Session API、HPKE/AEAD、ACP Relay/Journal 和完整 E2E 尚未实现。
+- 本记录对应的 `e5e405e...` SHA 尚无 ABA Enrollment/Connector；后续已在 `fa9fe7a...` 实现并验证，见 [`2026-09-05-aba-enrollment-connector.md`](2026-09-05-aba-enrollment-connector.md)。Session API、HPKE/AEAD、ACP Relay/Journal 和完整 E2E 仍未实现。
