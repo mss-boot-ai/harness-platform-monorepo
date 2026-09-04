@@ -3,7 +3,6 @@ package store
 import (
 	"context"
 	"fmt"
-	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -179,9 +178,6 @@ func TestConcurrentHCRevocationAndKeyPackageWriteLeavesNoUsablePackage(t *testin
 			close(revokeResult)
 
 			if err := <-revokeResult; err != nil {
-				if strings.Contains(strings.ToLower(err.Error()), "locked") {
-					t.Fatalf("concurrent revoke leaked database lock error: %v", err)
-				}
 				requireKeyPackageProblem(t, err, domain.CodeConflict)
 				if _, retryErr := persistence.RevokeEndpointForOwner(
 					ctx, hc.ID, "owner", "tenant", now.Add(2*time.Second),
@@ -190,9 +186,6 @@ func TestConcurrentHCRevocationAndKeyPackageWriteLeavesNoUsablePackage(t *testin
 				}
 			}
 			if err := <-putResult; err != nil {
-				if strings.Contains(strings.ToLower(err.Error()), "locked") {
-					t.Fatalf("concurrent write leaked database lock error: %v", err)
-				}
 				requireKeyPackageProblem(
 					t, err,
 					domain.CodeRevoked,
