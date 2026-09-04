@@ -39,7 +39,7 @@ func run() error {
 		return err
 	}
 	trust, err := gateway.LoadOrCreateTrustState(
-		environment("HARNESS_GATEWAY_TRUST_FILE", ".mss/run/gateway-trust.json"),
+		environment("HARNESS_GATEWAY_TRUST_FILE", ".mss/run/private/gateway-trust.json"),
 		rand.Reader,
 		time.Now().UTC(),
 	)
