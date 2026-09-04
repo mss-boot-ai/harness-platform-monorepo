@@ -21,6 +21,7 @@ import (
 const (
 	protocolName     = "mss.awp.v1"
 	ticketPurpose    = "awp-connect"
+	nativeABAOrigin  = "app://aba"
 	defaultNonceTTL  = 2 * time.Minute
 	defaultTicketTTL = 30 * time.Second
 	defaultReplayMax = 100_000
@@ -137,22 +138,31 @@ func (server *Server) trustManifest(writer http.ResponseWriter, _ *http.Request)
 
 func (server *Server) refreshToken(writer http.ResponseWriter, request *http.Request) {
 	now := server.now().UTC()
-	refreshCookie, err := request.Cookie("harness_hc_refresh")
-	if err != nil {
+	refreshTokenValue, refreshHash, transport, ok := parseRefreshCredential(request)
+	if !ok {
 		writeGatewayError(writer, http.StatusUnauthorized, "REFRESH_CREDENTIAL_REQUIRED", "refresh credential is required")
 		return
 	}
-	refreshRaw, err := base64.RawURLEncoding.Strict().DecodeString(refreshCookie.Value)
-	if err != nil || len(refreshRaw) != 32 {
-		clearRefreshCookie(writer, server.config.ExternalOrigin)
+	if refreshTokenValue == "" {
+		if transport == refreshTransportCookie {
+			clearRefreshCookie(writer, server.config.ExternalOrigin)
+		}
 		writeGatewayError(writer, http.StatusUnauthorized, "REFRESH_CREDENTIAL_INVALID", "refresh credential is invalid")
 		return
 	}
-	refreshHash := sha256.Sum256(refreshRaw)
 	endpoint, currentRefresh, err := server.persistence.InspectRefreshCredential(request.Context(), refreshHash, now)
 	if err != nil {
-		clearRefreshCookie(writer, server.config.ExternalOrigin)
+		if transport == refreshTransportCookie {
+			clearRefreshCookie(writer, server.config.ExternalOrigin)
+		}
 		writeDomainError(writer, err)
+		return
+	}
+	if !validRefreshTransport(endpoint.Type, transport, request.Header.Get("Origin")) {
+		if transport == refreshTransportCookie {
+			clearRefreshCookie(writer, server.config.ExternalOrigin)
+		}
+		writeGatewayError(writer, http.StatusForbidden, "REFRESH_TRANSPORT_FORBIDDEN", "refresh credential transport is not allowed for this endpoint")
 		return
 	}
 	nonceHash, err := server.persistence.GetEndpointNonceHash(request.Context(), endpoint.ID, now)
@@ -239,18 +249,25 @@ func (server *Server) refreshToken(writer http.ResponseWriter, request *http.Req
 	if err := server.persistence.RotateRefreshCredential(
 		request.Context(), refreshHash, endpoint.SigningJKT, nextAccess, nextRefresh, audit, now,
 	); err != nil {
-		if domain.HasCode(err, domain.CodeRevoked) {
+		if transport == refreshTransportCookie && domain.HasCode(err, domain.CodeRevoked) {
 			clearRefreshCookie(writer, server.config.ExternalOrigin)
 		}
 		writeDomainError(writer, err)
 		return
 	}
-	setRefreshCookie(writer, refreshToken, refreshExpiresAt, server.config.ExternalOrigin)
+	if transport == refreshTransportCookie {
+		setRefreshCookie(writer, refreshToken, refreshExpiresAt, server.config.ExternalOrigin)
+	}
 	writer.Header().Set("DPoP-Nonce", nextNonce)
-	writeJSON(writer, http.StatusOK, map[string]any{
+	response := map[string]any{
 		"endpointId": endpoint.ID.String(), "credentialId": accessID.String(), "tokenType": "DPoP", "accessToken": accessToken,
 		"accessExpiresAt": accessExpiresAt, "signingJkt": endpoint.SigningJKT, "kemJkt": endpoint.KEMJKT,
-	})
+	}
+	if transport == refreshTransportHeader {
+		response["refreshToken"] = refreshToken
+		response["refreshExpiresAt"] = refreshExpiresAt
+	}
+	writeJSON(writer, http.StatusOK, response)
 }
 
 func (server *Server) health(writer http.ResponseWriter, _ *http.Request) {
@@ -271,6 +288,11 @@ func (server *Server) issueTicket(writer http.ResponseWriter, request *http.Requ
 	endpoint, credential, err := server.persistence.AuthenticateAccessToken(request.Context(), tokenHash, now)
 	if err != nil {
 		writeDomainError(writer, err)
+		return
+	}
+	ticketOrigin, ok := server.ticketOrigin(endpoint.Type, request.Header.Get("Origin"))
+	if !ok {
+		writeGatewayError(writer, http.StatusForbidden, "TICKET_ORIGIN_FORBIDDEN", "ticket origin is not allowed for this endpoint")
 		return
 	}
 	nonceHash, err := server.persistence.GetEndpointNonceHash(request.Context(), endpoint.ID, now)
@@ -324,10 +346,10 @@ func (server *Server) issueTicket(writer http.ResponseWriter, request *http.Requ
 	expiresAt := now.Add(server.config.TicketTTL)
 	ticket := domain.WSTicket{
 		ID: ticketID, TokenHash: ticketHash, EndpointID: endpoint.ID, CredentialID: credential.ID,
-		Purpose: ticketPurpose, Origin: server.config.AllowedOrigin, Protocol: protocolName,
+		Purpose: ticketPurpose, Origin: ticketOrigin, Protocol: protocolName,
 		Status: domain.TicketStatusIssued, ExpiresAt: expiresAt, CreatedAt: now,
 	}
-	if err := server.persistence.CreateTicket(request.Context(), ticket, defaultTicketTTL); err != nil {
+	if err := server.persistence.CreateTicket(request.Context(), ticket, server.config.TicketTTL); err != nil {
 		writeDomainError(writer, err)
 		return
 	}
@@ -437,6 +459,62 @@ func parseAuthorization(request *http.Request) (string, [32]byte, bool) {
 		return "", [32]byte{}, false
 	}
 	return token, sha256.Sum256(decoded), true
+}
+
+type refreshTransport uint8
+
+const (
+	refreshTransportCookie refreshTransport = iota + 1
+	refreshTransportHeader
+)
+
+func parseRefreshCredential(request *http.Request) (string, [32]byte, refreshTransport, bool) {
+	cookie, cookieErr := request.Cookie("harness_hc_refresh")
+	authorization := request.Header.Values("Authorization")
+	hasCookie := cookieErr == nil
+	hasHeader := len(authorization) != 0
+	if hasCookie == hasHeader {
+		return "", [32]byte{}, 0, false
+	}
+	var token string
+	transport := refreshTransportCookie
+	if hasHeader {
+		if len(authorization) != 1 || !strings.HasPrefix(authorization[0], "Refresh ") {
+			return "", [32]byte{}, 0, false
+		}
+		token = strings.TrimSpace(strings.TrimPrefix(authorization[0], "Refresh "))
+		transport = refreshTransportHeader
+	} else {
+		token = cookie.Value
+	}
+	decoded, err := base64.RawURLEncoding.Strict().DecodeString(token)
+	if err != nil || len(decoded) != 32 {
+		return "", [32]byte{}, transport, true
+	}
+	return token, sha256.Sum256(decoded), transport, true
+}
+
+func validRefreshTransport(endpointType domain.EndpointType, transport refreshTransport, origin string) bool {
+	switch endpointType {
+	case domain.EndpointTypeABA:
+		return transport == refreshTransportHeader && strings.TrimSpace(origin) == ""
+	case domain.EndpointTypeHCWeb, domain.EndpointTypeHCReference:
+		return transport == refreshTransportCookie
+	default:
+		return false
+	}
+}
+
+func (server *Server) ticketOrigin(endpointType domain.EndpointType, origin string) (string, bool) {
+	origin = strings.TrimSpace(origin)
+	switch endpointType {
+	case domain.EndpointTypeABA:
+		return nativeABAOrigin, origin == ""
+	case domain.EndpointTypeHCWeb, domain.EndpointTypeHCReference:
+		return server.config.AllowedOrigin, origin == server.config.AllowedOrigin
+	default:
+		return "", false
+	}
 }
 
 func websocketURL(origin string) string {

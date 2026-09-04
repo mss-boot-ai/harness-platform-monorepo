@@ -39,7 +39,7 @@ func (server *Server) websocket(writer http.ResponseWriter, request *http.Reques
 	ticketHash := sha256.Sum256(ticketRaw)
 	now := server.now().UTC()
 	ticket, err := server.persistence.InspectTicket(request.Context(), ticketHash, now)
-	if err != nil || ticket.Origin != server.config.AllowedOrigin || ticket.Protocol != protocolName || ticket.Purpose != ticketPurpose {
+	if err != nil || !server.validTicketRequest(ticket, request) || ticket.Protocol != protocolName || ticket.Purpose != ticketPurpose {
 		writeGatewayError(writer, http.StatusUnauthorized, "TICKET_INVALID", "WebSocket ticket is invalid")
 		return
 	}
@@ -50,7 +50,7 @@ func (server *Server) websocket(writer http.ResponseWriter, request *http.Reques
 	}
 	if _, err := server.persistence.ConsumeTicket(
 		request.Context(), ticketHash, endpoint.ID, credential.ID,
-		ticketPurpose, server.config.AllowedOrigin, protocolName, now,
+		ticketPurpose, ticket.Origin, protocolName, now,
 	); err != nil {
 		writeDomainError(writer, err)
 		return
@@ -61,7 +61,7 @@ func (server *Server) websocket(writer http.ResponseWriter, request *http.Reques
 		WriteBufferSize:  4096,
 		Subprotocols:     []string{protocolName},
 		CheckOrigin: func(upgradeRequest *http.Request) bool {
-			return upgradeRequest.Header.Get("Origin") == server.config.AllowedOrigin
+			return server.validTicketRequest(ticket, upgradeRequest)
 		},
 	}
 	connection, err := upgrader.Upgrade(writer, request, nil)
@@ -105,6 +105,18 @@ func (server *Server) websocket(writer http.ResponseWriter, request *http.Reques
 			time.Now().Add(time.Second),
 		)
 		return
+	}
+}
+
+func (server *Server) validTicketRequest(ticket domain.WSTicket, request *http.Request) bool {
+	origin := strings.TrimSpace(request.Header.Get("Origin"))
+	switch ticket.Origin {
+	case nativeABAOrigin:
+		return origin == ""
+	case server.config.AllowedOrigin:
+		return origin == server.config.AllowedOrigin
+	default:
+		return false
 	}
 }
 

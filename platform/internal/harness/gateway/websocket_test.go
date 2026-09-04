@@ -140,3 +140,60 @@ func TestWebSocketConsumesTicketAndCompletesSignedChallenge(t *testing.T) {
 		t.Fatalf("ticket replay error=%v response=%v", err, secondResponse)
 	}
 }
+
+func TestWebSocketAcceptsNativeABATicketOnlyWithoutBrowserOrigin(t *testing.T) {
+	now := time.Unix(1_800_000_000, 0).UTC()
+	persistence, endpoint, credential, _, _, _, _ := abaGatewayFixture(t, now)
+	trust, err := NewEphemeralTrust(deterministicGatewayBytes(512), now)
+	if err != nil {
+		t.Fatalf("NewEphemeralTrust: %v", err)
+	}
+	ticketRaw := bytes.Repeat([]byte{79}, 32)
+	ticketValue := base64.RawURLEncoding.EncodeToString(ticketRaw)
+	ticket := domain.WSTicket{
+		ID: gatewayID(71), TokenHash: sha256.Sum256(ticketRaw), EndpointID: endpoint.ID, CredentialID: credential.ID,
+		Purpose: ticketPurpose, Origin: nativeABAOrigin, Protocol: protocolName,
+		Status: domain.TicketStatusIssued, ExpiresAt: now.Add(30 * time.Second), CreatedAt: now,
+	}
+	if err := persistence.CreateTicket(context.Background(), ticket, 30*time.Second); err != nil {
+		t.Fatalf("CreateTicket: %v", err)
+	}
+	handler, err := NewHandler(Config{
+		AllowedOrigin: "http://127.0.0.1:8001", ExternalOrigin: "http://127.0.0.1:8082", Trust: trust,
+	}, persistence, deterministicGatewayBytes(1024), func() time.Time { return now })
+	if err != nil {
+		t.Fatalf("NewHandler: %v", err)
+	}
+	httpServer := httptest.NewServer(handler)
+	defer httpServer.Close()
+	websocketURL := "ws" + strings.TrimPrefix(httpServer.URL, "http") + "/gateway/v1/ws"
+	dialer := websocket.Dialer{Subprotocols: []string{protocolName, "mss.ticket." + ticketValue}}
+
+	invalid, invalidResponse, err := dialer.Dial(websocketURL, http.Header{"Origin": []string{"http://127.0.0.1:8001"}})
+	if invalid != nil {
+		_ = invalid.Close()
+	}
+	if err == nil || invalidResponse == nil || invalidResponse.StatusCode != http.StatusUnauthorized {
+		t.Fatalf("native ticket with browser origin error=%v response=%v", err, invalidResponse)
+	}
+
+	connection, response, err := dialer.Dial(websocketURL, nil)
+	if err != nil {
+		if response != nil {
+			t.Fatalf("dial native WebSocket: %v status=%d", err, response.StatusCode)
+		}
+		t.Fatalf("dial native WebSocket: %v", err)
+	}
+	defer connection.Close()
+	if connection.Subprotocol() != protocolName {
+		t.Fatalf("selected native subprotocol=%q", connection.Subprotocol())
+	}
+	messageType, encoded, err := connection.ReadMessage()
+	if err != nil || messageType != websocket.BinaryMessage {
+		t.Fatalf("read native challenge type=%d error=%v", messageType, err)
+	}
+	packet := new(awpv1.WirePacket)
+	if err := proto.Unmarshal(encoded, packet); err != nil || packet.GetServerChallenge() == nil {
+		t.Fatalf("decode native challenge packet=%#v error=%v", packet, err)
+	}
+}
