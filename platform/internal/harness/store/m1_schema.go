@@ -119,7 +119,7 @@ func RegisterAllMigrations(runner *migration.Migration) error {
 	if err := RegisterMigrations(runner); err != nil {
 		return err
 	}
-	return runner.Register(M1PersistenceMigrationID, func(db *gorm.DB, version string) error {
+	if err := runner.Register(M1PersistenceMigrationID, func(db *gorm.DB, version string) error {
 		if version != M1PersistenceMigrationID.String() {
 			return errors.New("harness M1 persistence migration version mismatch")
 		}
@@ -127,14 +127,20 @@ func RegisterAllMigrations(runner *migration.Migration) error {
 			return err
 		}
 		return runner.CreateVersion(db, version)
-	})
+	}); err != nil {
+		return err
+	}
+	return RegisterM2IdentityMigration(runner)
 }
 
 func CreateAllSchema(db *gorm.DB) error {
 	if err := CreateSchema(db); err != nil {
 		return err
 	}
-	return CreateM1Schema(db)
+	if err := CreateM1Schema(db); err != nil {
+		return err
+	}
+	return CreateM2IdentitySchema(db)
 }
 
 func CreateM1Schema(db *gorm.DB) error {
@@ -155,7 +161,10 @@ func CreateM1Schema(db *gorm.DB) error {
 			}
 		}
 	}
-	return VerifyM1Schema(db)
+	if err := VerifyM1Schema(db); err != nil {
+		return err
+	}
+	return VerifyM2IdentitySchema(db)
 }
 
 func VerifyAllSchema(db *gorm.DB) error {

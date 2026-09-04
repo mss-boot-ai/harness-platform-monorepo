@@ -32,8 +32,8 @@ func newTestStore(t *testing.T) *Store {
 	}
 	sqlDB.SetMaxOpenConns(4)
 	t.Cleanup(func() { _ = sqlDB.Close() })
-	if err := CreateSchema(db); err != nil {
-		t.Fatalf("CreateSchema: %v", err)
+	if err := CreateAllSchema(db); err != nil {
+		t.Fatalf("CreateAllSchema: %v", err)
 	}
 	store, err := New(db)
 	if err != nil {

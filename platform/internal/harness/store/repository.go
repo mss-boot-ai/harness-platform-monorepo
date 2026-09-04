@@ -552,6 +552,15 @@ func (store *Store) RevokeEndpoint(
 			}).Error; err != nil {
 			return fmt.Errorf("revoke credentials: %w", err)
 		}
+		if err := tx.Model(&refreshCredentialRow{}).
+			Where("endpoint_id = ? AND status = ?", row.ID, string(domain.CredentialStatusActive)).
+			Updates(map[string]any{
+				"status":     string(domain.CredentialStatusRevoked),
+				"revoked_at": now,
+				"updated_at": now,
+			}).Error; err != nil {
+			return fmt.Errorf("revoke refresh credentials: %w", err)
+		}
 		if err := tx.Model(&ticketRow{}).
 			Where("endpoint_id = ? AND status = ?", row.ID, string(domain.TicketStatusIssued)).
 			Updates(map[string]any{
