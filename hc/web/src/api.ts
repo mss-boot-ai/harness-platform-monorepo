@@ -275,6 +275,15 @@ export function createEndpointSession(
 }
 
 export async function getEndpointSession(sessionId: string): Promise<EndpointSessionSummary> {
+  const sessions = await listEndpointSessions();
+  const session = sessions.find((candidate) => candidate.sessionId === sessionId);
+  if (session === undefined) {
+    throw new HcApiError('Created session was not found', 'HC_SESSION_NOT_FOUND', 404);
+  }
+  return session;
+}
+
+export async function listEndpointSessions(): Promise<readonly EndpointSessionSummary[]> {
   const response = await requestJson<unknown>(`${adminBase}/harness/v1/sessions?limit=200`, {
     method: 'GET',
   });
@@ -282,11 +291,7 @@ export async function getEndpointSession(sessionId: string): Promise<EndpointSes
   if (!Array.isArray(value.items)) {
     throw new HcApiError('Session list is invalid', 'HC_INVALID_RESPONSE', 500);
   }
-  const session = value.items.map(parseManagementSession).find((candidate) => candidate.sessionId === sessionId);
-  if (session === undefined) {
-    throw new HcApiError('Created session was not found', 'HC_SESSION_NOT_FOUND', 404);
-  }
-  return session;
+  return value.items.map(parseManagementSession);
 }
 
 export async function closeEndpointSession(sessionId: string): Promise<EndpointSessionSummary> {

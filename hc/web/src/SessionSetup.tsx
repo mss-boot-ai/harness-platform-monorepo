@@ -18,6 +18,7 @@ import {
   getEndpointSession,
   HcApiError,
   listABAEndpoints,
+  listEndpointSessions,
   refreshEndpointSession,
   type ABAEndpointSummary,
   type EndpointSessionSummary,
@@ -49,6 +50,7 @@ export function SessionSetup({
   const [keyReady, setKeyReady] = useState(false);
   const [prompt, setPrompt] = useState('请回复这条 Harness 加密测试消息。');
   const [messages, setMessages] = useState<readonly string[]>([]);
+  const [unrecoverableSessions, setUnrecoverableSessions] = useState<readonly EndpointSessionSummary[]>([]);
   const pendingPackets = useRef<Uint8Array[]>([]);
   const processing = useRef<Promise<void>>(Promise.resolve());
   const openedPackage = useRef<OpenedSessionKeyPackage | null>(null);
@@ -183,11 +185,15 @@ export function SessionSetup({
 
   useEffect(() => {
     let active = true;
-    void listABAEndpoints(identity, registration)
-      .then((values) => {
+    void Promise.all([listABAEndpoints(identity, registration), listEndpointSessions()])
+      .then(([values, sessions]) => {
         if (active) {
           setEndpoints(values);
           setSelectedABA(values[0]?.id ?? '');
+          setUnrecoverableSessions(sessions.filter((candidate) =>
+            candidate.hcEndpointId === registration.endpointId &&
+            !['CLOSED', 'FAILED', 'ABA_REVOKED'].includes(candidate.status),
+          ));
         }
       })
       .catch((cause: unknown) => {
@@ -306,8 +312,23 @@ export function SessionSetup({
       openedPackage.current = null;
       setKeyReady(false);
       setSession(closed);
+      setUnrecoverableSessions((current) => current.filter((candidate) => candidate.sessionId !== closed.sessionId));
     } catch (cause) {
       setError(cause instanceof HcApiError ? `${cause.message}（${cause.code}）` : 'Session 关闭失败。');
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const closeUnrecoverable = async (sessionId: string) => {
+    setBusy(true);
+    setError(null);
+    try {
+      await closeEndpointSession(sessionId);
+      await secureStore?.deleteSessionInbox(sessionId);
+      setUnrecoverableSessions((current) => current.filter((candidate) => candidate.sessionId !== sessionId));
+    } catch (cause) {
+      setError(cause instanceof HcApiError ? `${cause.message}（${cause.code}）` : '遗留 Session 关闭失败。');
     } finally {
       setBusy(false);
     }
@@ -354,6 +375,24 @@ export function SessionSetup({
         </button>
       </div>
       {endpoints.length === 0 && error === null ? <p className="fine-print">没有可用的 ACTIVE ABA Endpoint。</p> : null}
+      {session === null && unrecoverableSessions.length > 0 ? (
+        <div className="message-list" aria-label="无法恢复密钥的遗留 Session">
+          <p>以下 Session 的页面内存密钥已不可用，请关闭后重新创建：</p>
+          {unrecoverableSessions.map((candidate) => (
+            <div key={candidate.sessionId}>
+              <p>Session {candidate.sessionId.slice(0, 10)}… · {candidate.status}</p>
+              <button
+                className="secondary-button"
+                type="button"
+                disabled={busy}
+                onClick={() => void closeUnrecoverable(candidate.sessionId)}
+              >
+                关闭遗留 Session
+              </button>
+            </div>
+          ))}
+        </div>
+      ) : null}
       {session === null ? null : (
         <>
           <p className="session-result">
