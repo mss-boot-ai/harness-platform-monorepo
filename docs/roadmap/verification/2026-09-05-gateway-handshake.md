@@ -3,7 +3,7 @@
 - **状态**：Verified for this slice
 - **日期**：2026-09-05
 - **分支**：`codex/bootstrap-harness-platform-foundation`
-- **验证 SHA**：`904ab904c7e99e657a446582c1703fe650116dfc`
+- **验证 SHA**：`e5e405e0659548f16f725082d23543adc8c95755`
 - **范围**：Endpoint Token/Refresh、共享 DPoP 状态、一次性 Ticket、Trust Manifest、二进制 WSS Challenge/READY、HC H5
 
 ## 交付
@@ -18,12 +18,14 @@
 - Root-signed Trust Manifest、独立 Online Signer、ServerChallenge/ChallengeResponse/ConnectionReady 固定 Transcript；
 - WSS 只接受 `mss.awp.v1` + `mss.ticket.<opaque>`，只回显 `mss.awp.v1`，READY 前只接受 ChallengeResponse；
 - Connection Generation 使用数据库原子 upsert/returning 持久递增；
+- Root/Online P-256 Signer 保存于显式本地安全状态：目录 0700、文件 0600、拒绝 symlink/宽权限；
+- H5 在 IndexedDB 固定首次 Root JKT，并拒绝 Root 替换与 Manifest Revision 回退；
 - H5 Refresh → DPoP Ticket → Manifest Verify → 双向签名 Challenge → ConnectionReady。
 
 ## 当前 SHA 的 CI
 
-- push Foundation CI `33899933660`：`success`；
-- PR Foundation CI `33899931627`：`success`；
+- push Foundation CI `33901119145`：`success`；
+- PR Foundation CI `33901125467`：`success`；
 - documentation、platform-import、protocol、aba-rust、hc-typescript 全部成功。
 
 ## 本地验证
@@ -58,6 +60,7 @@ mss upgrade admin v1.3.7 --format json
 7. H5 验证 ConnectionReady 签名，页面显示 `CONNECTION READY`、Generation 2 和 Root 指纹；
 8. 页面把下一阶段投影为“创建 ACP Session”，浏览器控制台无 warning/error。
 9. 应用 Connection Migration 后首次连接为 Generation 1；重启 Gateway 后同一 Endpoint 为 Generation 2，证明计数未随进程回退。
+10. 启用持久 Signer 后 Manifest Revision 从 1 增到 2，H5 Root JKT 保持 `UJT3InRUsX…`，Connection Generation 从 3 增到 4；控制台无错误。
 
 ## 失败—修复
 
@@ -68,7 +71,7 @@ mss upgrade admin v1.3.7 --format json
 
 ## 仍未完成
 
-- 当前 Gateway Root/Online Signer 为进程内本地调试 Key，尚未接入持久 KMS/文件配置；
+- 本地 Signer 已权限受限持久化；生产 KMS/HSM Adapter 和 Root/Online 轮换仍未实现；
 - Connection Generation 已持久化；Fencing 的活动连接目录与跨实例 Kick 尚未实现；
 - READY 后业务 Packet 当前明确关闭连接并返回 relay 未启用，不会静默 ACK；
 - ABA Enrollment/Connector、Session API、HPKE/AEAD、ACP Relay/Journal 和完整 E2E 尚未实现。

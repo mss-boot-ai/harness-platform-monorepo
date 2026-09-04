@@ -8,7 +8,7 @@
 
 ## 2026-09-05 01:15 +08:00 — DPoP Ticket、Refresh 与签名 WSS READY
 
-实现并验证数据库共享 DPoP Replay/Nonce、Access/Refresh Family rotation、独立 Gateway、一次性 Ticket、Go/TS 生成 Proto Binding、Root-signed Trust Manifest、双向签名 WSS Challenge 与持久 Connection Generation。关键提交从 `c5ee16c3426990729724dd8e2460e0125a882959` 到 `904ab904c7e99e657a446582c1703fe650116dfc`；当前 push/PR CI `33899933660`/`33899931627` 均成功。
+实现并验证数据库共享 DPoP Replay/Nonce、Access/Refresh Family rotation、独立 Gateway、一次性 Ticket、Go/TS 生成 Proto Binding、Root-signed Trust Manifest、双向签名 WSS Challenge、持久 Connection Generation、权限受限持久 Signer 与 H5 Root Pin。关键提交从 `c5ee16c3426990729724dd8e2460e0125a882959` 到 `e5e405e0659548f16f725082d23543adc8c95755`；当前 push/PR CI `33901119145`/`33901125467` 均成功。
 
 内置浏览器真实完成 H5 刷新恢复、DPoP Nonce 重试、Ticket、Manifest Verify、ServerChallenge、ChallengeResponse 和 ConnectionReady；并验证 Gateway 重启前后同一 Endpoint 的 Generation 从 1 单调递增到 2。当前 Gateway 对 READY 后业务 Packet 明确失败关闭，尚未进入 Session/Relay。完整命令、失败修复链和限制见 `docs/roadmap/verification/2026-09-05-gateway-handshake.md`。
 
