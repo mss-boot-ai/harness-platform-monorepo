@@ -91,7 +91,7 @@ func TestProtectedHealthRouteUsesCurrentPrincipalAndSchema(t *testing.T) {
 	if body.Status != "ready" || body.UserID != "owner" || body.TenantID != "tenant" {
 		t.Fatalf("unexpected response: %#v", body)
 	}
-	if len(body.SchemaMigrations) != 5 || body.SchemaMigrations[4] != HarnessHCRegistrationAuthorizationMigrationID.String() {
+	if len(body.SchemaMigrations) != 6 || body.SchemaMigrations[5] != store.M2GatewayMigrationID.String() {
 		t.Fatalf("unexpected schema migrations: %#v", body.SchemaMigrations)
 	}
 }

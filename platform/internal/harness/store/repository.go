@@ -78,17 +78,18 @@ type enrollmentRow struct {
 func (enrollmentRow) TableName() string { return "harness_enrollments" }
 
 type credentialRow struct {
-	ID         string     `gorm:"column:id;type:char(32);primaryKey"`
-	EndpointID string     `gorm:"column:endpoint_id;type:char(32);not null;index:idx_harness_credential_endpoint_status,priority:1"`
-	FamilyID   string     `gorm:"column:family_id;type:char(32);not null"`
-	TokenHash  string     `gorm:"column:token_hash;type:char(64);not null;uniqueIndex"`
-	SigningJKT string     `gorm:"column:signing_jkt;size:64;not null"`
-	ScopesJSON string     `gorm:"column:scopes_json;type:text;not null"`
-	Status     string     `gorm:"column:status;size:24;not null;index:idx_harness_credential_endpoint_status,priority:2"`
-	ExpiresAt  time.Time  `gorm:"column:expires_at;not null"`
-	CreatedAt  time.Time  `gorm:"column:created_at;not null"`
-	UpdatedAt  time.Time  `gorm:"column:updated_at;not null"`
-	RevokedAt  *time.Time `gorm:"column:revoked_at"`
+	ID          string     `gorm:"column:id;type:char(32);primaryKey"`
+	EndpointID  string     `gorm:"column:endpoint_id;type:char(32);not null;index:idx_harness_credential_endpoint_status,priority:1"`
+	FamilyID    string     `gorm:"column:family_id;type:char(32);not null"`
+	TokenHash   string     `gorm:"column:token_hash;type:char(64);not null;uniqueIndex"`
+	SigningJKT  string     `gorm:"column:signing_jkt;size:64;not null"`
+	ScopesJSON  string     `gorm:"column:scopes_json;type:text;not null"`
+	Status      string     `gorm:"column:status;size:24;not null;index:idx_harness_credential_endpoint_status,priority:2"`
+	ExpiresAt   time.Time  `gorm:"column:expires_at;not null"`
+	RotatedFrom string     `gorm:"column:rotated_from_id;type:char(32);not null;default:''"`
+	CreatedAt   time.Time  `gorm:"column:created_at;not null"`
+	UpdatedAt   time.Time  `gorm:"column:updated_at;not null"`
+	RevokedAt   *time.Time `gorm:"column:revoked_at"`
 }
 
 func (credentialRow) TableName() string { return "harness_endpoint_credentials" }
@@ -961,17 +962,18 @@ func credentialToRow(value domain.EndpointCredential) (credentialRow, error) {
 		return credentialRow{}, fmt.Errorf("encode credential scopes: %w", err)
 	}
 	return credentialRow{
-		ID:         value.ID.String(),
-		EndpointID: value.EndpointID.String(),
-		FamilyID:   value.FamilyID.String(),
-		TokenHash:  hashString(value.TokenHash),
-		SigningJKT: value.SigningJKT,
-		ScopesJSON: string(scopes),
-		Status:     string(value.Status),
-		ExpiresAt:  value.ExpiresAt,
-		CreatedAt:  value.CreatedAt,
-		UpdatedAt:  value.UpdatedAt,
-		RevokedAt:  cloneTime(value.RevokedAt),
+		ID:          value.ID.String(),
+		EndpointID:  value.EndpointID.String(),
+		FamilyID:    value.FamilyID.String(),
+		TokenHash:   hashString(value.TokenHash),
+		SigningJKT:  value.SigningJKT,
+		ScopesJSON:  string(scopes),
+		Status:      string(value.Status),
+		ExpiresAt:   value.ExpiresAt,
+		RotatedFrom: optionalID(value.RotatedFrom),
+		CreatedAt:   value.CreatedAt,
+		UpdatedAt:   value.UpdatedAt,
+		RevokedAt:   cloneTime(value.RevokedAt),
 	}, nil
 }
 

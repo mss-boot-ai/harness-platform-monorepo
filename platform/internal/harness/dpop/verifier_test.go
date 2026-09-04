@@ -3,6 +3,7 @@ package dpop
 import (
 	"context"
 	"crypto/elliptic"
+	"crypto/sha256"
 	"encoding/base64"
 	"encoding/json"
 	"math/big"
@@ -99,6 +100,20 @@ func TestVerifierRejectsHighSSignature(t *testing.T) {
 	_, err = (Verifier{Replay: cache}).Verify(context.Background(), strings.Join(parts, "."), vectorRequirements(vector))
 	if ErrorCodeOf(err) != CodeSignatureInvalid {
 		t.Fatalf("verification error = %v, want %s", err, CodeSignatureInvalid)
+	}
+}
+
+func TestVerifierAcceptsHashedServerNonce(t *testing.T) {
+	vector := readDPoPVector(t)
+	cache, err := NewMemoryReplayCache(4)
+	if err != nil {
+		t.Fatalf("create replay cache: %v", err)
+	}
+	requirements := vectorRequirements(vector)
+	requirements.ExpectedNonce = ""
+	requirements.ExpectedNonceHash = sha256.Sum256([]byte(vector.DPoP.Claims.Nonce))
+	if _, err := (Verifier{Replay: cache}).Verify(context.Background(), vector.DPoP.Proof, requirements); err != nil {
+		t.Fatalf("verify hashed nonce: %v", err)
 	}
 }
 

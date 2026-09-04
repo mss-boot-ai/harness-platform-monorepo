@@ -140,7 +140,10 @@ func CreateAllSchema(db *gorm.DB) error {
 	if err := CreateM1Schema(db); err != nil {
 		return err
 	}
-	return CreateM2IdentitySchema(db)
+	if err := CreateM2IdentitySchema(db); err != nil {
+		return err
+	}
+	return CreateM2GatewaySchema(db)
 }
 
 func CreateM1Schema(db *gorm.DB) error {
@@ -171,7 +174,10 @@ func VerifyAllSchema(db *gorm.DB) error {
 	if err := VerifyM1Schema(db); err != nil {
 		return err
 	}
-	return VerifyM2IdentitySchema(db)
+	if err := VerifyM2IdentitySchema(db); err != nil {
+		return err
+	}
+	return VerifyM2GatewaySchema(db)
 }
 
 func VerifyM1Schema(db *gorm.DB) error {

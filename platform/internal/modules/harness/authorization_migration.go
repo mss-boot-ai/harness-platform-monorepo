@@ -53,9 +53,12 @@ func registerHarnessMigrations(runner *migration.Migration) error {
 	}); err != nil {
 		return err
 	}
-	return runner.Register(HarnessHCRegistrationAuthorizationMigrationID, func(db *gorm.DB, version string) error {
+	if err := runner.Register(HarnessHCRegistrationAuthorizationMigrationID, func(db *gorm.DB, version string) error {
 		return applyHarnessAuthorizationMigration(db, version)
-	})
+	}); err != nil {
+		return err
+	}
+	return store.RegisterM2GatewayMigration(runner)
 }
 
 func applyHarnessAuthorizationMigration(db *gorm.DB, version string) error {

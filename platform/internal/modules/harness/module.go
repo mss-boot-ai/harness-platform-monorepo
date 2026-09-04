@@ -63,6 +63,7 @@ func readiness(ctx context.Context, db *gorm.DB) error {
 		store.M2IdentityMigrationID,
 		HarnessAuthorizationMigrationID,
 		HarnessHCRegistrationAuthorizationMigrationID,
+		store.M2GatewayMigrationID,
 	); err != nil {
 		return err
 	}
@@ -124,6 +125,7 @@ func registerRoutes(protectedAPI *gin.RouterGroup, runtime business.Runtime) err
 				store.M2IdentityMigrationID.String(),
 				HarnessAuthorizationMigrationID.String(),
 				HarnessHCRegistrationAuthorizationMigrationID.String(),
+				store.M2GatewayMigrationID.String(),
 			},
 		})
 	})

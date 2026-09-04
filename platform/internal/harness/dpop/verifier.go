@@ -3,6 +3,7 @@ package dpop
 import (
 	"bytes"
 	"context"
+	"crypto/sha256"
 	"crypto/subtle"
 	"encoding/base64"
 	"encoding/json"
@@ -56,12 +57,13 @@ type ReplayCache interface {
 }
 
 type Requirements struct {
-	AccessToken   string
-	ExpectedJKT   string
-	ExpectedNonce string
-	HTM           string
-	HTU           string
-	Now           time.Time
+	AccessToken       string
+	ExpectedJKT       string
+	ExpectedNonce     string
+	ExpectedNonceHash [32]byte
+	HTM               string
+	HTU               string
+	Now               time.Time
 }
 
 type Result struct {
@@ -179,10 +181,15 @@ func (verifier Verifier) Verify(ctx context.Context, proof string, requirements 
 	if claimHTU != expectedHTU {
 		return Result{}, fail(CodeRequestMismatch, errors.New("htu does not match request"))
 	}
-	if requirements.ExpectedNonce == "" || claims.Nonce == "" {
+	if (requirements.ExpectedNonce == "" && zeroHash(requirements.ExpectedNonceHash)) || claims.Nonce == "" {
 		return Result{}, fail(CodeNonceRequired, errors.New("server nonce is required"))
 	}
-	if !equalSecret(claims.Nonce, requirements.ExpectedNonce) {
+	if !zeroHash(requirements.ExpectedNonceHash) {
+		presentedHash := sha256.Sum256([]byte(claims.Nonce))
+		if subtle.ConstantTimeCompare(presentedHash[:], requirements.ExpectedNonceHash[:]) != 1 {
+			return Result{}, fail(CodeRequestMismatch, errors.New("nonce does not match"))
+		}
+	} else if !equalSecret(claims.Nonce, requirements.ExpectedNonce) {
 		return Result{}, fail(CodeRequestMismatch, errors.New("nonce does not match"))
 	}
 	if requirements.AccessToken == "" || !equalSecret(claims.AccessTokenHash, awpcrypto.AccessTokenHash(requirements.AccessToken)) {
@@ -329,3 +336,8 @@ func equalSecret(left, right string) bool {
 }
 
 func fail(code ErrorCode, cause error) error { return &Error{Code: code, cause: cause} }
+
+func zeroHash(value [32]byte) bool {
+	var zero [32]byte
+	return subtle.ConstantTimeCompare(value[:], zero[:]) == 1
+}
