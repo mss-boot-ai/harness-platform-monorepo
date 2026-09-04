@@ -9,6 +9,7 @@ pub mod protocol {
         include!(concat!(env!("OUT_DIR"), "/mss.awp.v1.rs"));
     }
 }
+pub mod process;
 pub mod version;
 pub mod wire;
 

@@ -32,12 +32,16 @@ thiserror = "2.0"
 toml = "0.8"
 url = { version = "2.5", features = ["serde"] }
 tempfile = "3.27.0"
+tokio = { version = "1.53.1", default-features = false, features = ["macros", "rt"] }
 tungstenite = { version = "0.30.0", default-features = false, features = ["handshake", "rustls-tls-native-roots"] }
 zeroize = { version = "1.9.0", features = ["derive"] }
 
 [build-dependencies]
 prost-build = "0.14.4"
 protoc-bin-vendored = "3.2.0"
+
+[target.'cfg(unix)'.dependencies]
+rustix = { version = "1.1.4", default-features = false, features = ["process"] }
 
 [lints.rust]
 unsafe_code = "forbid"

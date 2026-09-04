@@ -17,16 +17,13 @@ use crate::crypto::key_package::{
 };
 use crate::crypto::{sign_p1363_low_s, verify_p1363_low_s};
 use crate::identity::EndpointIdentity;
+use crate::process::AgentProcess;
 use crate::protocol::awpv1::{
     ControlFrame, ControlType, Direction as WireDirection, EncryptedFrame,
     FrameType as WireFrameType, OpenTunnelRequest, OpenTunnelResult, OpenTunnelStatus,
     SessionKeyPackage, SessionKeyPackageAck, WirePacket, wire_packet,
 };
 use crate::wire::{CryptoSuite, Direction, FrameAadV1, FrameType};
-use agent_client_protocol::schema::v1::{
-    ContentBlock, ContentChunk, PromptRequest, PromptResponse, SessionNotification, SessionUpdate,
-    StopReason, TextContent,
-};
 
 const CONTROL_TIME_SKEW_MS: i64 = 60_000;
 
@@ -38,6 +35,7 @@ pub(super) struct ControlState {
 }
 
 struct LocalSession {
+    agent: AgentProcess,
     material: KeyPackageMaterial,
     hc_signing_key: VerifyingKey,
     key_package_id: [u8; 16],
@@ -129,7 +127,7 @@ impl ControlState {
         let request = OpenTunnelRequest::decode(control_frame.payload.as_slice())
             .map_err(|_| GatewayError::Protocol)?;
         validate_open_request(&request, now_ms)?;
-        let decision = if self.sessions.len() >= usize::from(config.limits.max_sessions) {
+        let mut decision = if self.sessions.len() >= usize::from(config.limits.max_sessions) {
             PolicyDecision {
                 status: OpenTunnelStatus::ResourceBusy,
                 stable_error_code: "RESOURCE_BUSY".to_owned(),
@@ -138,6 +136,15 @@ impl ControlState {
         } else {
             evaluate_policy(config, &request)
         };
+        let mut agent = None;
+        if decision.status == OpenTunnelStatus::Accepted {
+            match local_profiles(config, &request)
+                .and_then(|(runtime, workspace)| AgentProcess::start(runtime, workspace).ok())
+            {
+                Some(process) => agent = Some(process),
+                None => decision = rejected("AGENT_START_FAILED"),
+            }
+        }
         self.platform_inbound_sequence = control_frame.control_sequence;
         let payload = OpenTunnelResult {
             session_id: request.session_id.clone(),
@@ -163,6 +170,7 @@ impl ControlState {
         if decision.status != OpenTunnelStatus::Accepted {
             return Ok(responses);
         }
+        let agent = agent.ok_or(GatewayError::Protocol)?;
 
         let session_id: [u8; 16] = request
             .session_id
@@ -240,6 +248,7 @@ impl ControlState {
         self.sessions.insert(
             session_id,
             LocalSession {
+                agent,
                 material,
                 hc_signing_key: hc_signing_jwk.verifying_key()?,
                 key_package_id,
@@ -440,7 +449,10 @@ impl ControlState {
             &frame.ciphertext,
             &frame.signature,
         )?;
-        let responses = deterministic_prompt_responses(&plaintext, &lower_hex(&session_id))?;
+        let responses = session
+            .agent
+            .prompt(&plaintext, &lower_hex(&session_id))
+            .map_err(|_| GatewayError::Protocol)?;
         session.hc_frame_sequence = frame.sequence;
         let mut packets = Vec::with_capacity(responses.len());
         for response in responses {
@@ -519,68 +531,6 @@ fn seal_aba_frame(
     .encode_to_vec())
 }
 
-fn deterministic_prompt_responses(
-    plaintext: &[u8],
-    expected_session_id: &str,
-) -> Result<Vec<Vec<u8>>, GatewayError> {
-    if plaintext.is_empty() || plaintext.len() > 64 * 1024 {
-        return Err(GatewayError::Protocol);
-    }
-    let request: serde_json::Value =
-        serde_json::from_slice(plaintext).map_err(|_| GatewayError::Protocol)?;
-    if request.get("jsonrpc").and_then(serde_json::Value::as_str) != Some("2.0")
-        || request.get("method").and_then(serde_json::Value::as_str) != Some("session/prompt")
-    {
-        return Err(GatewayError::Protocol);
-    }
-    let request_id = request
-        .get("id")
-        .filter(|value| !value.is_null())
-        .cloned()
-        .ok_or(GatewayError::Protocol)?;
-    let prompt: PromptRequest = serde_json::from_value(
-        request
-            .get("params")
-            .cloned()
-            .ok_or(GatewayError::Protocol)?,
-    )
-    .map_err(|_| GatewayError::Protocol)?;
-    if prompt.session_id.0.as_ref() != expected_session_id {
-        return Err(GatewayError::Protocol);
-    }
-    let prompt_text = prompt
-        .prompt
-        .iter()
-        .filter_map(|block| match block {
-            ContentBlock::Text(text) => Some(text.text.as_str()),
-            _ => None,
-        })
-        .collect::<Vec<_>>()
-        .join("\n");
-    if prompt_text.is_empty() || prompt_text.len() > 16 * 1024 {
-        return Err(GatewayError::Protocol);
-    }
-    let notification = SessionNotification::new(
-        prompt.session_id,
-        SessionUpdate::AgentMessageChunk(ContentChunk::new(ContentBlock::Text(TextContent::new(
-            format!("Harness deterministic agent received: {prompt_text}"),
-        )))),
-    );
-    let update = serde_json::to_vec(&serde_json::json!({
-        "jsonrpc": "2.0",
-        "method": "session/update",
-        "params": notification,
-    }))
-    .map_err(|_| GatewayError::Protocol)?;
-    let response = serde_json::to_vec(&serde_json::json!({
-        "jsonrpc": "2.0",
-        "id": request_id,
-        "result": PromptResponse::new(StopReason::EndTurn),
-    }))
-    .map_err(|_| GatewayError::Protocol)?;
-    Ok(vec![update, response])
-}
-
 fn lower_hex(value: &[u8]) -> String {
     let mut output = String::with_capacity(value.len() * 2);
     for byte in value {
@@ -654,6 +604,24 @@ fn evaluate_policy(config: &AgentConfig, request: &OpenTunnelRequest) -> PolicyD
     }
 }
 
+fn local_profiles<'a>(
+    config: &'a AgentConfig,
+    request: &OpenTunnelRequest,
+) -> Option<(
+    &'a crate::config::RuntimeProfile,
+    &'a crate::config::WorkspaceProfile,
+)> {
+    let runtime = config
+        .runtimes
+        .iter()
+        .find(|runtime| runtime.id == request.runtime_profile_id)?;
+    let workspace = config
+        .workspaces
+        .iter()
+        .find(|workspace| workspace.id == request.workspace_id)?;
+    Some((runtime, workspace))
+}
+
 fn rejected(code: &str) -> PolicyDecision {
     PolicyDecision {
         status: OpenTunnelStatus::Rejected,
@@ -716,7 +684,10 @@ mod tests {
     -> Result<(), Box<dyn std::error::Error>> {
         let directory = tempfile::tempdir()?;
         let command = directory.path().join("test-agent");
-        fs::write(&command, b"test")?;
+        fs::write(
+            &command,
+            b"#!/bin/sh\nIFS= read -r ignored || exit 1\nprintf '%s\\n' '{\"jsonrpc\":\"2.0\",\"id\":\"aba-initialize\",\"result\":{\"protocolVersion\":1}}'\nIFS= read -r ignored || exit 1\nprintf '%s\\n' '{\"jsonrpc\":\"2.0\",\"id\":\"aba-session-new\",\"result\":{\"sessionId\":\"fixture-agent-session\"}}'\nwhile IFS= read -r ignored; do :; done\n",
+        )?;
         #[cfg(unix)]
         fs::set_permissions(&command, fs::Permissions::from_mode(0o700))?;
         let workspace = directory.path().join("workspace");
@@ -977,33 +948,6 @@ mod tests {
         assert_eq!(result.stable_error_code, "RUNTIME_NOT_ALLOWED");
         assert_eq!(result.accepted_authorization_revision, 0);
         assert!(result.negotiated_capability_hints.is_empty());
-        Ok(())
-    }
-
-    #[test]
-    fn emits_stable_acp_prompt_update_and_response() -> Result<(), Box<dyn std::error::Error>> {
-        let session_id = "01010101010101010101010101010101";
-        let prompt = PromptRequest::new(
-            session_id,
-            vec![ContentBlock::Text(TextContent::new("hello"))],
-        );
-        let request = serde_json::to_vec(&serde_json::json!({
-            "jsonrpc": "2.0",
-            "id": "request-1",
-            "method": "session/prompt",
-            "params": prompt,
-        }))?;
-        let responses = deterministic_prompt_responses(&request, session_id)?;
-        assert_eq!(responses.len(), 2);
-        let update: serde_json::Value = serde_json::from_slice(&responses[0])?;
-        let completed: serde_json::Value = serde_json::from_slice(&responses[1])?;
-        assert_eq!(update["method"], "session/update");
-        assert_eq!(
-            update["params"]["update"]["sessionUpdate"],
-            "agent_message_chunk"
-        );
-        assert_eq!(completed["id"], "request-1");
-        assert_eq!(completed["result"]["stopReason"], "end_turn");
         Ok(())
     }
 
