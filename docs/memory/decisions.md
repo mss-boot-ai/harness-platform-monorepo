@@ -268,6 +268,13 @@
 - **原因**：v1.3.7 已提供正式业务扩展接缝和 `mss upgrade admin` 三方升级流程，能够保持 Foundation 与 Harness 所有权清晰并持续升级。
 - **影响**：D-033 被取代；扩展点不足时先向 Foundation 增加正式接口；升级必须先只读计划、Review、显式 apply、完整验证并要求最终 no-op。
 
+### D-037：HC 注册使用 Admin Browser Session 边界
+
+- **状态**：Accepted
+- **决定**：HC Web 的 Human-bound Challenge/Register 位于 `/admin/api/harness/v1/hc/*`，复用 v1.3.7 Browser Session、CSRF、可信 Origin 和当前 RBAC；注册完成后 `/gateway/v1/*` 只接受 Endpoint Token + DPoP。
+- **原因**：Admin HttpOnly Session Cookie 固定 Path 为 `/admin/api`；让 Gateway 接受 Admin Cookie、扩大 Cookie Path 或返回浏览器可读 Admin Token都会破坏 Thin Host 与身份隔离。
+- **影响**：取代 MVP PRD 早期列出的 `/gateway/v1/hc/challenges` 和 `/gateway/v1/hc/endpoints`；H5 使用同源代理；Gateway 永不把 Admin Cookie 当 Endpoint 身份。详见 ADR-0005。
+
 ## Proposed 决策
 
 ### P-001：Platform 跨实例 Gateway 路由实现

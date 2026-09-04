@@ -339,8 +339,6 @@ Gateway：
 POST /gateway/v1/enrollments
 GET  /gateway/v1/enrollments/{id}
 POST /gateway/v1/enrollments/{id}/consume
-POST /gateway/v1/hc/challenges
-POST /gateway/v1/hc/endpoints
 POST /gateway/v1/tokens/refresh
 POST /gateway/v1/ws/tickets
 POST /gateway/v1/sessions
@@ -349,6 +347,15 @@ GET  /gateway/v1/key-packages
 POST /gateway/v1/key-packages/{id}/ack
 GET  /gateway/v1/health
 ```
+
+HC Web 首次注册使用受 Admin Browser Session、CSRF、可信 Origin 和 `harness:operate` 保护的 Human API：
+
+```text
+POST /admin/api/harness/v1/hc/challenges
+POST /admin/api/harness/v1/hc/endpoints
+```
+
+注册成功后立即切换到 Endpoint Token + DPoP；Gateway 不接受 Admin Cookie。详见 ADR-0005。
 
 除 Enrollment Start/Poll/Consume 的严格特例外，Endpoint API 使用 `Authorization: DPoP <token>` 和 `DPoP` JWS。验证至少覆盖 `htu`、`htm`、`iat`、`jti`、`ath`、Server Nonce、Endpoint JKT 与 Replay Cache。
 

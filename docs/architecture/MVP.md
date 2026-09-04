@@ -94,7 +94,7 @@ ABA Enrollment 采用 Device Authorization 风格：
 - Consume 在事务内创建 Endpoint、Credential 和 Audit，并把 Enrollment 标记 CONSUMED；
 - 重复 Consume 返回同一安全结果或稳定冲突，不创建第二个 Endpoint。
 
-HC 注册由已登录 Admin 页面发起 Challenge，浏览器本地生成 Key 并完成持有证明。
+HC 注册由已登录 H5 通过受保护的 `/admin/api/harness/v1/hc/*` 发起 Challenge，浏览器本地生成 Key 并完成持有证明。该路径复用 Admin Browser Session、CSRF、可信 Origin和当前 Principal；注册成功后 Gateway 只接受 Endpoint Token + DPoP，详见 ADR-0005。
 
 ## 6. WSS 状态机
 
