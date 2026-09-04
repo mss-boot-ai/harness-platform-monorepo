@@ -44,6 +44,7 @@ PY
 
 python3 - "${wire_vector}" <<'PY'
 import base64
+import hashlib
 import json
 import sys
 from pathlib import Path
@@ -51,7 +52,8 @@ from pathlib import Path
 data = json.loads(Path(sys.argv[1]).read_text(encoding="utf-8"))
 assert data["fixtureUse"].startswith("TEST ONLY")
 packet = base64.b64decode(data["wirePacketBase64"] + "=" * (-len(data["wirePacketBase64"]) % 4))
-assert len(packet) == 143
+assert len(packet) == 149
+assert hashlib.sha256(packet).hexdigest() == data["wirePacketSha256"]
 assert data["wireMajor"] == 1 and data["wireMinor"] == 0
 assert data["connectionGeneration"] > 0
 assert data["trustManifestRevision"] > 0
