@@ -64,3 +64,14 @@ Go:          1.26.6
 ## 当前目标
 
 在 `codex/bootstrap-harness-platform-foundation` 分支完成可演示、可恢复、默认 Opaque 的 MVP，实际验证后向 `main` 创建 PR，不自动合并。
+
+## 本地 MVP
+
+完成一次 Thin Host 初始化和 ABA Enrollment 后，可从仓库根目录启动完整本地拓扑：
+
+```bash
+./deploy/run-local-mvp.sh
+```
+
+随后在内置浏览器打开 `http://localhost:8001/`。详细前置条件、忽略的本地配置和
+安全边界见 [`deploy/README.md`](deploy/README.md)。

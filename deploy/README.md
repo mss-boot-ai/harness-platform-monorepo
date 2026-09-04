@@ -1,10 +1,44 @@
-# Deployment
+# Local MVP deployment
 
-Deployment assets will cover:
+The verified local topology is:
 
-- local development;
-- Docker Compose;
-- Platform on Kubernetes;
-- ABA as a user service, systemd service, container, or Kubernetes sidecar/pod.
+```text
+HC H5 :8001 -> Admin API :8080
+             -> Gateway  :8082 -> ABA -> local ACP test-agent
+```
 
-ABA remains outbound-only by default and does not require an ingress Service. Production deployment files must not embed credentials, private keys, recovery codes, or real user data.
+Prerequisites are Go 1.26.6, Rust 1.88.0, Node 24, Corepack and pnpm 10.34.5.
+Initialize the Thin Host database once with `cd platform && mss setup`; no default
+administrator password is provided. Then enroll an ABA identity as documented in
+`aba/README.md`, and create ignored files `aba/.aba-dev/identity.json` and
+`aba/.aba-dev/local.toml`.
+
+Build the deterministic Stable-v1 ACP fixture and point the local runtime profile at
+its absolute path:
+
+```bash
+cd aba
+cargo build --locked --bin test-agent
+```
+
+The runtime command should be `<repository>/aba/target/debug/test-agent`; the workspace
+path should be the absolute repository path. Start the complete local topology from the
+repository root:
+
+```bash
+./deploy/run-local-mvp.sh
+```
+
+Open `http://localhost:8001/` in the built-in browser. The launcher refuses to invent
+Platform or ABA state and never accepts passwords, tokens, tickets, or private keys on
+its command line. Override only the two local file locations when necessary:
+
+```bash
+HARNESS_ABA_CONFIG=/absolute/aba.toml \
+HARNESS_ABA_STORE=/absolute/identity.json \
+./deploy/run-local-mvp.sh
+```
+
+This is the local MVP launcher, not a production deployment. Production still requires
+an external database, managed secret/key storage, a provisioned Gateway signer, TLS,
+and an init migration job. ABA remains outbound-only and requires no ingress service.

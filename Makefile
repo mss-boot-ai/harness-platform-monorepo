@@ -1,7 +1,7 @@
 SHELL := /usr/bin/env bash
 .DEFAULT_GOAL := help
 
-.PHONY: help docs-check protocol-check aba-fmt aba-check aba-test platform-check hc-check verify
+.PHONY: help docs-check protocol-check aba-fmt aba-check aba-test platform-check hc-check mvp-local verify
 
 help: ## Show available targets
 	@awk 'BEGIN {FS = ":.*## "; printf "Harness Platform targets:\n"} /^[a-zA-Z0-9_-]+:.*## / {printf "  %-20s %s\n", $$1, $$2}' $(MAKEFILE_LIST)
@@ -34,5 +34,8 @@ hc-check: ## Run HC checks after its package workspace is initialized
 		exit 2; \
 	fi
 	@cd hc && pnpm lint && pnpm typecheck && pnpm test
+
+mvp-local: ## Run the complete initialized local MVP topology
+	@./deploy/run-local-mvp.sh
 
 verify: docs-check protocol-check aba-fmt aba-check aba-test ## Run checks available in the foundation stage
