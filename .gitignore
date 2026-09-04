@@ -20,6 +20,7 @@ secrets/
 # Rust
 /target/
 **/target/
+aba/.aba-dev/
 
 # Go
 *.test

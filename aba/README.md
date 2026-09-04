@@ -2,7 +2,7 @@
 
 ABA is the lightweight local ACP bridge and security boundary for Harness Platform.
 
-This foundation checkpoint implements only:
+The current checkpoint implements:
 
 - a Rust 1.88.0 workspace;
 - an exact dependency on official `agent-client-protocol` 2.0.0 with default features disabled;
@@ -10,14 +10,17 @@ This foundation checkpoint implements only:
 - strict local TOML configuration for Platform URL, limits, Runtime Profiles, and Workspaces;
 - failure-closed rejection of unknown fields, insecure Platform URLs, remote/relative commands, unknown runtime grants, and unimplemented symlink following;
 - the fixed 148-byte AWP v1 Canonical AAD encoder and offset-level tests.
+- an explicit loopback-only development KeyStore with separate P-256 signing/KEM keys, 0700 directory and 0600 file enforcement, symlink rejection, and public-only inspection.
 
-It does **not** yet implement Enrollment, endpoint keys, DPoP, WSS, encryption, process supervision, Journal, or ACP proxying. A pushed foundation commit is not a working remote agent.
+It does **not** yet implement Enrollment HTTP, persisted endpoint credentials, the long-running DPoP/WSS Connector, encryption, process supervision, Journal, or ACP proxying. The development file KeyStore is not a production OS Keyring substitute.
 
 ## Commands
 
 ```bash
 cargo run -- version --json
 cargo run -- config validate --config ./aba.toml
+cargo run -- identity init --store ./.aba-dev/identity.json --platform http://127.0.0.1:8082 --insecure-dev-keystore --json
+cargo run -- identity inspect --store ./.aba-dev/identity.json --platform http://127.0.0.1:8082 --insecure-dev-keystore --json
 ```
 
 ## Example configuration

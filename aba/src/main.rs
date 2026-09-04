@@ -2,8 +2,10 @@ use std::path::PathBuf;
 use std::process::ExitCode;
 
 use aba::config::AgentConfig;
+use aba::identity::DevFileKeyStore;
 use aba::version::{PRODUCT_NAME, build_info};
 use clap::{Args, Parser, Subcommand};
+use url::Url;
 
 #[derive(Debug, Parser)]
 #[command(name = "aba", version, about = "Lightweight local ACP bridge agent")]
@@ -22,6 +24,40 @@ enum Command {
     },
     /// Validate ABA local configuration without starting a connection or agent.
     Config(ConfigArgs),
+    /// Manage the ABA endpoint identity.
+    Identity(IdentityArgs),
+}
+
+#[derive(Debug, Args)]
+struct IdentityArgs {
+    #[command(subcommand)]
+    command: IdentityCommand,
+}
+
+#[derive(Debug, Subcommand)]
+enum IdentityCommand {
+    /// Generate an explicit loopback-only development identity.
+    Init {
+        #[arg(long, value_name = "PATH")]
+        store: PathBuf,
+        #[arg(long, value_name = "URL")]
+        platform: Url,
+        #[arg(long)]
+        insecure_dev_keystore: bool,
+        #[arg(long)]
+        json: bool,
+    },
+    /// Inspect the public identity summary without printing secrets.
+    Inspect {
+        #[arg(long, value_name = "PATH")]
+        store: PathBuf,
+        #[arg(long, value_name = "URL")]
+        platform: Url,
+        #[arg(long)]
+        insecure_dev_keystore: bool,
+        #[arg(long)]
+        json: bool,
+    },
 }
 
 #[derive(Debug, Args)]
@@ -75,6 +111,43 @@ fn execute(cli: Cli) -> Result<(), Box<dyn std::error::Error>> {
             AgentConfig::load(config)?;
             println!("ABA configuration is valid.");
         }
+        Command::Identity(IdentityArgs { command }) => match command {
+            IdentityCommand::Init {
+                store,
+                platform,
+                insecure_dev_keystore,
+                json,
+            } => {
+                let summary =
+                    DevFileKeyStore::new(store, &platform, insecure_dev_keystore)?.initialize()?;
+                print_identity_summary(&summary, json)?;
+            }
+            IdentityCommand::Inspect {
+                store,
+                platform,
+                insecure_dev_keystore,
+                json,
+            } => {
+                let summary = DevFileKeyStore::new(store, &platform, insecure_dev_keystore)?
+                    .load()?
+                    .summary()?;
+                print_identity_summary(&summary, json)?;
+            }
+        },
+    }
+    Ok(())
+}
+
+fn print_identity_summary(
+    summary: &aba::identity::IdentitySummary,
+    json: bool,
+) -> Result<(), serde_json::Error> {
+    if json {
+        println!("{}", serde_json::to_string_pretty(summary)?);
+    } else {
+        println!("assurance: {}", summary.assurance);
+        println!("signing-jkt: {}", summary.signing_jkt);
+        println!("kem-jkt: {}", summary.kem_jkt);
     }
     Ok(())
 }
