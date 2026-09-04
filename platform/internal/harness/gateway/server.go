@@ -46,15 +46,16 @@ type Persistence interface {
 }
 
 type Config struct {
-	AllowedOrigin    string
-	ExternalOrigin   string
-	NonceTTL         time.Duration
-	TicketTTL        time.Duration
-	ReplayMaxEntries int64
-	AccessTTL        time.Duration
-	RefreshTTL       time.Duration
-	Trust            *TrustBundle
-	VerificationURI  string
+	AllowedOrigin        string
+	ExternalOrigin       string
+	NativeExternalOrigin string
+	NonceTTL             time.Duration
+	TicketTTL            time.Duration
+	ReplayMaxEntries     int64
+	AccessTTL            time.Duration
+	RefreshTTL           time.Duration
+	Trust                *TrustBundle
+	VerificationURI      string
 }
 
 type Server struct {
@@ -85,6 +86,14 @@ func NewHandler(config Config, persistence Persistence, random io.Reader, now fu
 	}
 	config.AllowedOrigin = allowedOrigin
 	config.ExternalOrigin = externalOrigin
+	if strings.TrimSpace(config.NativeExternalOrigin) == "" {
+		config.NativeExternalOrigin = config.ExternalOrigin
+	}
+	nativeExternalOrigin, err := registration.NormalizeOrigin(config.NativeExternalOrigin)
+	if err != nil {
+		return nil, fmt.Errorf("normalize Gateway native external origin: %w", err)
+	}
+	config.NativeExternalOrigin = nativeExternalOrigin
 	if strings.TrimSpace(config.VerificationURI) == "" {
 		config.VerificationURI = config.AllowedOrigin + "/harness/enrollments"
 	}
@@ -184,9 +193,10 @@ func (server *Server) refreshToken(writer http.ResponseWriter, request *http.Req
 		return
 	}
 	verifier := dpop.Verifier{Replay: storeReplayCache{persistence: server.persistence, maxEntries: server.config.ReplayMaxEntries}}
+	externalOrigin := server.endpointExternalOrigin(endpoint.Type)
 	_, err = verifier.Verify(request.Context(), proofHeaders[0], dpop.Requirements{
 		ExpectedJKT: endpoint.SigningJKT, ExpectedNonceHash: nonceHash,
-		HTM: request.Method, HTU: server.config.ExternalOrigin + request.URL.RequestURI(), Now: now,
+		HTM: request.Method, HTU: externalOrigin + request.URL.RequestURI(), Now: now,
 	})
 	if err != nil {
 		server.writeDPoPError(writer, request.Context(), endpoint.ID, now, err)
@@ -314,9 +324,10 @@ func (server *Server) issueTicket(writer http.ResponseWriter, request *http.Requ
 		return
 	}
 	verifier := dpop.Verifier{Replay: storeReplayCache{persistence: server.persistence, maxEntries: server.config.ReplayMaxEntries}}
+	externalOrigin := server.endpointExternalOrigin(endpoint.Type)
 	_, err = verifier.Verify(request.Context(), proofHeaders[0], dpop.Requirements{
 		AccessToken: token, ExpectedJKT: endpoint.SigningJKT, ExpectedNonceHash: nonceHash,
-		HTM: request.Method, HTU: server.config.ExternalOrigin + request.URL.RequestURI(), Now: now,
+		HTM: request.Method, HTU: externalOrigin + request.URL.RequestURI(), Now: now,
 	})
 	if err != nil {
 		server.writeDPoPError(writer, request.Context(), endpoint.ID, now, err)
@@ -356,7 +367,7 @@ func (server *Server) issueTicket(writer http.ResponseWriter, request *http.Requ
 	writer.Header().Set("DPoP-Nonce", nextNonce)
 	writeJSON(writer, http.StatusCreated, map[string]any{
 		"ticket": ticketValue, "expiresAt": expiresAt, "protocol": protocolName,
-		"websocketUrl": websocketURL(server.config.ExternalOrigin) + "/gateway/v1/ws",
+		"websocketUrl": websocketURL(externalOrigin) + "/gateway/v1/ws",
 	})
 }
 
@@ -515,6 +526,13 @@ func (server *Server) ticketOrigin(endpointType domain.EndpointType, origin stri
 	default:
 		return "", false
 	}
+}
+
+func (server *Server) endpointExternalOrigin(endpointType domain.EndpointType) string {
+	if endpointType == domain.EndpointTypeABA {
+		return server.config.NativeExternalOrigin
+	}
+	return server.config.ExternalOrigin
 }
 
 func websocketURL(origin string) string {

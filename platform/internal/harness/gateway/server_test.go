@@ -161,7 +161,8 @@ func TestABARefreshUsesNativeHeaderAndIssuesNativeTicket(t *testing.T) {
 	now := time.Unix(1_800_000_000, 0).UTC()
 	persistence, endpoint, _, _, refreshToken, signingKey, publicJWK := abaGatewayFixture(t, now)
 	handler, err := NewHandler(Config{
-		AllowedOrigin: "http://127.0.0.1:8001", ExternalOrigin: "http://127.0.0.1:8082",
+		AllowedOrigin: "http://127.0.0.1:8001", ExternalOrigin: "http://localhost:8001",
+		NativeExternalOrigin: "http://127.0.0.1:8082",
 	}, persistence, deterministicGatewayBytes(1024), func() time.Time { return now })
 	if err != nil {
 		t.Fatalf("NewHandler: %v", err)
@@ -210,10 +211,14 @@ func TestABARefreshUsesNativeHeaderAndIssuesNativeTicket(t *testing.T) {
 		t.Fatalf("native ticket status=%d body=%s", ticketResponse.Code, ticketResponse.Body.String())
 	}
 	var issued struct {
-		Ticket string `json:"ticket"`
+		Ticket       string `json:"ticket"`
+		WebsocketURL string `json:"websocketUrl"`
 	}
 	if err := json.Unmarshal(ticketResponse.Body.Bytes(), &issued); err != nil {
 		t.Fatalf("decode native ticket: %v", err)
+	}
+	if issued.WebsocketURL != "ws://127.0.0.1:8082/gateway/v1/ws" {
+		t.Fatalf("native WebSocket URL=%q", issued.WebsocketURL)
 	}
 	ticketRaw, err := base64.RawURLEncoding.Strict().DecodeString(issued.Ticket)
 	if err != nil || len(ticketRaw) != 32 {

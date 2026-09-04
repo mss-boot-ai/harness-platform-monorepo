@@ -47,9 +47,10 @@ func run() error {
 		return err
 	}
 	handler, err := gateway.NewHandler(gateway.Config{
-		AllowedOrigin:  environment("HARNESS_GATEWAY_ALLOWED_ORIGIN", "http://127.0.0.1:8001"),
-		ExternalOrigin: environment("HARNESS_GATEWAY_EXTERNAL_ORIGIN", "http://127.0.0.1:8082"),
-		Trust:          trust,
+		AllowedOrigin:        environment("HARNESS_GATEWAY_ALLOWED_ORIGIN", "http://127.0.0.1:8001"),
+		ExternalOrigin:       environment("HARNESS_GATEWAY_EXTERNAL_ORIGIN", "http://127.0.0.1:8082"),
+		NativeExternalOrigin: environment("HARNESS_GATEWAY_NATIVE_EXTERNAL_ORIGIN", "http://127.0.0.1:8082"),
+		Trust:                trust,
 	}, persistence, nil, nil)
 	if err != nil {
 		return err
