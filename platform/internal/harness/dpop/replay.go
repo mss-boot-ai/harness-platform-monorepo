@@ -23,14 +23,13 @@ func NewMemoryReplayCache(maxEntries int) (*MemoryReplayCache, error) {
 	return &MemoryReplayCache{maxEntries: maxEntries, entries: make(map[string]time.Time)}, nil
 }
 
-func (cache *MemoryReplayCache) Use(ctx context.Context, jkt, jti string, expiresAt time.Time) error {
-	if cache == nil || ctx == nil || jkt == "" || jti == "" || expiresAt.IsZero() {
+func (cache *MemoryReplayCache) Use(ctx context.Context, jkt, jti string, now, expiresAt time.Time) error {
+	if cache == nil || ctx == nil || jkt == "" || jti == "" || now.IsZero() || !expiresAt.After(now) {
 		return errors.New("DPoP replay cache input is invalid")
 	}
 	if err := ctx.Err(); err != nil {
 		return err
 	}
-	now := time.Now()
 	key := jkt + "\x00" + jti
 	cache.mu.Lock()
 	defer cache.mu.Unlock()

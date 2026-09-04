@@ -52,7 +52,7 @@ func ErrorCodeOf(err error) ErrorCode {
 }
 
 type ReplayCache interface {
-	Use(context.Context, string, string, time.Time) error
+	Use(context.Context, string, string, time.Time, time.Time) error
 }
 
 type Requirements struct {
@@ -198,7 +198,7 @@ func (verifier Verifier) Verify(ctx context.Context, proof string, requirements 
 		return Result{}, fail(CodeProofExpired, errors.New("proof iat is outside the accepted window"))
 	}
 	expiresAt := issuedAt.Add(maxAge + futureSkew)
-	if err := verifier.Replay.Use(ctx, jkt, claims.JTI, expiresAt); err != nil {
+	if err := verifier.Replay.Use(ctx, jkt, claims.JTI, now, expiresAt); err != nil {
 		if errors.Is(err, ErrReplay) {
 			return Result{}, fail(CodeReplay, err)
 		}
