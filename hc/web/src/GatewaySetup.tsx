@@ -50,6 +50,13 @@ export function GatewaySetup({
         ticket: issued.ticket,
         websocketUrl: issued.websocketUrl,
       }, trust);
+      ready.socket.addEventListener('close', () => {
+        if (socketRef.current === ready.socket) {
+          socketRef.current = null;
+          setConnection(null);
+          setTicket(null);
+        }
+      }, { once: true });
       socketRef.current = ready.socket;
       setConnection(ready);
       onRegistration(activeRegistration);

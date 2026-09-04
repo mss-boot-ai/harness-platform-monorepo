@@ -104,6 +104,11 @@ func (server *Server) websocket(writer http.ResponseWriter, request *http.Reques
 	go active.runWriter()
 	_ = connection.SetReadDeadline(time.Now().Add(2 * time.Duration(heartbeatIntervalMS) * time.Millisecond))
 	connection.SetPongHandler(func(string) error {
+		if _, _, err := server.persistence.GetEndpointCredential(
+			request.Context(), endpoint.ID, credential.ID, server.now().UTC(),
+		); err != nil {
+			return errors.New("endpoint credential is no longer available")
+		}
 		return connection.SetReadDeadline(time.Now().Add(2 * time.Duration(heartbeatIntervalMS) * time.Millisecond))
 	})
 	for {
@@ -113,6 +118,12 @@ func (server *Server) websocket(writer http.ResponseWriter, request *http.Reques
 		}
 		if messageType != websocket.BinaryMessage || len(message) == 0 || len(message) > maxWirePacketBytes {
 			active.close(websocket.CloseUnsupportedData, "binary AWP packet required")
+			return
+		}
+		if _, _, err := server.persistence.GetEndpointCredential(
+			request.Context(), endpoint.ID, credential.ID, server.now().UTC(),
+		); err != nil {
+			active.close(websocket.ClosePolicyViolation, "endpoint credential unavailable")
 			return
 		}
 		if err := server.handleReadyPacket(request.Context(), active, endpoint, credential, message, server.now().UTC()); err != nil {

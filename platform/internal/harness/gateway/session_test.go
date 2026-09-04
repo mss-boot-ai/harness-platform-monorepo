@@ -608,6 +608,18 @@ func TestHCSessionCreateIsIdempotentAndDeliversSignedOpenTunnel(t *testing.T) {
 		!bytes.Equal(replayedClose.Body.Bytes(), closedResponse.Body.Bytes()) {
 		t.Fatalf("replayed close status=%d headers=%v body=%s", replayedClose.Code, replayedClose.Header(), replayedClose.Body.String())
 	}
+	if _, err := persistence.RevokeEndpointForOwner(
+		t.Context(), hcEndpoint.ID, hcEndpoint.OwnerUserID, hcEndpoint.TenantID, now.Add(time.Second),
+	); err != nil {
+		t.Fatalf("revoke connected HC endpoint: %v", err)
+	}
+	if err := hcConnection.WriteMessage(websocket.BinaryMessage, []byte{1}); err != nil {
+		t.Fatalf("write post-revocation probe: %v", err)
+	}
+	_ = hcConnection.SetReadDeadline(time.Now().Add(time.Second))
+	if _, _, err := hcConnection.ReadMessage(); err == nil {
+		t.Fatal("revoked HC WebSocket remained usable")
+	}
 	_ = abaConnection.SetReadDeadline(time.Now().Add(100 * time.Millisecond))
 	if _, _, err := abaConnection.ReadMessage(); err == nil {
 		t.Fatal("idempotent session replay delivered a duplicate OpenTunnel control")
