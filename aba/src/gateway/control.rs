@@ -23,9 +23,10 @@ use crate::journal::{
 };
 use crate::process::AgentProcess;
 use crate::protocol::awpv1::{
-    AckFrame, ControlFrame, ControlType, Direction as WireDirection, EncryptedFrame,
-    FrameType as WireFrameType, OpenTunnelRequest, OpenTunnelResult, OpenTunnelStatus,
-    SessionKeyPackage, SessionKeyPackageAck, WirePacket, wire_packet,
+    AckFrame, CloseTunnelRequest, CloseTunnelResult, CloseTunnelStatus, ControlFrame, ControlType,
+    Direction as WireDirection, EncryptedFrame, FrameType as WireFrameType, OpenTunnelRequest,
+    OpenTunnelResult, OpenTunnelStatus, SessionKeyPackage, SessionKeyPackageAck, WirePacket,
+    wire_packet,
 };
 use crate::wire::{CryptoSuite, Direction, FrameAadV1, FrameType};
 
@@ -103,6 +104,9 @@ impl ControlState {
         };
         if control_frame.r#type == ControlType::SessionKeyPackageAck as i32 {
             return self.handle_key_package_ack(control_frame, endpoint_id, now);
+        }
+        if control_frame.r#type == ControlType::CloseTunnelRequest as i32 {
+            return self.handle_close_tunnel(control_frame, endpoint_id, online_key, identity, now);
         }
         if control_frame.r#type != ControlType::OpenTunnelRequest as i32
             || control_frame.message_id.len() != 16
@@ -308,6 +312,81 @@ impl ControlState {
             })),
         };
         Ok(packet.encode_to_vec())
+    }
+
+    fn handle_close_tunnel(
+        &mut self,
+        control_frame: ControlFrame,
+        endpoint_id: &[u8; 16],
+        online_key: &VerifyingKey,
+        identity: &EndpointIdentity,
+        now: SystemTime,
+    ) -> Result<Vec<Vec<u8>>, GatewayError> {
+        let expected_sequence = self
+            .platform_inbound_sequence
+            .checked_add(1)
+            .ok_or(GatewayError::Protocol)?;
+        let now_ms = unix_millis(now)?;
+        if control_frame.message_id.len() != 16
+            || control_frame.sender_endpoint_id != [0; 16]
+            || control_frame.receiver_endpoint_id != endpoint_id
+            || control_frame.control_sequence != expected_sequence
+            || control_frame.payload.is_empty()
+            || control_frame.signature.len() != 64
+            || control_frame.created_at_ms < now_ms - CONTROL_TIME_SKEW_MS
+            || control_frame.created_at_ms > now_ms + CONTROL_TIME_SKEW_MS
+        {
+            return Err(GatewayError::ProtocolStage("CloseTunnel control"));
+        }
+        let transcript = control(ControlInput {
+            message_id: &control_frame.message_id,
+            sender_endpoint_id: &control_frame.sender_endpoint_id,
+            receiver_endpoint_id: &control_frame.receiver_endpoint_id,
+            sequence: control_frame.control_sequence,
+            created_at_ms: control_frame.created_at_ms,
+            control_type: ControlType::CloseTunnelRequest as u32,
+            payload: &control_frame.payload,
+        })?;
+        if !verify_p1363_low_s(online_key, &transcript, &control_frame.signature) {
+            return Err(GatewayError::Trust);
+        }
+        let request = CloseTunnelRequest::decode(control_frame.payload.as_slice())
+            .map_err(|_| GatewayError::Protocol)?;
+        if request.session_id.len() != 16
+            || request.session_id.iter().all(|value| *value == 0)
+            || !stable_reason_code(&request.stable_reason_code)
+            || request.expires_at_ms <= now_ms
+            || request.expires_at_ms > now_ms + CONTROL_TIME_SKEW_MS
+        {
+            return Err(GatewayError::ProtocolStage("CloseTunnel payload"));
+        }
+        self.platform_inbound_sequence = control_frame.control_sequence;
+        let session_id: [u8; 16] = request
+            .session_id
+            .as_slice()
+            .try_into()
+            .map_err(|_| GatewayError::Protocol)?;
+        let Some(session) = self.sessions.remove(&session_id) else {
+            self.journal.close_session(session_id)?;
+            return Ok(Vec::new());
+        };
+        let receiver = session.material.recipient_hc_endpoint_id;
+        drop(session);
+        self.journal.close_session(session_id)?;
+        let payload = CloseTunnelResult {
+            session_id: session_id.to_vec(),
+            status: CloseTunnelStatus::Accepted as i32,
+            stable_error_code: String::new(),
+        }
+        .encode_to_vec();
+        Ok(vec![self.signed_control(
+            endpoint_id,
+            &receiver,
+            ControlType::CloseTunnelResult,
+            payload,
+            identity,
+            now_ms,
+        )?])
     }
 
     fn handle_key_package_ack(
@@ -715,6 +794,16 @@ fn ack_ranges(frame: &AckFrame, maximum: u64) -> Result<Vec<(u64, u64)>, Gateway
     Ok(output)
 }
 
+fn stable_reason_code(value: &str) -> bool {
+    let bytes = value.as_bytes();
+    !bytes.is_empty()
+        && bytes.len() <= 64
+        && bytes[0].is_ascii_uppercase()
+        && bytes
+            .iter()
+            .all(|byte| byte.is_ascii_uppercase() || byte.is_ascii_digit() || *byte == b'_')
+}
+
 fn lower_hex(value: &[u8]) -> String {
     let mut output = String::with_capacity(value.len() * 2);
     for byte in value {
@@ -1027,6 +1116,57 @@ mod tests {
                 .get(&[4_u8; 16])
                 .is_some_and(|session| session.active)
         );
+        let close_payload = CloseTunnelRequest {
+            session_id: vec![4_u8; 16],
+            stable_reason_code: "HC_REQUESTED".to_owned(),
+            expires_at_ms: unix_millis(now)? + 30_000,
+        }
+        .encode_to_vec();
+        let close_message_id = [20_u8; 16];
+        let platform_sender = [0_u8; 16];
+        let close_transcript = control(ControlInput {
+            message_id: &close_message_id,
+            sender_endpoint_id: &platform_sender,
+            receiver_endpoint_id: &endpoint_id,
+            sequence: 2,
+            created_at_ms: unix_millis(now)?,
+            control_type: ControlType::CloseTunnelRequest as u32,
+            payload: &close_payload,
+        })?;
+        let closed = state.handle(
+            WirePacket {
+                wire_major: 1,
+                wire_minor: 0,
+                packet_id: vec![21_u8; 16],
+                body: Some(wire_packet::Body::Control(ControlFrame {
+                    message_id: close_message_id.to_vec(),
+                    sender_endpoint_id: platform_sender.to_vec(),
+                    receiver_endpoint_id: endpoint_id.to_vec(),
+                    control_sequence: 2,
+                    created_at_ms: unix_millis(now)?,
+                    r#type: ControlType::CloseTunnelRequest as i32,
+                    payload: close_payload,
+                    signature: sign_p1363_low_s(&online, &close_transcript).to_vec(),
+                })),
+            },
+            ControlContext {
+                endpoint_id: &endpoint_id,
+                online_key: online.verifying_key(),
+                identity: &identity,
+                config: &config,
+                credential_id: &credential_id,
+                now,
+            },
+        )?;
+        assert_eq!(closed.len(), 1);
+        let closed_packet = WirePacket::decode(closed[0].as_slice())?;
+        let closed_control = match closed_packet.body {
+            Some(wire_packet::Body::Control(value)) => value,
+            _ => return Err("close response is not a control frame".into()),
+        };
+        let closed_result = CloseTunnelResult::decode(closed_control.payload.as_slice())?;
+        assert_eq!(closed_result.status, CloseTunnelStatus::Accepted as i32);
+        assert!(state.sessions.is_empty());
         Ok(())
     }
 

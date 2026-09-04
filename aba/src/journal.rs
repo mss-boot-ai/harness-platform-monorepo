@@ -388,6 +388,24 @@ impl Journal {
             .count())
     }
 
+    pub fn close_session(&self, session_id: [u8; 16]) -> Result<(), JournalError> {
+        if zero(&session_id) {
+            return Err(JournalError::InvalidState);
+        }
+        self.update(|state| {
+            state
+                .channels
+                .retain(|record| record.session_id != session_id);
+            state
+                .inbound
+                .retain(|record| record.session_id != session_id);
+            state
+                .outbound
+                .retain(|record| record.session_id != session_id);
+            Ok(())
+        })
+    }
+
     fn transition(
         &self,
         message_id: [u8; 16],
@@ -777,6 +795,8 @@ mod tests {
             1
         );
         assert!(reopened.unacknowledged(channel.session_id, 2)?.is_empty());
+        reopened.close_session(channel.session_id)?;
+        assert_eq!(reopened.reserve_outbound_sequence(channel)?, 1);
         Ok(())
     }
 

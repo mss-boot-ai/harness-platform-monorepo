@@ -294,22 +294,41 @@ export async function listEndpointSessions(): Promise<readonly EndpointSessionSu
   return value.items.map(parseManagementSession);
 }
 
-export async function closeEndpointSession(sessionId: string): Promise<EndpointSessionSummary> {
+export function closeEndpointSession(
+  identity: EndpointIdentity,
+  registration: RegistrationSession,
+  sessionId: string,
+  idempotencyKey: string,
+): Promise<EndpointSessionSummary> {
   if (!/^[0-9a-f]{32}$/u.test(sessionId)) {
     throw new HcApiError('Session ID is invalid', 'HC_INVALID_SESSION_ID', 400);
   }
-  const response = await requestJson<unknown>(
-    `${adminBase}/harness/v1/sessions/${sessionId}/close`,
-    {
-      body: '{}',
-      headers: {
-        ...csrfHeaders(),
-        'Idempotency-Key': crypto.randomUUID(),
-      },
-      method: 'POST',
-    },
-  );
-  return parseManagementSession(response);
+  return withGatewayNonceLock(async () => {
+    const path = `/gateway/v1/sessions/${sessionId}/close`;
+    const body = '{}';
+    const challengeResponse = await gatewaySessionRequest(
+      path, registration.accessToken, idempotencyKey, body,
+    );
+    const nonce = challengeResponse.headers.get('DPoP-Nonce');
+    if (challengeResponse.status !== 401 || nonce === null || nonce === '') {
+      throw await gatewayFailure(challengeResponse);
+    }
+    const proof = await createDpopProof({
+      accessToken: registration.accessToken,
+      htm: 'POST',
+      htu: new URL(path, window.location.origin).toString(),
+      nonce,
+      privateKey: identity.signing.privateKey,
+      publicJwk: identity.signing.publicJwk,
+    });
+    const response = await gatewaySessionRequest(
+      path, registration.accessToken, idempotencyKey, body, proof.proof,
+    );
+    if (!response.ok) {
+      throw await gatewayFailure(response);
+    }
+    return parseEndpointSession(await response.json());
+  });
 }
 
 async function requestJson<T>(path: string, init: RequestInit): Promise<T> {

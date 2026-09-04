@@ -183,6 +183,26 @@ export function SessionSetup({
 
   useEffect(() => () => zeroOpenedPackage(openedPackage.current), []);
 
+  const withActiveRegistration = async <T,>(operation: (active: RegistrationSession) => Promise<T>): Promise<T> => {
+    let activeRegistration = registration;
+    let refreshed = false;
+    if (accessCredentialNeedsRefresh(activeRegistration)) {
+      activeRegistration = await refreshEndpointSession(identity);
+      refreshed = true;
+      onRegistration(activeRegistration);
+    }
+    try {
+      return await operation(activeRegistration);
+    } catch (cause) {
+      if (!(cause instanceof HcApiError) || cause.code !== 'ENDPOINT_CREDENTIAL_EXPIRED' || refreshed) {
+        throw cause;
+      }
+      activeRegistration = await refreshEndpointSession(identity);
+      onRegistration(activeRegistration);
+      return operation(activeRegistration);
+    }
+  };
+
   useEffect(() => {
     let active = true;
     void Promise.all([listABAEndpoints(identity, registration), listEndpointSessions()])
@@ -225,30 +245,13 @@ export function SessionSetup({
     setMessages([]);
     try {
       const idempotencyKey = crypto.randomUUID();
-      let activeRegistration = registration;
-      let refreshed = false;
-      if (accessCredentialNeedsRefresh(activeRegistration)) {
-        activeRegistration = await refreshEndpointSession(identity);
-        refreshed = true;
-        onRegistration(activeRegistration);
-      }
       const submit = (candidate: RegistrationSession) => createEndpointSession(identity, candidate, {
         abaEndpointId: selectedABA,
         idempotencyKey,
         runtimeProfileId: runtimeProfileId.trim(),
         workspaceId: workspaceId.trim(),
       });
-      let current: EndpointSessionSummary;
-      try {
-        current = await submit(activeRegistration);
-      } catch (cause) {
-        if (!(cause instanceof HcApiError) || cause.code !== 'ENDPOINT_CREDENTIAL_EXPIRED' || refreshed) {
-          throw cause;
-        }
-        activeRegistration = await refreshEndpointSession(identity);
-        onRegistration(activeRegistration);
-        current = await submit(activeRegistration);
-      }
+      let current = await withActiveRegistration(submit);
       setSession(current);
       for (let attempt = 0; attempt < POLL_ATTEMPTS && current.status === 'CREATING'; attempt += 1) {
         await new Promise((resolve) => setTimeout(resolve, 250));
@@ -306,7 +309,9 @@ export function SessionSetup({
     setBusy(true);
     setError(null);
     try {
-      const closed = await closeEndpointSession(session.sessionId);
+      const idempotencyKey = crypto.randomUUID();
+      const closed = await withActiveRegistration((active) =>
+        closeEndpointSession(identity, active, session.sessionId, idempotencyKey));
       await secureStore?.deleteSessionInbox(session.sessionId);
       zeroOpenedPackage(openedPackage.current);
       openedPackage.current = null;
@@ -324,7 +329,9 @@ export function SessionSetup({
     setBusy(true);
     setError(null);
     try {
-      await closeEndpointSession(sessionId);
+      const idempotencyKey = crypto.randomUUID();
+      await withActiveRegistration((active) =>
+        closeEndpointSession(identity, active, sessionId, idempotencyKey));
       await secureStore?.deleteSessionInbox(sessionId);
       setUnrecoverableSessions((current) => current.filter((candidate) => candidate.sessionId !== sessionId));
     } catch (cause) {

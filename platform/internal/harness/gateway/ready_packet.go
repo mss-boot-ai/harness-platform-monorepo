@@ -84,6 +84,8 @@ func (server *Server) handleReadyPacket(
 		receiverID, err = server.processSessionKeyPackage(ctx, endpoint, credential, control, now)
 	case awpv1.ControlType_CONTROL_TYPE_SESSION_KEY_PACKAGE_ACK:
 		receiverID, err = server.processSessionKeyPackageACK(ctx, endpoint, control, now)
+	case awpv1.ControlType_CONTROL_TYPE_CLOSE_TUNNEL_RESULT:
+		receiverID, err = server.processCloseTunnelResult(ctx, endpoint, control)
 	default:
 		return errors.New("ready control type is unsupported")
 	}
@@ -101,7 +103,8 @@ func readyControlAllowed(endpointType domain.EndpointType, controlType awpv1.Con
 	switch endpointType {
 	case domain.EndpointTypeABA:
 		return controlType == awpv1.ControlType_CONTROL_TYPE_OPEN_TUNNEL_RESULT ||
-			controlType == awpv1.ControlType_CONTROL_TYPE_SESSION_KEY_PACKAGE
+			controlType == awpv1.ControlType_CONTROL_TYPE_SESSION_KEY_PACKAGE ||
+			controlType == awpv1.ControlType_CONTROL_TYPE_CLOSE_TUNNEL_RESULT
 	case domain.EndpointTypeHCWeb, domain.EndpointTypeHCReference:
 		return controlType == awpv1.ControlType_CONTROL_TYPE_SESSION_KEY_PACKAGE_ACK
 	default:

@@ -342,6 +342,7 @@ POST /gateway/v1/enrollments/{id}/consume
 POST /gateway/v1/tokens/refresh
 POST /gateway/v1/ws/tickets
 POST /gateway/v1/sessions
+POST /gateway/v1/sessions/{id}/close
 GET  /gateway/v1/sessions/{id}
 GET  /gateway/v1/key-packages
 POST /gateway/v1/key-packages/{id}/ack

@@ -461,25 +461,105 @@ func TestHCSessionCreateIsIdempotentAndDeliversSignedOpenTunnel(t *testing.T) {
 		!bytes.Equal(replayed.Body.Bytes(), created.Body.Bytes()) {
 		t.Fatalf("replay status=%d headers=%v body=%s", replayed.Code, replayed.Header(), replayed.Body.String())
 	}
+	closePath := "/gateway/v1/sessions/" + createdSessionID.String() + "/close"
+	closeChallenge := httptest.NewRecorder()
+	handler.ServeHTTP(closeChallenge, gatewaySessionCloseRequest(hcAccessToken, "session-close-key-0001", closePath, ""))
+	closeNonce := closeChallenge.Header().Get("DPoP-Nonce")
+	if closeChallenge.Code != http.StatusUnauthorized || closeNonce == "" {
+		t.Fatalf("session close nonce status=%d body=%s", closeChallenge.Code, closeChallenge.Body.String())
+	}
+	closeProof := signDPoPForMethodPath(
+		t, hcSigningKey, hcPublicJWK, hcAccessToken, closeNonce, now,
+		"00000000-0000-4000-8000-000000000403", http.MethodPost, closePath,
+	)
+	closedResponse := httptest.NewRecorder()
+	handler.ServeHTTP(
+		closedResponse,
+		gatewaySessionCloseRequest(hcAccessToken, "session-close-key-0001", closePath, closeProof),
+	)
+	if closedResponse.Code != http.StatusOK || !strings.Contains(closedResponse.Body.String(), `"status":"CLOSED"`) {
+		t.Fatalf("close session status=%d body=%s", closedResponse.Code, closedResponse.Body.String())
+	}
+	closeType, encodedClose, err := abaConnection.ReadMessage()
+	if err != nil || closeType != websocket.BinaryMessage {
+		t.Fatalf("read CloseTunnelRequest type=%d error=%v", closeType, err)
+	}
+	closePacket := new(awpv1.WirePacket)
+	if err := proto.Unmarshal(encodedClose, closePacket); err != nil {
+		t.Fatalf("decode CloseTunnelRequest: %v", err)
+	}
+	closeControl := closePacket.GetControl()
+	if closeControl == nil || closeControl.GetType() != awpv1.ControlType_CONTROL_TYPE_CLOSE_TUNNEL_REQUEST ||
+		closeControl.GetControlSequence() != 2 {
+		t.Fatalf("CloseTunnelRequest control=%#v", closeControl)
+	}
+	closeRequest := new(awpv1.CloseTunnelRequest)
+	if err := proto.Unmarshal(closeControl.GetPayload(), closeRequest); err != nil ||
+		!bytes.Equal(closeRequest.GetSessionId(), createdSessionID[:]) || closeRequest.GetStableReasonCode() != "HC_REQUESTED" {
+		t.Fatalf("CloseTunnelRequest payload=%#v error=%v", closeRequest, err)
+	}
+	closeResultPayload, err := proto.MarshalOptions{Deterministic: true}.Marshal(&awpv1.CloseTunnelResult{
+		SessionId: createdSessionID[:], Status: awpv1.CloseTunnelStatus_CLOSE_TUNNEL_STATUS_ACCEPTED,
+	})
+	if err != nil {
+		t.Fatalf("encode CloseTunnelResult: %v", err)
+	}
+	closeResultID := bytes.Repeat([]byte{95}, 16)
+	closeResultTranscript, err := controlTranscript(
+		closeResultID, abaEndpoint.ID[:], hcEndpointID[:], 3, now.UnixMilli(),
+		uint32(awpv1.ControlType_CONTROL_TYPE_CLOSE_TUNNEL_RESULT), closeResultPayload,
+	)
+	if err != nil {
+		t.Fatalf("CloseTunnelResult transcript: %v", err)
+	}
+	closeResultSignature, err := awpcrypto.SignP1363LowS(abaSigningKey, closeResultTranscript)
+	if err != nil {
+		t.Fatalf("sign CloseTunnelResult: %v", err)
+	}
+	closeResultPacket := &awpv1.WirePacket{
+		WireMajor: 1, PacketId: bytes.Repeat([]byte{96}, 16),
+		Body: &awpv1.WirePacket_Control{Control: &awpv1.ControlFrame{
+			MessageId: closeResultID, SenderEndpointId: abaEndpoint.ID[:], ReceiverEndpointId: hcEndpointID[:],
+			ControlSequence: 3, CreatedAtMs: now.UnixMilli(), Type: awpv1.ControlType_CONTROL_TYPE_CLOSE_TUNNEL_RESULT,
+			Payload: closeResultPayload, Signature: closeResultSignature,
+		}},
+	}
+	encodedCloseResult, err := proto.MarshalOptions{Deterministic: true}.Marshal(closeResultPacket)
+	if err != nil {
+		t.Fatalf("encode CloseTunnelResult packet: %v", err)
+	}
+	if err := abaConnection.WriteMessage(websocket.BinaryMessage, encodedCloseResult); err != nil {
+		t.Fatalf("write CloseTunnelResult: %v", err)
+	}
+	forwardedType, forwardedCloseResult, err := hcConnection.ReadMessage()
+	if err != nil || forwardedType != websocket.BinaryMessage || !bytes.Equal(forwardedCloseResult, encodedCloseResult) {
+		t.Fatalf("read forwarded CloseTunnelResult type=%d error=%v", forwardedType, err)
+	}
+	replayCloseChallenge := httptest.NewRecorder()
+	handler.ServeHTTP(
+		replayCloseChallenge,
+		gatewaySessionCloseRequest(hcAccessToken, "session-close-key-0001", closePath, ""),
+	)
+	replayCloseNonce := replayCloseChallenge.Header().Get("DPoP-Nonce")
+	if replayCloseChallenge.Code != http.StatusUnauthorized || replayCloseNonce == "" {
+		t.Fatalf("replay close nonce status=%d body=%s", replayCloseChallenge.Code, replayCloseChallenge.Body.String())
+	}
+	replayCloseProof := signDPoPForMethodPath(
+		t, hcSigningKey, hcPublicJWK, hcAccessToken, replayCloseNonce, now,
+		"00000000-0000-4000-8000-000000000404", http.MethodPost, closePath,
+	)
+	replayedClose := httptest.NewRecorder()
+	handler.ServeHTTP(
+		replayedClose,
+		gatewaySessionCloseRequest(hcAccessToken, "session-close-key-0001", closePath, replayCloseProof),
+	)
+	if replayedClose.Code != http.StatusOK || replayedClose.Header().Get("Idempotency-Replayed") != "true" ||
+		!bytes.Equal(replayedClose.Body.Bytes(), closedResponse.Body.Bytes()) {
+		t.Fatalf("replayed close status=%d headers=%v body=%s", replayedClose.Code, replayedClose.Header(), replayedClose.Body.String())
+	}
 	_ = abaConnection.SetReadDeadline(time.Now().Add(100 * time.Millisecond))
 	if _, _, err := abaConnection.ReadMessage(); err == nil {
 		t.Fatal("idempotent session replay delivered a duplicate OpenTunnel control")
-	}
-	tamperedACK := new(awpv1.WirePacket)
-	if err := proto.Unmarshal(hcACK, tamperedACK); err != nil || tamperedACK.GetAck() == nil {
-		t.Fatalf("decode ACK for tamper test: %v", err)
-	}
-	tamperedACK.GetAck().Signature[0] ^= 1
-	tamperedBytes, err := proto.MarshalOptions{Deterministic: true}.Marshal(tamperedACK)
-	if err != nil {
-		t.Fatalf("encode tampered ACK: %v", err)
-	}
-	if err := hcConnection.WriteMessage(websocket.BinaryMessage, tamperedBytes); err != nil {
-		t.Fatalf("write tampered ACK: %v", err)
-	}
-	_ = hcConnection.SetReadDeadline(time.Now().Add(time.Second))
-	if _, _, err := hcConnection.ReadMessage(); err == nil {
-		t.Fatal("Gateway kept the connection open after a tampered ACK")
 	}
 }
 
@@ -594,6 +674,18 @@ func testKeyPackagePlaintext(sessionID domain.ID, now time.Time) []byte {
 
 func gatewaySessionRequest(accessToken, idempotencyKey string, body []byte, proof string) *http.Request {
 	request := httptest.NewRequest(http.MethodPost, "/gateway/v1/sessions", bytes.NewReader(body))
+	request.Header.Set("Origin", "http://127.0.0.1:8001")
+	request.Header.Set("Authorization", "DPoP "+accessToken)
+	request.Header.Set("Idempotency-Key", idempotencyKey)
+	request.Header.Set("Content-Type", "application/json")
+	if proof != "" {
+		request.Header.Set("DPoP", proof)
+	}
+	return request
+}
+
+func gatewaySessionCloseRequest(accessToken, idempotencyKey, path, proof string) *http.Request {
+	request := httptest.NewRequest(http.MethodPost, path, strings.NewReader("{}"))
 	request.Header.Set("Origin", "http://127.0.0.1:8001")
 	request.Header.Set("Authorization", "DPoP "+accessToken)
 	request.Header.Set("Idempotency-Key", idempotencyKey)

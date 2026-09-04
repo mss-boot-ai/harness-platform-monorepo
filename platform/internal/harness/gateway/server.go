@@ -44,6 +44,7 @@ type Persistence interface {
 	NextConnectionGeneration(context.Context, domain.ID, time.Time) (uint64, error)
 	MarkEndpointSeen(context.Context, domain.ID, time.Time) error
 	CreateEndpointSession(context.Context, domain.Session, domain.IdempotencyRecord, domain.SecurityAuditEvent, int, []byte) (domain.Session, []byte, bool, error)
+	CloseEndpointSession(context.Context, domain.Session, domain.IdempotencyRecord, domain.SecurityAuditEvent, []byte) (domain.Session, []byte, bool, error)
 	GetSession(context.Context, domain.ID) (domain.Session, error)
 	UpdateSession(context.Context, domain.ID, func(*domain.Session) error) (domain.Session, error)
 	ListEndpoints(context.Context, string, string, int) ([]domain.Endpoint, error)
@@ -148,6 +149,8 @@ func NewHandler(config Config, persistence Persistence, random io.Reader, now fu
 	mux.HandleFunc("OPTIONS /gateway/v1/tokens/refresh", server.preflight)
 	mux.HandleFunc("POST /gateway/v1/sessions", server.createSession)
 	mux.HandleFunc("OPTIONS /gateway/v1/sessions", server.preflight)
+	mux.HandleFunc("POST /gateway/v1/sessions/{sessionId}/close", server.closeEndpointSession)
+	mux.HandleFunc("OPTIONS /gateway/v1/sessions/{sessionId}/close", server.preflight)
 	mux.HandleFunc("POST /gateway/v1/endpoints/abas", server.listABAEndpoints)
 	mux.HandleFunc("OPTIONS /gateway/v1/endpoints/abas", server.preflight)
 	return server.cors(mux), nil
