@@ -86,6 +86,32 @@ func connectionReadyTranscript(
 	return output.Bytes(), nil
 }
 
+func controlTranscript(
+	messageID []byte,
+	senderEndpointID []byte,
+	receiverEndpointID []byte,
+	sequence uint64,
+	createdAtMS int64,
+	controlType uint32,
+	payload []byte,
+) ([]byte, error) {
+	if len(messageID) != 16 || len(senderEndpointID) != 16 || len(receiverEndpointID) != 16 ||
+		sequence == 0 || controlType == 0 || len(payload) == 0 || len(payload) > maxWirePacketBytes {
+		return nil, errors.New("control transcript input is invalid")
+	}
+	var output bytes.Buffer
+	output.WriteString("mss-awp-control-v1")
+	output.Write(messageID)
+	output.Write(senderEndpointID)
+	output.Write(receiverEndpointID)
+	writeUint64(&output, sequence)
+	writeInt64(&output, createdAtMS)
+	writeUint32(&output, controlType)
+	writeUint32(&output, uint32(len(payload)))
+	output.Write(payload)
+	return output.Bytes(), nil
+}
+
 func writeUint64(output *bytes.Buffer, value uint64) {
 	var encoded [8]byte
 	binary.BigEndian.PutUint64(encoded[:], value)

@@ -57,3 +57,24 @@ func TestConnectionQueueIsBoundedAndCopiesPackets(t *testing.T) {
 		t.Fatalf("closed queue error=%v", err)
 	}
 }
+
+func TestConnectionDirectoryAllocatesMonotonicControlSequence(t *testing.T) {
+	directory := newMemoryConnectionDirectory()
+	connection := newActiveConnection(domain.ID{2}, 1, [16]byte{1}, nil)
+	if _, active := directory.activate(connection); !active {
+		t.Fatal("connection did not activate")
+	}
+	var sequences []uint64
+	for index := 0; index < 2; index++ {
+		err := directory.sendNextControl(connection.endpointID, func(sequence uint64) ([]byte, error) {
+			sequences = append(sequences, sequence)
+			return []byte{byte(sequence)}, nil
+		})
+		if err != nil {
+			t.Fatalf("send control %d: %v", index, err)
+		}
+	}
+	if len(sequences) != 2 || sequences[0] != 1 || sequences[1] != 2 {
+		t.Fatalf("control sequences=%v", sequences)
+	}
+}

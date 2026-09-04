@@ -21,6 +21,7 @@ type connectionDirectory interface {
 	activate(*activeConnection) (*activeConnection, bool)
 	remove(*activeConnection)
 	send(domain.ID, []byte) error
+	sendNextControl(domain.ID, func(uint64) ([]byte, error)) error
 	online(domain.ID) bool
 }
 
@@ -30,14 +31,15 @@ type memoryConnectionDirectory struct {
 }
 
 type activeConnection struct {
-	endpointID   domain.ID
-	generation   uint64
-	connectionID [16]byte
-	socket       *websocket.Conn
-	outbound     chan []byte
-	done         chan struct{}
-	queuedBytes  atomic.Int64
-	closeOnce    sync.Once
+	endpointID      domain.ID
+	generation      uint64
+	connectionID    [16]byte
+	socket          *websocket.Conn
+	outbound        chan []byte
+	done            chan struct{}
+	queuedBytes     atomic.Int64
+	controlSequence atomic.Uint64
+	closeOnce       sync.Once
 }
 
 func newMemoryConnectionDirectory() *memoryConnectionDirectory {
@@ -88,6 +90,27 @@ func (directory *memoryConnectionDirectory) send(endpointID domain.ID, packet []
 	directory.mu.RUnlock()
 	if connection == nil {
 		return errConnectionOffline
+	}
+	return connection.enqueue(packet)
+}
+
+func (directory *memoryConnectionDirectory) sendNextControl(
+	endpointID domain.ID,
+	build func(uint64) ([]byte, error),
+) error {
+	if build == nil {
+		return errConnectionBackpressure
+	}
+	directory.mu.RLock()
+	connection := directory.byTarget[endpointID]
+	directory.mu.RUnlock()
+	if connection == nil {
+		return errConnectionOffline
+	}
+	sequence := connection.controlSequence.Add(1)
+	packet, err := build(sequence)
+	if err != nil {
+		return err
 	}
 	return connection.enqueue(packet)
 }

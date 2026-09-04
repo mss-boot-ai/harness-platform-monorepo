@@ -275,7 +275,7 @@ func gatewayFixture(
 	credential := domain.EndpointCredential{
 		ID: gatewayID(3), EndpointID: endpoint.ID, FamilyID: endpoint.CredentialFamilyID,
 		TokenHash: sha256.Sum256(accessRaw), SigningJKT: signingJKT,
-		Scopes: []string{"endpoint:connect"}, Status: domain.CredentialStatusActive,
+		Scopes: []string{"endpoint:connect", "session:manage"}, Status: domain.CredentialStatusActive,
 		ExpiresAt: now.Add(time.Hour), CreatedAt: now, UpdatedAt: now,
 	}
 	refreshRaw := bytes.Repeat([]byte{8}, 32)
@@ -412,11 +412,24 @@ func signDPoP(
 	now time.Time,
 	jti string,
 ) string {
+	return signDPoPForPath(t, key, publicJWK, accessToken, nonce, now, jti, "/gateway/v1/ws/tickets")
+}
+
+func signDPoPForPath(
+	t *testing.T,
+	key *ecdsa.PrivateKey,
+	publicJWK awpcrypto.P256PublicJWK,
+	accessToken string,
+	nonce string,
+	now time.Time,
+	jti string,
+	path string,
+) string {
 	t.Helper()
 	header, _ := json.Marshal(map[string]any{"alg": "ES256", "jwk": publicJWK, "typ": "dpop+jwt"})
 	claims, _ := json.Marshal(map[string]any{
 		"ath": awpcrypto.AccessTokenHash(accessToken), "htm": "POST",
-		"htu": "http://127.0.0.1:8082/gateway/v1/ws/tickets", "iat": now.Unix(), "jti": jti, "nonce": nonce,
+		"htu": "http://127.0.0.1:8082" + path, "iat": now.Unix(), "jti": jti, "nonce": nonce,
 	})
 	signingInput := base64.RawURLEncoding.EncodeToString(header) + "." + base64.RawURLEncoding.EncodeToString(claims)
 	signature, err := awpcrypto.SignP1363LowS(key, []byte(signingInput))
