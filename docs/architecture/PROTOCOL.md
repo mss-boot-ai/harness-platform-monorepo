@@ -176,6 +176,20 @@ message ConnectionReady {
 }
 ```
 
+服务端签名 Transcript：
+
+```text
+"mss-awp-connection-ready-v1"
+|| connection_id
+|| u64be(connection_generation)
+|| fencing_token
+|| i64be(ready_at_ms)
+|| u32be(max_packet_bytes)
+|| u32be(max_inflight_frames)
+|| u32be(heartbeat_interval_ms)
+|| endpoint_id_from_ticket
+```
+
 同一 Endpoint 的新 READY 连接创建更高 `connection_generation`。Platform 标记旧连接 DRAINING，并拒绝旧连接产生新的控制动作。数据 Frame 可以按原始字节在新连接重放，但发送端不能让两个连接并行分配新 Sequence。
 
 ## 6. 控制 Frame

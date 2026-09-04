@@ -27,6 +27,18 @@ type P256PublicJWK struct {
 	Y       string `json:"y"`
 }
 
+func PublicJWK(publicKey *ecdsa.PublicKey) (P256PublicJWK, error) {
+	if publicKey == nil || publicKey.Curve != elliptic.P256() || publicKey.X == nil || publicKey.Y == nil ||
+		!publicKey.Curve.IsOnCurve(publicKey.X, publicKey.Y) {
+		return P256PublicJWK{}, errors.New("valid P-256 public key is required")
+	}
+	return P256PublicJWK{
+		Curve: "P-256", KeyType: "EC",
+		X: base64.RawURLEncoding.EncodeToString(fixedCoordinate(publicKey.X)),
+		Y: base64.RawURLEncoding.EncodeToString(fixedCoordinate(publicKey.Y)),
+	}, nil
+}
+
 func ParseP256PublicJWK(input []byte) (P256PublicJWK, error) {
 	var jwk P256PublicJWK
 	decoder := json.NewDecoder(bytes.NewReader(input))
@@ -133,4 +145,10 @@ func decodeCoordinate(name, value string) ([]byte, error) {
 		return nil, fmt.Errorf("JWK %s coordinate must be 32 bytes", name)
 	}
 	return decoded, nil
+}
+
+func fixedCoordinate(value *big.Int) []byte {
+	result := make([]byte, p256CoordinateBytes)
+	value.FillBytes(result)
+	return result
 }

@@ -45,6 +45,7 @@ type Config struct {
 	ReplayMaxEntries int64
 	AccessTTL        time.Duration
 	RefreshTTL       time.Duration
+	Trust            *TrustBundle
 }
 
 type Server struct {
@@ -52,11 +53,18 @@ type Server struct {
 	persistence Persistence
 	random      io.Reader
 	now         func() time.Time
+	trust       *TrustBundle
 }
 
 func NewHandler(config Config, persistence Persistence, random io.Reader, now func() time.Time) (http.Handler, error) {
 	if persistence == nil {
 		return nil, errors.New("Gateway persistence is required")
+	}
+	if random == nil {
+		random = rand.Reader
+	}
+	if now == nil {
+		now = time.Now
 	}
 	allowedOrigin, err := registration.NormalizeOrigin(config.AllowedOrigin)
 	if err != nil {
@@ -83,20 +91,33 @@ func NewHandler(config Config, persistence Persistence, random io.Reader, now fu
 	if config.RefreshTTL <= 0 || config.RefreshTTL > 30*24*time.Hour {
 		config.RefreshTTL = 24 * time.Hour
 	}
-	if random == nil {
-		random = rand.Reader
+	if config.Trust == nil {
+		config.Trust, err = NewEphemeralTrust(random, now().UTC())
+		if err != nil {
+			return nil, err
+		}
 	}
-	if now == nil {
-		now = time.Now
+	if _, err := config.Trust.Manifest(); err != nil {
+		return nil, err
 	}
-	server := &Server{config: config, persistence: persistence, random: random, now: now}
+	server := &Server{config: config, persistence: persistence, random: random, now: now, trust: config.Trust}
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET /gateway/v1/health", server.health)
+	mux.HandleFunc("GET /gateway/v1/trust-manifest", server.trustManifest)
 	mux.HandleFunc("POST /gateway/v1/ws/tickets", server.issueTicket)
 	mux.HandleFunc("OPTIONS /gateway/v1/ws/tickets", server.preflight)
 	mux.HandleFunc("POST /gateway/v1/tokens/refresh", server.refreshToken)
 	mux.HandleFunc("OPTIONS /gateway/v1/tokens/refresh", server.preflight)
 	return server.cors(mux), nil
+}
+
+func (server *Server) trustManifest(writer http.ResponseWriter, _ *http.Request) {
+	manifest, err := server.trust.Manifest()
+	if err != nil {
+		writeGatewayError(writer, http.StatusServiceUnavailable, "TRUST_MANIFEST_UNAVAILABLE", "trust manifest is unavailable")
+		return
+	}
+	writeJSON(writer, http.StatusOK, manifest)
 }
 
 func (server *Server) refreshToken(writer http.ResponseWriter, request *http.Request) {
