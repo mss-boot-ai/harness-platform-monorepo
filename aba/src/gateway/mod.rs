@@ -24,12 +24,16 @@ pub enum GatewayError {
     WebSocket(#[from] tungstenite::Error),
     #[error("ABA Gateway AWP handshake failed")]
     Protocol,
+    #[error("ABA Gateway protocol check failed: {0}")]
+    ProtocolStage(&'static str),
     #[error(transparent)]
     Crypto(#[from] crate::crypto::CryptoError),
     #[error(transparent)]
     KeyPackage(#[from] crate::crypto::key_package::KeyPackageError),
     #[error(transparent)]
     Frame(#[from] crate::crypto::frame::FrameCryptoError),
+    #[error(transparent)]
+    Agent(#[from] crate::process::ProcessError),
     #[error(transparent)]
     KeyStore(#[from] crate::identity::KeyStoreError),
 }

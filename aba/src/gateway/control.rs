@@ -312,18 +312,17 @@ impl ControlState {
             .as_slice()
             .try_into()
             .map_err(|_| GatewayError::Protocol)?;
-        let expected_sequence = self
+        let sequence_is_contiguous = self
             .hc_inbound_sequences
             .get(&sender_id)
-            .copied()
-            .unwrap_or(0)
-            .checked_add(1)
-            .ok_or(GatewayError::Protocol)?;
+            .map_or(control_frame.control_sequence > 0, |previous| {
+                previous.checked_add(1) == Some(control_frame.control_sequence)
+            });
         let now_ms = unix_millis(now)?;
         if control_frame.message_id.len() != 16
             || sender_id.iter().all(|value| *value == 0)
             || control_frame.receiver_endpoint_id != endpoint_id
-            || control_frame.control_sequence != expected_sequence
+            || !sequence_is_contiguous
             || control_frame.payload.is_empty()
             || control_frame.signature.len() != 64
             || control_frame.created_at_ms < now_ms - CONTROL_TIME_SKEW_MS
@@ -397,27 +396,40 @@ impl ControlState {
             endpoint_id,
             &session.material.recipient_hc_endpoint_id,
         )?;
-        if !session.active
-            || frame.crypto_suite_id != 1
+        if !session.active {
+            return Err(GatewayError::ProtocolStage("session is not active"));
+        }
+        if frame.crypto_suite_id != 1
             || frame.frame_type != WireFrameType::AcpTransportFrame as i32
             || frame.flags != 0
-            || frame.message_id.len() != 16
+        {
+            return Err(GatewayError::ProtocolStage("encrypted frame type"));
+        }
+        if frame.message_id.len() != 16
             || frame.channel_id != channel_id
             || frame.sender_endpoint_id != session.material.recipient_hc_endpoint_id
             || frame.receiver_endpoint_id != endpoint_id
             || frame.direction != WireDirection::HcToAba as i32
-            || frame.sequence != session.hc_frame_sequence + 1
-            || frame.key_generation != session.material.generation
+        {
+            return Err(GatewayError::ProtocolStage("encrypted frame route"));
+        }
+        if frame.sequence != session.hc_frame_sequence + 1 {
+            return Err(GatewayError::ProtocolStage("encrypted frame sequence"));
+        }
+        if frame.key_generation != session.material.generation
             || frame.key_id != session.material.key_id
-            || frame.ciphertext.len() < 16
+        {
+            return Err(GatewayError::ProtocolStage("encrypted frame key"));
+        }
+        if frame.ciphertext.len() < 16
             || frame.ciphertext.len() > 1 << 20
             || frame.signature.len() != 64
         {
-            return Err(GatewayError::Protocol);
+            return Err(GatewayError::ProtocolStage("encrypted frame bounds"));
         }
         let now_ms = unix_millis(now)?;
         if frame.created_at_ms < now_ms - 300_000 || frame.created_at_ms > now_ms + 300_000 {
-            return Err(GatewayError::Protocol);
+            return Err(GatewayError::ProtocolStage("encrypted frame time"));
         }
         let aad = FrameAadV1 {
             crypto_suite: CryptoSuite::Suite0001,
@@ -452,7 +464,7 @@ impl ControlState {
         let responses = session
             .agent
             .prompt(&plaintext, &lower_hex(&session_id))
-            .map_err(|_| GatewayError::Protocol)?;
+            .map_err(GatewayError::from)?;
         session.hc_frame_sequence = frame.sequence;
         let mut packets = Vec::with_capacity(responses.len());
         for response in responses {
@@ -804,7 +816,7 @@ mod tests {
             message_id: &ack_message_id,
             sender_endpoint_id: &hc_endpoint_id,
             receiver_endpoint_id: &endpoint_id,
-            sequence: 1,
+            sequence: 7,
             created_at_ms: unix_millis(now)?,
             control_type: ControlType::SessionKeyPackageAck as u32,
             payload: &ack_payload,
@@ -817,7 +829,7 @@ mod tests {
                 message_id: ack_message_id.to_vec(),
                 sender_endpoint_id: hc_endpoint_id.to_vec(),
                 receiver_endpoint_id: endpoint_id.to_vec(),
-                control_sequence: 1,
+                control_sequence: 7,
                 created_at_ms: unix_millis(now)?,
                 r#type: ControlType::SessionKeyPackageAck as i32,
                 payload: ack_payload,
