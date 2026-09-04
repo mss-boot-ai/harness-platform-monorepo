@@ -268,6 +268,10 @@ message OpenTunnelRequest {
   uint64 requested_key_generation = 6;
   repeated string requested_acp_capabilities = 7;
   int64 expires_at_ms = 8;
+  bytes hc_kem_public_key = 9; // SEC1 uncompressed P-256, 65 bytes.
+  string hc_kem_jkt = 10; // RFC 7638 base64url SHA-256 thumbprint.
+  bytes hc_signing_public_key = 11; // SEC1 uncompressed P-256, 65 bytes.
+  string hc_signing_jkt = 12; // RFC 7638 base64url SHA-256 thumbprint.
 }
 
 message OpenTunnelResult {

@@ -1,5 +1,11 @@
-import type { EndpointIdentity } from '@harness/hc-core';
-import { useEffect, useState } from 'react';
+import {
+  createSessionKeyPackageAckPacket,
+  openSessionKeyPackagePacket,
+  type EndpointIdentity,
+  type OpenedSessionKeyPackage,
+  type ReadyGatewayConnection,
+} from '@harness/hc-core';
+import { useEffect, useRef, useState } from 'react';
 import {
   createEndpointSession,
   getEndpointSession,
@@ -13,9 +19,11 @@ import {
 const POLL_ATTEMPTS = 20;
 
 export function SessionSetup({
+  connection,
   identity,
   registration,
 }: {
+  readonly connection: ReadyGatewayConnection;
   readonly identity: EndpointIdentity;
   readonly registration: RegistrationSession;
 }) {
@@ -26,6 +34,84 @@ export function SessionSetup({
   const [session, setSession] = useState<EndpointSessionSummary | null>(null);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [keyReady, setKeyReady] = useState(false);
+  const pendingPackets = useRef<Uint8Array[]>([]);
+  const processing = useRef<Promise<void>>(Promise.resolve());
+  const openedPackage = useRef<OpenedSessionKeyPackage | null>(null);
+  const lastPackageSequence = useRef(0n);
+  const outboundControlSequence = useRef(0n);
+
+  useEffect(() => {
+    const processPacket = async (encoded: Uint8Array) => {
+      if (session === null) {
+        pendingPackets.current.push(encoded);
+        return;
+      }
+      const aba = endpoints.find((endpoint) => endpoint.id === session.abaEndpointId);
+      if (aba === undefined) {
+        throw new Error('Session ABA identity is unavailable');
+      }
+      const opened = await openSessionKeyPackagePacket(encoded, {
+        abaEndpointId: aba.id,
+        abaSigningPublicJwk: aba.signingPublicJwk,
+        hcEndpointId: registration.endpointId,
+        identity,
+        sessionId: session.sessionId,
+      });
+      if (opened === null) {
+        return;
+      }
+      if (opened.controlSequence <= lastPackageSequence.current) {
+        throw new Error('SessionKeyPackage control sequence replayed');
+      }
+      zeroOpenedPackage(openedPackage.current);
+      openedPackage.current = opened;
+      lastPackageSequence.current = opened.controlSequence;
+      setKeyReady(true);
+      outboundControlSequence.current += 1n;
+      const acknowledgment = await createSessionKeyPackageAckPacket(identity, {
+        abaEndpointId: aba.id,
+        controlSequence: outboundControlSequence.current,
+        hcEndpointId: registration.endpointId,
+        keyPackageId: opened.keyPackageId,
+        sessionId: session.sessionId,
+      });
+      if (connection.socket.readyState !== WebSocket.OPEN) {
+        throw new Error('Gateway connection closed before key acknowledgment');
+      }
+      connection.socket.send(new Uint8Array(acknowledgment).buffer);
+      for (let attempt = 0; attempt < POLL_ATTEMPTS; attempt += 1) {
+        const current = await getEndpointSession(session.sessionId);
+        setSession(current);
+        if (current.status === 'ACTIVE' || current.status === 'FAILED') {
+          break;
+        }
+        await new Promise((resolve) => setTimeout(resolve, 250));
+      }
+    };
+    const schedule = (encoded: Uint8Array) => {
+      processing.current = processing.current
+        .then(() => processPacket(encoded))
+        .catch(() => {
+          setError('Session Key Package 验证失败。');
+        });
+    };
+    const message = (event: MessageEvent) => {
+      if (event.data instanceof ArrayBuffer && event.data.byteLength <= 1_048_576) {
+        schedule(new Uint8Array(event.data));
+      }
+    };
+    connection.socket.addEventListener('message', message);
+    if (session !== null) {
+      const queued = pendingPackets.current.splice(0);
+      for (const encoded of queued) {
+        schedule(encoded);
+      }
+    }
+    return () => connection.socket.removeEventListener('message', message);
+  }, [connection.socket, endpoints, identity, registration.endpointId, session]);
+
+  useEffect(() => () => zeroOpenedPackage(openedPackage.current), []);
 
   useEffect(() => {
     let active = true;
@@ -56,6 +142,10 @@ export function SessionSetup({
     }
     setBusy(true);
     setError(null);
+    setKeyReady(false);
+    zeroOpenedPackage(openedPackage.current);
+    openedPackage.current = null;
+    lastPackageSequence.current = 0n;
     try {
       let current = await createEndpointSession(identity, registration, {
         abaEndpointId: selectedABA,
@@ -83,8 +173,8 @@ export function SessionSetup({
           <p className="eyebrow">STEP 4 OF 4</p>
           <h2 id="session-title">创建 ACP Session</h2>
         </div>
-        <span className={`status-pill ${session?.status === 'WAITING_KEY' ? 'success' : 'pending'}`}>
-          {session?.status ?? '需要本地策略'}
+        <span className={`status-pill ${keyReady ? 'success' : 'pending'}`}>
+          {keyReady ? 'KEY READY' : session?.status ?? '需要本地策略'}
         </span>
       </div>
       <p className="platform-copy">
@@ -120,9 +210,20 @@ export function SessionSetup({
       {session === null ? null : (
         <p className="session-result">
           Session {session.sessionId.slice(0, 10)}… · {session.status}
+          {keyReady ? ' · HPKE KEY READY' : ''}
         </p>
       )}
       {error === null ? null : <p className="error-banner" role="alert">{error}</p>}
     </section>
   );
+}
+
+function zeroOpenedPackage(value: OpenedSessionKeyPackage | null): void {
+  if (value === null) {
+    return;
+  }
+  value.hcToAbaKey.fill(0);
+  value.abaToHcKey.fill(0);
+  value.material.srk.fill(0);
+  value.material.sessionNonce.fill(0);
 }

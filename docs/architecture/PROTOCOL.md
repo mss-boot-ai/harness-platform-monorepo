@@ -260,10 +260,14 @@ message OpenTunnelRequest {
   uint64 requested_key_generation = 6;
   repeated string requested_acp_capabilities = 7;
   int64 expires_at_ms = 8;
+  bytes hc_kem_public_key = 9; // SEC1 uncompressed P-256, 65 bytes.
+  string hc_kem_jkt = 10;
+  bytes hc_signing_public_key = 11; // SEC1 uncompressed P-256, 65 bytes.
+  string hc_signing_jkt = 12;
 }
 ```
 
-协议层禁止包含 `command`、`args`、`cwd`、`env`、脚本、二进制或任意路径。ABA 只按本地配置映射两个 ID。
+协议层禁止包含 `command`、`args`、`cwd`、`env`、脚本、可执行二进制或任意路径。HC KEM/Signing Public Key 是已授权 Endpoint 的公开身份材料，只能用于当前 Session Key Package 与 ACK 验证，ABA 必须验证各自 JKT。ABA 只按本地配置映射两个 ID。
 
 ### 6.3 OpenTunnelResult
 

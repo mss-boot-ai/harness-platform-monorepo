@@ -1,3 +1,4 @@
+use std::collections::HashMap;
 use std::fs;
 #[cfg(unix)]
 use std::os::unix::fs::PermissionsExt as _;
@@ -9,18 +10,40 @@ use prost::Message as _;
 use super::GatewayError;
 use super::transcript::{ControlInput, control};
 use crate::config::AgentConfig;
+use crate::crypto::key_package::{
+    KeyPackageEnvelope, KeyPackageMaterial, SUITE_NAME, key_package_envelope_transcript,
+    p256_public_jwk_from_sec1, seal_key_package,
+};
 use crate::crypto::{sign_p1363_low_s, verify_p1363_low_s};
 use crate::identity::EndpointIdentity;
 use crate::protocol::awpv1::{
-    ControlFrame, ControlType, OpenTunnelRequest, OpenTunnelResult, OpenTunnelStatus, WirePacket,
-    wire_packet,
+    ControlFrame, ControlType, OpenTunnelRequest, OpenTunnelResult, OpenTunnelStatus,
+    SessionKeyPackage, SessionKeyPackageAck, WirePacket, wire_packet,
 };
 
 const CONTROL_TIME_SKEW_MS: i64 = 60_000;
 
 pub(super) struct ControlState {
-    inbound_sequence: u64,
+    platform_inbound_sequence: u64,
+    hc_inbound_sequences: HashMap<[u8; 16], u64>,
     outbound_sequence: u64,
+    sessions: HashMap<[u8; 16], LocalSession>,
+}
+
+struct LocalSession {
+    material: KeyPackageMaterial,
+    hc_signing_key: VerifyingKey,
+    key_package_id: [u8; 16],
+    active: bool,
+}
+
+pub(super) struct ControlContext<'a> {
+    pub endpoint_id: &'a [u8; 16],
+    pub online_key: &'a VerifyingKey,
+    pub identity: &'a EndpointIdentity,
+    pub config: &'a AgentConfig,
+    pub credential_id: &'a [u8; 16],
+    pub now: SystemTime,
 }
 
 struct PolicyDecision {
@@ -32,20 +55,26 @@ struct PolicyDecision {
 impl ControlState {
     pub fn new() -> Self {
         Self {
-            inbound_sequence: 0,
+            platform_inbound_sequence: 0,
+            hc_inbound_sequences: HashMap::new(),
             outbound_sequence: 0,
+            sessions: HashMap::new(),
         }
     }
 
     pub fn handle(
         &mut self,
         packet: WirePacket,
-        endpoint_id: &[u8; 16],
-        online_key: &VerifyingKey,
-        identity: &EndpointIdentity,
-        config: &AgentConfig,
-        now: SystemTime,
-    ) -> Result<Vec<u8>, GatewayError> {
+        context: ControlContext<'_>,
+    ) -> Result<Vec<Vec<u8>>, GatewayError> {
+        let ControlContext {
+            endpoint_id,
+            online_key,
+            identity,
+            config,
+            credential_id,
+            now,
+        } = context;
         if packet.wire_major != 1 || packet.wire_minor != 0 || packet.packet_id.len() != 16 {
             return Err(GatewayError::Protocol);
         }
@@ -53,11 +82,14 @@ impl ControlState {
             Some(wire_packet::Body::Control(value)) => value,
             _ => return Err(GatewayError::Protocol),
         };
+        if control_frame.r#type == ControlType::SessionKeyPackageAck as i32 {
+            return self.handle_key_package_ack(control_frame, endpoint_id, now);
+        }
         if control_frame.r#type != ControlType::OpenTunnelRequest as i32
             || control_frame.message_id.len() != 16
             || control_frame.sender_endpoint_id != [0_u8; 16]
             || control_frame.receiver_endpoint_id != endpoint_id
-            || control_frame.control_sequence != self.inbound_sequence + 1
+            || control_frame.control_sequence != self.platform_inbound_sequence + 1
             || control_frame.payload.is_empty()
             || control_frame.signature.len() != 64
         {
@@ -85,53 +117,239 @@ impl ControlState {
         let request = OpenTunnelRequest::decode(control_frame.payload.as_slice())
             .map_err(|_| GatewayError::Protocol)?;
         validate_open_request(&request, now_ms)?;
-        let decision = evaluate_policy(config, &request);
-        self.inbound_sequence = control_frame.control_sequence;
-        self.outbound_sequence = self
-            .outbound_sequence
-            .checked_add(1)
-            .ok_or(GatewayError::Protocol)?;
+        let decision = if self.sessions.len() >= usize::from(config.limits.max_sessions) {
+            PolicyDecision {
+                status: OpenTunnelStatus::ResourceBusy,
+                stable_error_code: "RESOURCE_BUSY".to_owned(),
+                negotiated_capabilities: Vec::new(),
+            }
+        } else {
+            evaluate_policy(config, &request)
+        };
+        self.platform_inbound_sequence = control_frame.control_sequence;
         let payload = OpenTunnelResult {
-            session_id: request.session_id,
+            session_id: request.session_id.clone(),
             status: decision.status as i32,
-            stable_error_code: decision.stable_error_code,
+            stable_error_code: decision.stable_error_code.clone(),
             accepted_authorization_revision: if decision.status == OpenTunnelStatus::Accepted {
                 request.authorization_revision
             } else {
                 0
             },
             active_key_generation: 0,
-            negotiated_capability_hints: decision.negotiated_capabilities,
+            negotiated_capability_hints: decision.negotiated_capabilities.clone(),
         }
         .encode_to_vec();
+        let mut responses = vec![self.signed_control(
+            endpoint_id,
+            request.hc_endpoint_id.as_slice(),
+            ControlType::OpenTunnelResult,
+            payload,
+            identity,
+            now_ms,
+        )?];
+        if decision.status != OpenTunnelStatus::Accepted {
+            return Ok(responses);
+        }
+
+        let session_id: [u8; 16] = request
+            .session_id
+            .as_slice()
+            .try_into()
+            .map_err(|_| GatewayError::Protocol)?;
+        let recipient = p256_public_jwk_from_sec1(&request.hc_kem_public_key, &request.hc_kem_jkt)?;
+        let mut hc_to_aba_prefix = random_array::<4>();
+        let aba_to_hc_prefix = random_array::<4>();
+        if hc_to_aba_prefix == aba_to_hc_prefix {
+            hc_to_aba_prefix[0] ^= 1;
+        }
+        let expires_at_ms = now_ms
+            .checked_add(3_600_000)
+            .ok_or(GatewayError::Protocol)?;
+        let material = KeyPackageMaterial {
+            session_id,
+            generation: request.requested_key_generation,
+            sender_aba_endpoint_id: *endpoint_id,
+            recipient_hc_endpoint_id: request
+                .hc_endpoint_id
+                .as_slice()
+                .try_into()
+                .map_err(|_| GatewayError::Protocol)?,
+            policy_revision: request.authorization_revision,
+            srk: random_array::<32>(),
+            session_nonce: random_array::<32>(),
+            hc_to_aba_nonce_prefix: hc_to_aba_prefix,
+            aba_to_hc_nonce_prefix: aba_to_hc_prefix,
+            not_before_ms: now_ms,
+            expires_at_ms,
+        };
+        let sealed = seal_key_package(&recipient, &material)?;
+        let key_package_id = random_array::<16>();
+        let envelope = key_package_envelope_transcript(KeyPackageEnvelope {
+            key_package_id: &key_package_id,
+            session_id: &session_id,
+            generation: material.generation,
+            issuer_aba_endpoint_id: endpoint_id,
+            recipient_hc_endpoint_id: &material.recipient_hc_endpoint_id,
+            issuer_credential_id: credential_id,
+            policy_revision: material.policy_revision,
+            not_before_ms: material.not_before_ms,
+            expires_at_ms: material.expires_at_ms,
+            hpke_enc: &sealed.enc,
+            hpke_ciphertext: &sealed.ciphertext,
+        })?;
+        let package = SessionKeyPackage {
+            session_id: session_id.to_vec(),
+            key_generation: material.generation,
+            issuer_aba_endpoint_id: endpoint_id.to_vec(),
+            recipient_hc_endpoint_id: material.recipient_hc_endpoint_id.to_vec(),
+            crypto_suite: SUITE_NAME.to_owned(),
+            hpke_enc: sealed.enc,
+            hpke_ciphertext: sealed.ciphertext,
+            not_before_ms: material.not_before_ms,
+            expires_at_ms: material.expires_at_ms,
+            issuer_signature: sign_p1363_low_s(identity.signing_key(), &envelope).to_vec(),
+            key_package_id: key_package_id.to_vec(),
+            issuer_credential_id: credential_id.to_vec(),
+            policy_revision: material.policy_revision,
+        }
+        .encode_to_vec();
+        responses.push(self.signed_control(
+            endpoint_id,
+            &material.recipient_hc_endpoint_id,
+            ControlType::SessionKeyPackage,
+            package,
+            identity,
+            now_ms,
+        )?);
+        let hc_signing_jwk =
+            p256_public_jwk_from_sec1(&request.hc_signing_public_key, &request.hc_signing_jkt)?;
+        self.sessions.insert(
+            session_id,
+            LocalSession {
+                material,
+                hc_signing_key: hc_signing_jwk.verifying_key()?,
+                key_package_id,
+                active: false,
+            },
+        );
+        Ok(responses)
+    }
+
+    fn signed_control(
+        &mut self,
+        endpoint_id: &[u8; 16],
+        receiver_endpoint_id: &[u8],
+        control_type: ControlType,
+        payload: Vec<u8>,
+        identity: &EndpointIdentity,
+        created_at_ms: i64,
+    ) -> Result<Vec<u8>, GatewayError> {
+        self.outbound_sequence = self
+            .outbound_sequence
+            .checked_add(1)
+            .ok_or(GatewayError::Protocol)?;
         let message_id = random_array::<16>();
-        let created_at_ms = unix_millis(SystemTime::now())?;
         let transcript = control(ControlInput {
             message_id: &message_id,
             sender_endpoint_id: endpoint_id,
-            receiver_endpoint_id: request.hc_endpoint_id.as_slice(),
+            receiver_endpoint_id,
             sequence: self.outbound_sequence,
             created_at_ms,
-            control_type: ControlType::OpenTunnelResult as u32,
+            control_type: control_type as u32,
             payload: &payload,
         })?;
-        let signature = sign_p1363_low_s(identity.signing_key(), &transcript);
-        let result = WirePacket {
+        let packet = WirePacket {
             wire_major: 1,
             wire_minor: 0,
             packet_id: random_array::<16>().to_vec(),
             body: Some(wire_packet::Body::Control(ControlFrame {
                 message_id: message_id.to_vec(),
                 sender_endpoint_id: endpoint_id.to_vec(),
-                receiver_endpoint_id: request.hc_endpoint_id,
+                receiver_endpoint_id: receiver_endpoint_id.to_vec(),
                 control_sequence: self.outbound_sequence,
                 created_at_ms,
-                r#type: ControlType::OpenTunnelResult as i32,
+                r#type: control_type as i32,
                 payload,
-                signature: signature.to_vec(),
+                signature: sign_p1363_low_s(identity.signing_key(), &transcript).to_vec(),
             })),
         };
-        Ok(result.encode_to_vec())
+        Ok(packet.encode_to_vec())
+    }
+
+    fn handle_key_package_ack(
+        &mut self,
+        control_frame: ControlFrame,
+        endpoint_id: &[u8; 16],
+        now: SystemTime,
+    ) -> Result<Vec<Vec<u8>>, GatewayError> {
+        let sender_id: [u8; 16] = control_frame
+            .sender_endpoint_id
+            .as_slice()
+            .try_into()
+            .map_err(|_| GatewayError::Protocol)?;
+        let expected_sequence = self
+            .hc_inbound_sequences
+            .get(&sender_id)
+            .copied()
+            .unwrap_or(0)
+            .checked_add(1)
+            .ok_or(GatewayError::Protocol)?;
+        let now_ms = unix_millis(now)?;
+        if control_frame.message_id.len() != 16
+            || sender_id.iter().all(|value| *value == 0)
+            || control_frame.receiver_endpoint_id != endpoint_id
+            || control_frame.control_sequence != expected_sequence
+            || control_frame.payload.is_empty()
+            || control_frame.signature.len() != 64
+            || control_frame.created_at_ms < now_ms - CONTROL_TIME_SKEW_MS
+            || control_frame.created_at_ms > now_ms + CONTROL_TIME_SKEW_MS
+        {
+            return Err(GatewayError::Protocol);
+        }
+        let acknowledgment = SessionKeyPackageAck::decode(control_frame.payload.as_slice())
+            .map_err(|_| GatewayError::Protocol)?;
+        let session_id: [u8; 16] = acknowledgment
+            .session_id
+            .as_slice()
+            .try_into()
+            .map_err(|_| GatewayError::Protocol)?;
+        let session = self
+            .sessions
+            .get(&session_id)
+            .ok_or(GatewayError::Protocol)?;
+        if session.active
+            || sender_id != session.material.recipient_hc_endpoint_id
+            || acknowledgment.recipient_hc_endpoint_id != sender_id
+            || acknowledgment.key_package_id != session.key_package_id
+            || acknowledgment.key_generation != session.material.generation
+            || acknowledgment.acknowledged_at_ms != control_frame.created_at_ms
+        {
+            return Err(GatewayError::Protocol);
+        }
+        let transcript = control(ControlInput {
+            message_id: &control_frame.message_id,
+            sender_endpoint_id: &control_frame.sender_endpoint_id,
+            receiver_endpoint_id: &control_frame.receiver_endpoint_id,
+            sequence: control_frame.control_sequence,
+            created_at_ms: control_frame.created_at_ms,
+            control_type: ControlType::SessionKeyPackageAck as u32,
+            payload: &control_frame.payload,
+        })?;
+        if !verify_p1363_low_s(
+            &session.hc_signing_key,
+            &transcript,
+            &control_frame.signature,
+        ) {
+            return Err(GatewayError::Trust);
+        }
+        self.hc_inbound_sequences
+            .insert(sender_id, control_frame.control_sequence);
+        self.sessions
+            .get_mut(&session_id)
+            .ok_or(GatewayError::Protocol)?
+            .active = true;
+        Ok(Vec::new())
     }
 }
 
@@ -146,6 +364,12 @@ fn validate_open_request(request: &OpenTunnelRequest, now_ms: i64) -> Result<(),
         || request.expires_at_ms > now_ms + CONTROL_TIME_SKEW_MS
         || request.requested_acp_capabilities.is_empty()
         || request.requested_acp_capabilities.len() > 8
+        || request.hc_kem_public_key.len() != 65
+        || request.hc_kem_public_key[0] != 4
+        || request.hc_kem_jkt.is_empty()
+        || request.hc_signing_public_key.len() != 65
+        || request.hc_signing_public_key[0] != 4
+        || request.hc_signing_jkt.is_empty()
     {
         return Err(GatewayError::Protocol);
     }
@@ -246,6 +470,7 @@ mod tests {
         CONFIG_SCHEMA_VERSION, Limits, PlatformConfig, RuntimeProfile, WorkspaceProfile,
     };
     use crate::identity::DevFileKeyStore;
+    use base64::{Engine as _, engine::general_purpose::URL_SAFE_NO_PAD};
     use p256::ecdsa::SigningKey;
     use url::Url;
 
@@ -289,7 +514,7 @@ mod tests {
         let endpoint_id = [2_u8; 16];
         let hc_endpoint_id = [3_u8; 16];
         let now = UNIX_EPOCH + std::time::Duration::from_secs(1_800_000_000);
-        let request = OpenTunnelRequest {
+        let request = with_test_hc_kem(OpenTunnelRequest {
             session_id: vec![4_u8; 16],
             hc_endpoint_id: hc_endpoint_id.to_vec(),
             runtime_profile_id: "test-agent".to_owned(),
@@ -298,18 +523,24 @@ mod tests {
             requested_key_generation: 1,
             requested_acp_capabilities: vec!["prompt".to_owned(), "session".to_owned()],
             expires_at_ms: unix_millis(now)? + 30_000,
-        };
+            ..Default::default()
+        });
         let packet = platform_open_packet(&online, &endpoint_id, request, unix_millis(now)?, 1)?;
         let mut state = ControlState::new();
+        let credential_id = [15_u8; 16];
         let encoded = state.handle(
             packet,
-            &endpoint_id,
-            online.verifying_key(),
-            &identity,
-            &config,
-            now,
+            ControlContext {
+                endpoint_id: &endpoint_id,
+                online_key: online.verifying_key(),
+                identity: &identity,
+                config: &config,
+                credential_id: &credential_id,
+                now,
+            },
         )?;
-        let response = WirePacket::decode(encoded.as_slice())?;
+        assert_eq!(encoded.len(), 2);
+        let response = WirePacket::decode(encoded[0].as_slice())?;
         let frame = match response.body {
             Some(wire_packet::Body::Control(value)) => value,
             _ => return Err("response is not a control frame".into()),
@@ -336,6 +567,73 @@ mod tests {
             &transcript,
             &frame.signature,
         ));
+        let package_packet = WirePacket::decode(encoded[1].as_slice())?;
+        let package_frame = match package_packet.body {
+            Some(wire_packet::Body::Control(value)) => value,
+            _ => return Err("second response is not a control frame".into()),
+        };
+        assert_eq!(package_frame.r#type, ControlType::SessionKeyPackage as i32);
+        assert_eq!(package_frame.control_sequence, 2);
+        let package = SessionKeyPackage::decode(package_frame.payload.as_slice())?;
+        assert_eq!(package.session_id, vec![4_u8; 16]);
+        assert_eq!(package.issuer_credential_id, vec![15_u8; 16]);
+        assert_eq!(package.crypto_suite, SUITE_NAME);
+        assert_eq!(package.hpke_enc.len(), 65);
+        assert_eq!(package.hpke_ciphertext.len(), 157);
+        let mut hc_scalar = [0_u8; 32];
+        hc_scalar[31] = 1;
+        let hc_signing = SigningKey::from_slice(&hc_scalar)?;
+        let ack_payload = SessionKeyPackageAck {
+            session_id: package.session_id.clone(),
+            key_generation: package.key_generation,
+            key_package_id: package.key_package_id,
+            recipient_hc_endpoint_id: hc_endpoint_id.to_vec(),
+            acknowledged_at_ms: unix_millis(now)?,
+        }
+        .encode_to_vec();
+        let ack_message_id = [18_u8; 16];
+        let ack_transcript = control(ControlInput {
+            message_id: &ack_message_id,
+            sender_endpoint_id: &hc_endpoint_id,
+            receiver_endpoint_id: &endpoint_id,
+            sequence: 1,
+            created_at_ms: unix_millis(now)?,
+            control_type: ControlType::SessionKeyPackageAck as u32,
+            payload: &ack_payload,
+        })?;
+        let ack_packet = WirePacket {
+            wire_major: 1,
+            wire_minor: 0,
+            packet_id: vec![19_u8; 16],
+            body: Some(wire_packet::Body::Control(ControlFrame {
+                message_id: ack_message_id.to_vec(),
+                sender_endpoint_id: hc_endpoint_id.to_vec(),
+                receiver_endpoint_id: endpoint_id.to_vec(),
+                control_sequence: 1,
+                created_at_ms: unix_millis(now)?,
+                r#type: ControlType::SessionKeyPackageAck as i32,
+                payload: ack_payload,
+                signature: sign_p1363_low_s(&hc_signing, &ack_transcript).to_vec(),
+            })),
+        };
+        let ack_response = state.handle(
+            ack_packet,
+            ControlContext {
+                endpoint_id: &endpoint_id,
+                online_key: online.verifying_key(),
+                identity: &identity,
+                config: &config,
+                credential_id: &credential_id,
+                now,
+            },
+        )?;
+        assert!(ack_response.is_empty());
+        assert!(
+            state
+                .sessions
+                .get(&[4_u8; 16])
+                .is_some_and(|session| session.active)
+        );
         Ok(())
     }
 
@@ -349,7 +647,7 @@ mod tests {
         let online = SigningKey::from_slice(&[8_u8; 32])?;
         let endpoint_id = [5_u8; 16];
         let now = SystemTime::now();
-        let request = OpenTunnelRequest {
+        let request = with_test_hc_kem(OpenTunnelRequest {
             session_id: vec![6_u8; 16],
             hc_endpoint_id: vec![7_u8; 16],
             runtime_profile_id: "missing".to_owned(),
@@ -358,7 +656,8 @@ mod tests {
             requested_key_generation: 1,
             requested_acp_capabilities: vec!["prompt".to_owned()],
             expires_at_ms: unix_millis(now)? + 30_000,
-        };
+            ..Default::default()
+        });
         let mut packet =
             platform_open_packet(&online, &endpoint_id, request, unix_millis(now)?, 1)?;
         let Some(wire_packet::Body::Control(frame)) = packet.body.as_mut() else {
@@ -375,11 +674,14 @@ mod tests {
         assert!(matches!(
             ControlState::new().handle(
                 packet,
-                &endpoint_id,
-                online.verifying_key(),
-                &identity,
-                &config,
-                now,
+                ControlContext {
+                    endpoint_id: &endpoint_id,
+                    online_key: online.verifying_key(),
+                    identity: &identity,
+                    config: &config,
+                    credential_id: &[16_u8; 16],
+                    now,
+                }
             ),
             Err(GatewayError::Trust)
         ));
@@ -397,7 +699,7 @@ mod tests {
         let online = SigningKey::from_slice(&[11_u8; 32])?;
         let endpoint_id = [12_u8; 16];
         let now = SystemTime::now();
-        let request = OpenTunnelRequest {
+        let request = with_test_hc_kem(OpenTunnelRequest {
             session_id: vec![13_u8; 16],
             hc_endpoint_id: vec![14_u8; 16],
             runtime_profile_id: "missing".to_owned(),
@@ -406,7 +708,8 @@ mod tests {
             requested_key_generation: 1,
             requested_acp_capabilities: vec!["prompt".to_owned()],
             expires_at_ms: unix_millis(now)? + 30_000,
-        };
+            ..Default::default()
+        });
         let packet = platform_open_packet(&online, &endpoint_id, request, unix_millis(now)?, 1)?;
         let config = AgentConfig {
             schema_version: CONFIG_SCHEMA_VERSION,
@@ -417,13 +720,17 @@ mod tests {
         };
         let encoded = ControlState::new().handle(
             packet,
-            &endpoint_id,
-            online.verifying_key(),
-            &identity,
-            &config,
-            now,
+            ControlContext {
+                endpoint_id: &endpoint_id,
+                online_key: online.verifying_key(),
+                identity: &identity,
+                config: &config,
+                credential_id: &[17_u8; 16],
+                now,
+            },
         )?;
-        let response = WirePacket::decode(encoded.as_slice())?;
+        assert_eq!(encoded.len(), 1);
+        let response = WirePacket::decode(encoded[0].as_slice())?;
         let frame = match response.body {
             Some(wire_packet::Body::Control(value)) => value,
             _ => return Err("response is not a control frame".into()),
@@ -434,6 +741,25 @@ mod tests {
         assert_eq!(result.accepted_authorization_revision, 0);
         assert!(result.negotiated_capability_hints.is_empty());
         Ok(())
+    }
+
+    fn with_test_hc_kem(mut request: OpenTunnelRequest) -> OpenTunnelRequest {
+        let mut public = vec![4_u8];
+        public.extend_from_slice(
+            &URL_SAFE_NO_PAD
+                .decode("axfR8uEsQkf4vOblY6RA8ncDfYEt6zOg9KE5RdiYwpY")
+                .unwrap_or_default(),
+        );
+        public.extend_from_slice(
+            &URL_SAFE_NO_PAD
+                .decode("T-NC4v4af5uO5-tKfA-eFivOM1drMV7Oy7ZAaDe_UfU")
+                .unwrap_or_default(),
+        );
+        request.hc_kem_public_key = public;
+        request.hc_kem_jkt = "xx0BcA-wMohw8atYDJOe6peGModklG2wRHBlXHMvl0M".to_owned();
+        request.hc_signing_public_key = request.hc_kem_public_key.clone();
+        request.hc_signing_jkt = request.hc_kem_jkt.clone();
+        request
     }
 
     fn platform_open_packet(

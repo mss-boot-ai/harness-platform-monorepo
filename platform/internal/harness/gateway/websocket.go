@@ -115,7 +115,7 @@ func (server *Server) websocket(writer http.ResponseWriter, request *http.Reques
 			active.close(websocket.CloseUnsupportedData, "binary AWP packet required")
 			return
 		}
-		if err := server.handleReadyPacket(request.Context(), active, endpoint, message, server.now().UTC()); err != nil {
+		if err := server.handleReadyPacket(request.Context(), active, endpoint, credential, message, server.now().UTC()); err != nil {
 			active.close(websocket.ClosePolicyViolation, "AWP packet rejected")
 			return
 		}

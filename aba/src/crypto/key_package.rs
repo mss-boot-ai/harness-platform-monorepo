@@ -96,6 +96,29 @@ pub fn seal_key_package(
     })
 }
 
+pub fn p256_public_jwk_from_sec1(
+    encoded: &[u8],
+    expected_jkt: &str,
+) -> Result<P256PublicJwk, KeyPackageError> {
+    if encoded.len() != 65 || encoded[0] != 4 || expected_jkt.is_empty() {
+        return Err(KeyPackageError::RecipientKey);
+    }
+    let jwk = P256PublicJwk {
+        curve: "P-256".to_owned(),
+        key_type: "EC".to_owned(),
+        x: URL_SAFE_NO_PAD.encode(&encoded[1..33]),
+        y: URL_SAFE_NO_PAD.encode(&encoded[33..65]),
+    };
+    if jwk
+        .thumbprint()
+        .map_err(|_| KeyPackageError::RecipientKey)?
+        != expected_jkt
+    {
+        return Err(KeyPackageError::RecipientKey);
+    }
+    Ok(jwk)
+}
+
 pub fn key_package_info(material: &KeyPackageMaterial) -> Result<Vec<u8>, KeyPackageError> {
     validate_material(material)?;
     let mut output = Vec::with_capacity(KEY_PACKAGE_INFO_BYTES);

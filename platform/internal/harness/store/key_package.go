@@ -25,6 +25,19 @@ type PutKeyPackageResult struct {
 	Package domain.SessionKeyPackage
 }
 
+func (store *Store) PutEndpointSessionKeyPackage(
+	ctx context.Context,
+	owner string,
+	tenant string,
+	value domain.SessionKeyPackage,
+) (domain.SessionKeyPackage, bool, error) {
+	result, err := store.PutSessionKeyPackage(ctx, owner, tenant, value)
+	if err != nil {
+		return domain.SessionKeyPackage{}, false, err
+	}
+	return result.Package, result.Outcome == PutKeyPackageDuplicate, nil
+}
+
 func (store *Store) PutSessionKeyPackage(
 	ctx context.Context,
 	owner string,
@@ -336,6 +349,33 @@ func (store *Store) AcknowledgeSessionKeyPackage(
 		return nil
 	})
 	return updated, normalizeConcurrencyError("key package acknowledgment changed concurrently", err)
+}
+
+func (store *Store) AcknowledgeAndActivateSessionKeyPackage(
+	ctx context.Context,
+	id domain.ID,
+	recipient domain.ID,
+	owner string,
+	tenant string,
+	now time.Time,
+) (domain.Session, error) {
+	var activated domain.Session
+	err := store.WithTransaction(ctx, func(transaction *Store) error {
+		acknowledged, err := transaction.AcknowledgeSessionKeyPackage(
+			ctx, id, recipient, owner, tenant, now,
+		)
+		if err != nil {
+			return err
+		}
+		activated, err = transaction.UpdateSession(ctx, acknowledged.SessionID, func(session *domain.Session) error {
+			if session.Status == domain.SessionStatusActive && session.CurrentKeyGeneration == acknowledged.Generation {
+				return nil
+			}
+			return session.Activate(acknowledged.Generation, now)
+		})
+		return err
+	})
+	return activated, err
 }
 
 func keyPackageToRow(value domain.SessionKeyPackage) keyPackageRow {

@@ -1,8 +1,10 @@
 package gateway
 
 import (
+	"crypto/elliptic"
 	"crypto/sha256"
 	"encoding/json"
+	"errors"
 	"net/http"
 	"slices"
 	"strings"
@@ -60,6 +62,7 @@ func (server *Server) listABAEndpoints(writer http.ResponseWriter, request *http
 		items = append(items, map[string]any{
 			"id": value.ID.String(), "name": value.Name, "type": value.Type,
 			"status": value.Status, "lastSeenAt": value.LastSeenAt,
+			"signingJkt": value.SigningJKT, "signingPublicJwk": value.SigningPublicJWK,
 		})
 	}
 	writeJSON(writer, http.StatusOK, map[string]any{"items": items})
@@ -157,7 +160,7 @@ func (server *Server) createSession(writer http.ResponseWriter, request *http.Re
 		writeRawJSON(writer, http.StatusCreated, storedJSON)
 		return
 	}
-	if err := server.sendOpenTunnelRequest(session, now); err != nil {
+	if err := server.sendOpenTunnelRequest(session, endpoint, now); err != nil {
 		_, _ = server.persistence.UpdateSession(request.Context(), session.ID, func(value *domain.Session) error {
 			return value.Fail(server.now().UTC())
 		})
@@ -241,13 +244,37 @@ func endpointSessionRequestHash(endpointID domain.ID, request domain.SessionRequ
 	return sha256.Sum256(encoded), nil
 }
 
-func (server *Server) sendOpenTunnelRequest(session domain.Session, now time.Time) error {
+func (server *Server) sendOpenTunnelRequest(session domain.Session, hcEndpoint domain.Endpoint, now time.Time) error {
+	if hcEndpoint.ID != session.HCEndpointID ||
+		(hcEndpoint.Type != domain.EndpointTypeHCWeb && hcEndpoint.Type != domain.EndpointTypeHCReference) {
+		return errors.New("HC endpoint does not match session")
+	}
+	kemJWK, err := awpcrypto.ParseP256PublicJWK(hcEndpoint.KEMPublicJWK)
+	if err != nil {
+		return err
+	}
+	kemPublic, err := kemJWK.PublicKey()
+	if err != nil {
+		return err
+	}
+	hcKEMPublicKey := elliptic.Marshal(kemPublic.Curve, kemPublic.X, kemPublic.Y)
+	signingJWK, err := awpcrypto.ParseP256PublicJWK(hcEndpoint.SigningPublicJWK)
+	if err != nil {
+		return err
+	}
+	signingPublic, err := signingJWK.PublicKey()
+	if err != nil {
+		return err
+	}
+	hcSigningPublicKey := elliptic.Marshal(signingPublic.Curve, signingPublic.X, signingPublic.Y)
 	payload, err := proto.MarshalOptions{Deterministic: true}.Marshal(&awpv1.OpenTunnelRequest{
 		SessionId: session.ID[:], HcEndpointId: session.HCEndpointID[:],
 		RuntimeProfileId: session.RuntimeProfileID, WorkspaceId: session.WorkspaceID,
 		AuthorizationRevision: 1, RequestedKeyGeneration: 1,
 		RequestedAcpCapabilities: append([]string(nil), session.RequestedCapabilities...),
 		ExpiresAtMs:              now.Add(openTunnelTTL).UnixMilli(),
+		HcKemPublicKey:           hcKEMPublicKey, HcKemJkt: hcEndpoint.KEMJKT,
+		HcSigningPublicKey: hcSigningPublicKey, HcSigningJkt: hcEndpoint.SigningJKT,
 	})
 	if err != nil {
 		return err

@@ -1,8 +1,10 @@
 import {
   createDpopProof,
   createRegistrationProof,
+  parseP256PublicJwk,
   verifyTrustManifest,
   type EndpointIdentity,
+  type P256PublicJwk,
   type VerifiedTrustManifest,
 } from '@harness/hc-core';
 
@@ -36,6 +38,8 @@ export interface ABAEndpointSummary {
   readonly id: string;
   readonly name: string;
   readonly status: 'ACTIVE' | 'PENDING' | 'SUSPENDED' | 'REVOKED';
+  readonly signingJkt: string;
+  readonly signingPublicJwk: P256PublicJwk;
   readonly type: 'ABA';
 }
 
@@ -376,6 +380,7 @@ function parseEndpointSummary(input: unknown): ABAEndpointSummary | null {
     typeof value.id !== 'string' ||
     !/^[0-9a-f]{32}$/u.test(value.id) ||
     typeof value.name !== 'string' ||
+    typeof value.signingJkt !== 'string' ||
     !['ABA', 'HC_WEB', 'HC_REFERENCE'].includes(String(value.type)) ||
     !['ACTIVE', 'PENDING', 'SUSPENDED', 'REVOKED'].includes(String(value.status))
   ) {
@@ -384,7 +389,14 @@ function parseEndpointSummary(input: unknown): ABAEndpointSummary | null {
   if (value.type !== 'ABA') {
     return null;
   }
-  return value as unknown as ABAEndpointSummary;
+  return {
+    id: value.id,
+    name: value.name,
+    signingJkt: value.signingJkt,
+    signingPublicJwk: parseP256PublicJwk(objectValue(value.signingPublicJwk, 'ABA signing JWK') as JsonWebKey),
+    status: value.status as ABAEndpointSummary['status'],
+    type: 'ABA',
+  };
 }
 
 function parseEndpointSession(input: unknown): EndpointSessionSummary {

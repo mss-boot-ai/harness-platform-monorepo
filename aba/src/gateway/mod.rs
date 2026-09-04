@@ -27,5 +27,7 @@ pub enum GatewayError {
     #[error(transparent)]
     Crypto(#[from] crate::crypto::CryptoError),
     #[error(transparent)]
+    KeyPackage(#[from] crate::crypto::key_package::KeyPackageError),
+    #[error(transparent)]
     KeyStore(#[from] crate::identity::KeyStoreError),
 }

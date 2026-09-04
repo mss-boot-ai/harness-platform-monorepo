@@ -3,8 +3,11 @@ package gateway
 import (
 	"bytes"
 	"context"
+	"crypto/ecdh"
+	"crypto/hpke"
 	"crypto/sha256"
 	"encoding/base64"
+	"encoding/binary"
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
@@ -59,6 +62,33 @@ func TestHCSessionCreateIsIdempotentAndDeliversSignedOpenTunnel(t *testing.T) {
 	}
 	defer abaConnection.Close()
 	completeClientChallenge(t, abaConnection, abaEndpoint, abaCredential, abaSigningKey)
+	hcEndpoint, hcCredential, err := persistence.GetEndpointCredential(
+		t.Context(), hcEndpointID, gatewayID(3), now,
+	)
+	if err != nil {
+		t.Fatalf("GetEndpointCredential HC: %v", err)
+	}
+	hcTicketRaw := bytes.Repeat([]byte{91}, 32)
+	hcTicketValue := base64.RawURLEncoding.EncodeToString(hcTicketRaw)
+	if err := persistence.CreateTicket(t.Context(), domain.WSTicket{
+		ID: gatewayID(91), TokenHash: sha256.Sum256(hcTicketRaw), EndpointID: hcEndpoint.ID, CredentialID: hcCredential.ID,
+		Purpose: ticketPurpose, Origin: "http://127.0.0.1:8001", Protocol: protocolName,
+		Status: domain.TicketStatusIssued, ExpiresAt: now.Add(30 * time.Second), CreatedAt: now,
+	}, 30*time.Second); err != nil {
+		t.Fatalf("CreateTicket HC: %v", err)
+	}
+	hcDialer := websocket.Dialer{Subprotocols: []string{protocolName, "mss.ticket." + hcTicketValue}}
+	hcConnection, response, err := hcDialer.Dial(
+		websocketURL, http.Header{"Origin": []string{"http://127.0.0.1:8001"}},
+	)
+	if err != nil {
+		if response != nil {
+			t.Fatalf("dial HC WebSocket: %v status=%d", err, response.StatusCode)
+		}
+		t.Fatalf("dial HC WebSocket: %v", err)
+	}
+	defer hcConnection.Close()
+	completeClientChallenge(t, hcConnection, hcEndpoint, hcCredential, hcSigningKey)
 	time.Sleep(10 * time.Millisecond)
 
 	listChallenge := httptest.NewRecorder()
@@ -142,7 +172,9 @@ func TestHCSessionCreateIsIdempotentAndDeliversSignedOpenTunnel(t *testing.T) {
 	createdSessionID, err := domain.ParseID(createdBody.SessionID)
 	if err != nil || !bytes.Equal(open.GetSessionId(), createdSessionID[:]) ||
 		!bytes.Equal(open.GetHcEndpointId(), hcEndpointID[:]) || open.GetRuntimeProfileId() != "test-agent" ||
-		open.GetWorkspaceId() != "fixture" || open.GetAuthorizationRevision() != 1 || open.GetRequestedKeyGeneration() != 1 {
+		open.GetWorkspaceId() != "fixture" || open.GetAuthorizationRevision() != 1 || open.GetRequestedKeyGeneration() != 1 ||
+		len(open.GetHcKemPublicKey()) != 65 || open.GetHcKemJkt() == "" ||
+		len(open.GetHcSigningPublicKey()) != 65 || open.GetHcSigningJkt() == "" {
 		t.Fatalf("OpenTunnel payload=%#v error=%v", open, err)
 	}
 
@@ -191,6 +223,152 @@ func TestHCSessionCreateIsIdempotentAndDeliversSignedOpenTunnel(t *testing.T) {
 	if err != nil || stored.Status != domain.SessionStatusWaitingKey {
 		t.Fatalf("session after accepted OpenTunnel=%#v error=%v", stored, err)
 	}
+	if forwardedType, forwarded, err := hcConnection.ReadMessage(); err != nil || forwardedType != websocket.BinaryMessage {
+		t.Fatalf("read forwarded OpenTunnelResult type=%d error=%v bytes=%d", forwardedType, err, len(forwarded))
+	}
+	keyPackageID := gatewayID(86)
+	packageInfo, err := keyPackageInfo(
+		createdSessionID[:], 1, abaEndpoint.ID[:], hcEndpointID[:], 1,
+	)
+	if err != nil {
+		t.Fatalf("keyPackageInfo: %v", err)
+	}
+	hcKEMPublic, err := ecdh.P256().NewPublicKey(open.GetHcKemPublicKey())
+	if err != nil {
+		t.Fatalf("parse HC KEM public key: %v", err)
+	}
+	hpkePublic, err := hpke.NewDHKEMPublicKey(hcKEMPublic)
+	if err != nil {
+		t.Fatalf("wrap HC KEM public key: %v", err)
+	}
+	enc, sender, err := hpke.NewSender(hpkePublic, hpke.HKDFSHA256(), hpke.AES256GCM(), packageInfo)
+	if err != nil {
+		t.Fatalf("create HPKE sender: %v", err)
+	}
+	plaintext := testKeyPackagePlaintext(createdSessionID, now)
+	ciphertext, err := sender.Seal(packageInfo, plaintext)
+	if err != nil {
+		t.Fatalf("seal key package: %v", err)
+	}
+	envelope, err := keyPackageEnvelopeTranscript(
+		keyPackageID[:], createdSessionID[:], 1, abaEndpoint.ID[:], hcEndpointID[:], abaCredential.ID[:],
+		1, now.UnixMilli(), now.Add(time.Hour).UnixMilli(), enc, ciphertext,
+	)
+	if err != nil {
+		t.Fatalf("keyPackageEnvelopeTranscript: %v", err)
+	}
+	issuerSignature, err := awpcrypto.SignP1363LowS(abaSigningKey, envelope)
+	if err != nil {
+		t.Fatalf("sign key package: %v", err)
+	}
+	packagePayload, err := proto.MarshalOptions{Deterministic: true}.Marshal(&awpv1.SessionKeyPackage{
+		SessionId: createdSessionID[:], KeyGeneration: 1, IssuerAbaEndpointId: abaEndpoint.ID[:],
+		RecipientHcEndpointId: hcEndpointID[:], CryptoSuite: keyPackageSuiteName,
+		HpkeEnc: enc, HpkeCiphertext: ciphertext, NotBeforeMs: now.UnixMilli(),
+		ExpiresAtMs: now.Add(time.Hour).UnixMilli(), IssuerSignature: issuerSignature,
+		KeyPackageId: keyPackageID[:], IssuerCredentialId: abaCredential.ID[:], PolicyRevision: 1,
+	})
+	if err != nil {
+		t.Fatalf("encode SessionKeyPackage: %v", err)
+	}
+	packageMessageID := bytes.Repeat([]byte{87}, 16)
+	packageControlTranscript, err := controlTranscript(
+		packageMessageID, abaEndpoint.ID[:], hcEndpointID[:], 2, now.UnixMilli(),
+		uint32(awpv1.ControlType_CONTROL_TYPE_SESSION_KEY_PACKAGE), packagePayload,
+	)
+	if err != nil {
+		t.Fatalf("SessionKeyPackage control transcript: %v", err)
+	}
+	packageControlSignature, err := awpcrypto.SignP1363LowS(abaSigningKey, packageControlTranscript)
+	if err != nil {
+		t.Fatalf("sign SessionKeyPackage control: %v", err)
+	}
+	packagePacket := &awpv1.WirePacket{
+		WireMajor: 1, PacketId: bytes.Repeat([]byte{88}, 16),
+		Body: &awpv1.WirePacket_Control{Control: &awpv1.ControlFrame{
+			MessageId: packageMessageID, SenderEndpointId: abaEndpoint.ID[:], ReceiverEndpointId: hcEndpointID[:],
+			ControlSequence: 2, CreatedAtMs: now.UnixMilli(), Type: awpv1.ControlType_CONTROL_TYPE_SESSION_KEY_PACKAGE,
+			Payload: packagePayload, Signature: packageControlSignature,
+		}},
+	}
+	encodedPackage, err := proto.MarshalOptions{Deterministic: true}.Marshal(packagePacket)
+	if err != nil {
+		t.Fatalf("encode SessionKeyPackage packet: %v", err)
+	}
+	if err := abaConnection.WriteMessage(websocket.BinaryMessage, encodedPackage); err != nil {
+		t.Fatalf("write SessionKeyPackage: %v", err)
+	}
+	var packages []domain.SessionKeyPackage
+	for attempt := 0; attempt < 20; attempt++ {
+		packages, err = persistence.ListSessionKeyPackages(
+			t.Context(), createdSessionID, abaEndpoint.OwnerUserID, abaEndpoint.TenantID, 10,
+		)
+		if err == nil && len(packages) == 1 {
+			break
+		}
+		time.Sleep(5 * time.Millisecond)
+	}
+	if err != nil || len(packages) != 1 || packages[0].ID != keyPackageID ||
+		!bytes.Equal(packages[0].Ciphertext, ciphertext) {
+		t.Fatalf("stored key packages=%#v error=%v", packages, err)
+	}
+	forwardedType, forwardedPackage, err := hcConnection.ReadMessage()
+	if err != nil || forwardedType != websocket.BinaryMessage || !bytes.Equal(forwardedPackage, encodedPackage) {
+		t.Fatalf("read forwarded SessionKeyPackage type=%d error=%v", forwardedType, err)
+	}
+	ackPayload, err := proto.MarshalOptions{Deterministic: true}.Marshal(&awpv1.SessionKeyPackageAck{
+		SessionId: createdSessionID[:], KeyGeneration: 1, KeyPackageId: keyPackageID[:],
+		RecipientHcEndpointId: hcEndpointID[:], AcknowledgedAtMs: now.UnixMilli(),
+	})
+	if err != nil {
+		t.Fatalf("encode SessionKeyPackageAck: %v", err)
+	}
+	ackMessageID := bytes.Repeat([]byte{92}, 16)
+	ackTranscript, err := controlTranscript(
+		ackMessageID, hcEndpointID[:], abaEndpoint.ID[:], 1, now.UnixMilli(),
+		uint32(awpv1.ControlType_CONTROL_TYPE_SESSION_KEY_PACKAGE_ACK), ackPayload,
+	)
+	if err != nil {
+		t.Fatalf("SessionKeyPackageAck transcript: %v", err)
+	}
+	ackSignature, err := awpcrypto.SignP1363LowS(hcSigningKey, ackTranscript)
+	if err != nil {
+		t.Fatalf("sign SessionKeyPackageAck: %v", err)
+	}
+	ackPacket := &awpv1.WirePacket{
+		WireMajor: 1, PacketId: bytes.Repeat([]byte{93}, 16),
+		Body: &awpv1.WirePacket_Control{Control: &awpv1.ControlFrame{
+			MessageId: ackMessageID, SenderEndpointId: hcEndpointID[:], ReceiverEndpointId: abaEndpoint.ID[:],
+			ControlSequence: 1, CreatedAtMs: now.UnixMilli(), Type: awpv1.ControlType_CONTROL_TYPE_SESSION_KEY_PACKAGE_ACK,
+			Payload: ackPayload, Signature: ackSignature,
+		}},
+	}
+	encodedACK, err := proto.MarshalOptions{Deterministic: true}.Marshal(ackPacket)
+	if err != nil {
+		t.Fatalf("encode SessionKeyPackageAck packet: %v", err)
+	}
+	if err := hcConnection.WriteMessage(websocket.BinaryMessage, encodedACK); err != nil {
+		t.Fatalf("write SessionKeyPackageAck: %v", err)
+	}
+	for attempt := 0; attempt < 20; attempt++ {
+		stored, err = persistence.GetSession(t.Context(), createdSessionID)
+		packages, _ = persistence.ListSessionKeyPackages(
+			t.Context(), createdSessionID, abaEndpoint.OwnerUserID, abaEndpoint.TenantID, 10,
+		)
+		if err == nil && stored.Status == domain.SessionStatusActive && len(packages) == 1 &&
+			packages[0].Status == domain.KeyPackageStatusAcknowledged {
+			break
+		}
+		time.Sleep(5 * time.Millisecond)
+	}
+	if err != nil || stored.Status != domain.SessionStatusActive || stored.CurrentKeyGeneration != 1 ||
+		len(packages) != 1 || packages[0].Status != domain.KeyPackageStatusAcknowledged {
+		t.Fatalf("activated session=%#v packages=%#v error=%v", stored, packages, err)
+	}
+	forwardedType, forwardedACK, err := abaConnection.ReadMessage()
+	if err != nil || forwardedType != websocket.BinaryMessage || !bytes.Equal(forwardedACK, encodedACK) {
+		t.Fatalf("read forwarded SessionKeyPackageAck type=%d error=%v", forwardedType, err)
+	}
 
 	replayed := perform("00000000-0000-4000-8000-000000000402")
 	if replayed.Code != http.StatusCreated || replayed.Header().Get("Idempotency-Replayed") != "true" ||
@@ -201,6 +379,21 @@ func TestHCSessionCreateIsIdempotentAndDeliversSignedOpenTunnel(t *testing.T) {
 	if _, _, err := abaConnection.ReadMessage(); err == nil {
 		t.Fatal("idempotent session replay delivered a duplicate OpenTunnel control")
 	}
+}
+
+func testKeyPackagePlaintext(sessionID domain.ID, now time.Time) []byte {
+	var output bytes.Buffer
+	output.WriteString("mss-key-package-plaintext-v1")
+	output.Write(sessionID[:])
+	_ = binary.Write(&output, binary.BigEndian, uint64(1))
+	output.Write(bytes.Repeat([]byte{4}, 32))
+	output.Write(bytes.Repeat([]byte{5}, 32))
+	output.Write(bytes.Repeat([]byte{6}, 4))
+	output.Write(bytes.Repeat([]byte{7}, 4))
+	_ = binary.Write(&output, binary.BigEndian, now.UnixMilli())
+	_ = binary.Write(&output, binary.BigEndian, now.Add(time.Hour).UnixMilli())
+	output.WriteByte(1)
+	return output.Bytes()
 }
 
 func gatewaySessionRequest(accessToken, idempotencyKey string, body []byte, proof string) *http.Request {

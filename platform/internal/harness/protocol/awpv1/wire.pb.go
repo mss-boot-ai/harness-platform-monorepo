@@ -1973,6 +1973,10 @@ type OpenTunnelRequest struct {
 	RequestedKeyGeneration   uint64                 `protobuf:"varint,6,opt,name=requested_key_generation,json=requestedKeyGeneration,proto3" json:"requested_key_generation,omitempty"`
 	RequestedAcpCapabilities []string               `protobuf:"bytes,7,rep,name=requested_acp_capabilities,json=requestedAcpCapabilities,proto3" json:"requested_acp_capabilities,omitempty"`
 	ExpiresAtMs              int64                  `protobuf:"varint,8,opt,name=expires_at_ms,json=expiresAtMs,proto3" json:"expires_at_ms,omitempty"`
+	HcKemPublicKey           []byte                 `protobuf:"bytes,9,opt,name=hc_kem_public_key,json=hcKemPublicKey,proto3" json:"hc_kem_public_key,omitempty"`              // SEC1 uncompressed P-256, 65 bytes.
+	HcKemJkt                 string                 `protobuf:"bytes,10,opt,name=hc_kem_jkt,json=hcKemJkt,proto3" json:"hc_kem_jkt,omitempty"`                                 // RFC 7638 base64url SHA-256 thumbprint.
+	HcSigningPublicKey       []byte                 `protobuf:"bytes,11,opt,name=hc_signing_public_key,json=hcSigningPublicKey,proto3" json:"hc_signing_public_key,omitempty"` // SEC1 uncompressed P-256, 65 bytes.
+	HcSigningJkt             string                 `protobuf:"bytes,12,opt,name=hc_signing_jkt,json=hcSigningJkt,proto3" json:"hc_signing_jkt,omitempty"`                     // RFC 7638 base64url SHA-256 thumbprint.
 	unknownFields            protoimpl.UnknownFields
 	sizeCache                protoimpl.SizeCache
 }
@@ -2061,6 +2065,34 @@ func (x *OpenTunnelRequest) GetExpiresAtMs() int64 {
 		return x.ExpiresAtMs
 	}
 	return 0
+}
+
+func (x *OpenTunnelRequest) GetHcKemPublicKey() []byte {
+	if x != nil {
+		return x.HcKemPublicKey
+	}
+	return nil
+}
+
+func (x *OpenTunnelRequest) GetHcKemJkt() string {
+	if x != nil {
+		return x.HcKemJkt
+	}
+	return ""
+}
+
+func (x *OpenTunnelRequest) GetHcSigningPublicKey() []byte {
+	if x != nil {
+		return x.HcSigningPublicKey
+	}
+	return nil
+}
+
+func (x *OpenTunnelRequest) GetHcSigningJkt() string {
+	if x != nil {
+		return x.HcSigningJkt
+	}
+	return ""
 }
 
 type OpenTunnelResult struct {
@@ -2833,7 +2865,7 @@ const file_mss_awp_v1_wire_proto_rawDesc = "" +
 	"\x14CredentialStatusHint\x12<\n" +
 	"\x1acredential_status_revision\x18\x01 \x01(\x04R\x18credentialStatusRevision\x12+\n" +
 	"\x11credential_serial\x18\x02 \x01(\fR\x10credentialSerial\x12*\n" +
-	"\x11refresh_before_ms\x18\x03 \x01(\x03R\x0frefreshBeforeMs\"\xfc\x02\n" +
+	"\x11refresh_before_ms\x18\x03 \x01(\x03R\x0frefreshBeforeMs\"\x9e\x04\n" +
 	"\x11OpenTunnelRequest\x12\x1d\n" +
 	"\n" +
 	"session_id\x18\x01 \x01(\fR\tsessionId\x12$\n" +
@@ -2843,7 +2875,13 @@ const file_mss_awp_v1_wire_proto_rawDesc = "" +
 	"\x16authorization_revision\x18\x05 \x01(\x04R\x15authorizationRevision\x128\n" +
 	"\x18requested_key_generation\x18\x06 \x01(\x04R\x16requestedKeyGeneration\x12<\n" +
 	"\x1arequested_acp_capabilities\x18\a \x03(\tR\x18requestedAcpCapabilities\x12\"\n" +
-	"\rexpires_at_ms\x18\b \x01(\x03R\vexpiresAtMs\"\xcf\x02\n" +
+	"\rexpires_at_ms\x18\b \x01(\x03R\vexpiresAtMs\x12)\n" +
+	"\x11hc_kem_public_key\x18\t \x01(\fR\x0ehcKemPublicKey\x12\x1c\n" +
+	"\n" +
+	"hc_kem_jkt\x18\n" +
+	" \x01(\tR\bhcKemJkt\x121\n" +
+	"\x15hc_signing_public_key\x18\v \x01(\fR\x12hcSigningPublicKey\x12$\n" +
+	"\x0ehc_signing_jkt\x18\f \x01(\tR\fhcSigningJkt\"\xcf\x02\n" +
 	"\x10OpenTunnelResult\x12\x1d\n" +
 	"\n" +
 	"session_id\x18\x01 \x01(\fR\tsessionId\x124\n" +

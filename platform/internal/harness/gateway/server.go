@@ -47,6 +47,8 @@ type Persistence interface {
 	GetSession(context.Context, domain.ID) (domain.Session, error)
 	UpdateSession(context.Context, domain.ID, func(*domain.Session) error) (domain.Session, error)
 	ListEndpoints(context.Context, string, string, int) ([]domain.Endpoint, error)
+	PutEndpointSessionKeyPackage(context.Context, string, string, domain.SessionKeyPackage) (domain.SessionKeyPackage, bool, error)
+	AcknowledgeAndActivateSessionKeyPackage(context.Context, domain.ID, domain.ID, string, string, time.Time) (domain.Session, error)
 	UseDPoPReplay(context.Context, string, string, time.Time, time.Time, int64) error
 }
 

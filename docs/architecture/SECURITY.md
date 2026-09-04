@@ -427,6 +427,8 @@ crypto_suite
 policy_revision
 ```
 
+Platform 在签名 `OpenTunnelRequest` 中向 ABA 提供已授权 HC 的 65-byte SEC1 P-256 KEM/Signing 公钥与各自 RFC 7638 JKT；ABA 必须重建严格 Public JWK、核对 JKT，并只为该 Session/Participant 的 Key Package 与 ACK 验证使用。该公开材料不是远程命令配置，也不能替代 Session owner/tenant 授权。
+
 Suite 0001 固定使用 HPKE Base Mode：DHKEM(P-256, HKDF-SHA256) `0x0010`、HKDF-SHA256 `0x0001`、AES-256-GCM `0x0002`。`info` 不是 JSON 或 Protobuf，而是以下精确字节串：
 
 ```text

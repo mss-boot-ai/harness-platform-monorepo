@@ -15,7 +15,7 @@ use tungstenite::{Message, connect};
 use url::Url;
 
 use super::GatewayError;
-use super::control::ControlState;
+use super::control::{ControlContext, ControlState};
 use super::transcript::{
     ClientChallengeInput, ConnectionReadyInput, ServerChallengeInput, client_challenge,
     connection_ready, server_challenge,
@@ -42,6 +42,7 @@ pub struct ReadyConnection {
     pub heartbeat_interval_ms: u32,
     pub root_jkt: String,
     endpoint_id_bytes: [u8; 16],
+    credential_id_bytes: [u8; 16],
     online_key: p256::ecdsa::VerifyingKey,
     socket: WebSocket<MaybeTlsStream<std::net::TcpStream>>,
 }
@@ -359,6 +360,7 @@ impl GatewayClient {
             heartbeat_interval_ms: ready.heartbeat_interval_ms,
             root_jkt: trust.root_jkt.clone(),
             endpoint_id_bytes: endpoint_id,
+            credential_id_bytes: credential_id,
             online_key: trust.online_key,
             socket,
         })
@@ -392,13 +394,18 @@ impl ReadyConnection {
                     let packet = WirePacket::decode(encoded).map_err(|_| GatewayError::Protocol)?;
                     let response = controls.handle(
                         packet,
-                        &self.endpoint_id_bytes,
-                        &self.online_key,
-                        identity,
-                        config,
-                        SystemTime::now(),
+                        ControlContext {
+                            endpoint_id: &self.endpoint_id_bytes,
+                            online_key: &self.online_key,
+                            identity,
+                            config,
+                            credential_id: &self.credential_id_bytes,
+                            now: SystemTime::now(),
+                        },
                     )?;
-                    self.socket.send(Message::binary(response))?;
+                    for packet in response {
+                        self.socket.send(Message::binary(packet))?;
+                    }
                 }
                 Message::Ping(_) | Message::Pong(_) => self.socket.flush()?,
                 Message::Close(_) => return Ok(()),

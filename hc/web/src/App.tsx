@@ -2,6 +2,7 @@ import {
   createEndpointIdentity,
   IndexedDbSecureStore,
   type EndpointIdentity,
+  type ReadyGatewayConnection,
   type SecureStoreProbe,
 } from '@harness/hc-core';
 import { useEffect, useMemo, useState } from 'react';
@@ -69,7 +70,8 @@ export function App() {
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [registration, setRegistration] = useState<RegistrationSession | null>(null);
-  const [gatewayReady, setGatewayReady] = useState(false);
+  const [gatewayConnection, setGatewayConnection] = useState<ReadyGatewayConnection | null>(null);
+  const gatewayReady = gatewayConnection !== null;
 
   useEffect(() => {
     let active = true;
@@ -223,11 +225,15 @@ export function App() {
                 <GatewaySetup
                   identity={identity}
                   onRegistration={setRegistration}
-                  onReady={setGatewayReady}
+                  onReady={setGatewayConnection}
                 />
               )}
               {registration !== null && gatewayReady ? (
-                <SessionSetup identity={identity} registration={registration} />
+                <SessionSetup
+                  connection={gatewayConnection}
+                  identity={identity}
+                  registration={registration}
+                />
               ) : null}
             </>
           )}
