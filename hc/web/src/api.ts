@@ -113,54 +113,58 @@ export async function registerBrowserEndpoint(
   return parseRegistration(response);
 }
 
-export async function issueWebSocketTicket(
+export function issueWebSocketTicket(
   identity: EndpointIdentity,
   session: RegistrationSession,
 ): Promise<WebSocketTicket> {
-  const path = '/gateway/v1/ws/tickets';
-  const challengeResponse = await gatewayRequest(path, session.accessToken);
-  const nonce = challengeResponse.headers.get('DPoP-Nonce');
-  if (challengeResponse.status !== 401 || nonce === null || nonce === '') {
-    throw await gatewayFailure(challengeResponse);
-  }
-  const proof = await createDpopProof({
-    accessToken: session.accessToken,
-    htm: 'POST',
-    htu: new URL(path, window.location.origin).toString(),
-    nonce,
-    privateKey: identity.signing.privateKey,
-    publicJwk: identity.signing.publicJwk,
+  return withGatewayNonceLock(async () => {
+    const path = '/gateway/v1/ws/tickets';
+    const challengeResponse = await gatewayRequest(path, session.accessToken);
+    const nonce = challengeResponse.headers.get('DPoP-Nonce');
+    if (challengeResponse.status !== 401 || nonce === null || nonce === '') {
+      throw await gatewayFailure(challengeResponse);
+    }
+    const proof = await createDpopProof({
+      accessToken: session.accessToken,
+      htm: 'POST',
+      htu: new URL(path, window.location.origin).toString(),
+      nonce,
+      privateKey: identity.signing.privateKey,
+      publicJwk: identity.signing.publicJwk,
+    });
+    const response = await gatewayRequest(path, session.accessToken, proof.proof);
+    if (!response.ok) {
+      throw await gatewayFailure(response);
+    }
+    return parseWebSocketTicket(await response.json());
   });
-  const response = await gatewayRequest(path, session.accessToken, proof.proof);
-  if (!response.ok) {
-    throw await gatewayFailure(response);
-  }
-  return parseWebSocketTicket(await response.json());
 }
 
-export async function refreshEndpointSession(identity: EndpointIdentity): Promise<RegistrationSession> {
-  const path = '/gateway/v1/tokens/refresh';
-  const challengeResponse = await fetch(path, { credentials: 'include', method: 'POST' });
-  const nonce = challengeResponse.headers.get('DPoP-Nonce');
-  if (challengeResponse.status !== 401 || nonce === null || nonce === '') {
-    throw await gatewayFailure(challengeResponse);
-  }
-  const proof = await createDpopProof({
-    htm: 'POST',
-    htu: new URL(path, window.location.origin).toString(),
-    nonce,
-    privateKey: identity.signing.privateKey,
-    publicJwk: identity.signing.publicJwk,
+export function refreshEndpointSession(identity: EndpointIdentity): Promise<RegistrationSession> {
+  return withGatewayNonceLock(async () => {
+    const path = '/gateway/v1/tokens/refresh';
+    const challengeResponse = await fetch(path, { credentials: 'include', method: 'POST' });
+    const nonce = challengeResponse.headers.get('DPoP-Nonce');
+    if (challengeResponse.status !== 401 || nonce === null || nonce === '') {
+      throw await gatewayFailure(challengeResponse);
+    }
+    const proof = await createDpopProof({
+      htm: 'POST',
+      htu: new URL(path, window.location.origin).toString(),
+      nonce,
+      privateKey: identity.signing.privateKey,
+      publicJwk: identity.signing.publicJwk,
+    });
+    const response = await fetch(path, {
+      credentials: 'include',
+      headers: { Accept: 'application/json', DPoP: proof.proof },
+      method: 'POST',
+    });
+    if (!response.ok) {
+      throw await gatewayFailure(response);
+    }
+    return parseRegistration(await response.json());
   });
-  const response = await fetch(path, {
-    credentials: 'include',
-    headers: { Accept: 'application/json', DPoP: proof.proof },
-    method: 'POST',
-  });
-  if (!response.ok) {
-    throw await gatewayFailure(response);
-  }
-  return parseRegistration(await response.json());
 }
 
 export async function fetchTrustManifest(): Promise<VerifiedTrustManifest> {
@@ -174,39 +178,41 @@ export async function fetchTrustManifest(): Promise<VerifiedTrustManifest> {
   return verifyTrustManifest(await response.json());
 }
 
-export async function listABAEndpoints(
+export function listABAEndpoints(
   identity: EndpointIdentity,
   registration: RegistrationSession,
 ): Promise<readonly ABAEndpointSummary[]> {
-  const path = '/gateway/v1/endpoints/abas';
-  const challengeResponse = await gatewayAuthorizedRequest(path, registration.accessToken, 'POST');
-  const nonce = challengeResponse.headers.get('DPoP-Nonce');
-  if (challengeResponse.status !== 401 || nonce === null || nonce === '') {
-    throw await gatewayFailure(challengeResponse);
-  }
-  const proof = await createDpopProof({
-    accessToken: registration.accessToken,
-    htm: 'POST',
-    htu: new URL(path, window.location.origin).toString(),
-    nonce,
-    privateKey: identity.signing.privateKey,
-    publicJwk: identity.signing.publicJwk,
+  return withGatewayNonceLock(async () => {
+    const path = '/gateway/v1/endpoints/abas';
+    const challengeResponse = await gatewayAuthorizedRequest(path, registration.accessToken, 'POST');
+    const nonce = challengeResponse.headers.get('DPoP-Nonce');
+    if (challengeResponse.status !== 401 || nonce === null || nonce === '') {
+      throw await gatewayFailure(challengeResponse);
+    }
+    const proof = await createDpopProof({
+      accessToken: registration.accessToken,
+      htm: 'POST',
+      htu: new URL(path, window.location.origin).toString(),
+      nonce,
+      privateKey: identity.signing.privateKey,
+      publicJwk: identity.signing.publicJwk,
+    });
+    const response = await gatewayAuthorizedRequest(path, registration.accessToken, 'POST', proof.proof);
+    if (!response.ok) {
+      throw await gatewayFailure(response);
+    }
+    const responseValue = await response.json() as unknown;
+    const value = objectValue(responseValue, 'endpoint list');
+    if (!Array.isArray(value.items)) {
+      throw new HcApiError('Endpoint list is invalid', 'HC_INVALID_RESPONSE', 500);
+    }
+    return value.items
+      .map(parseEndpointSummary)
+      .filter((endpoint): endpoint is ABAEndpointSummary => endpoint !== null && endpoint.status === 'ACTIVE');
   });
-  const response = await gatewayAuthorizedRequest(path, registration.accessToken, 'POST', proof.proof);
-  if (!response.ok) {
-    throw await gatewayFailure(response);
-  }
-  const responseValue = await response.json() as unknown;
-  const value = objectValue(responseValue, 'endpoint list');
-  if (!Array.isArray(value.items)) {
-    throw new HcApiError('Endpoint list is invalid', 'HC_INVALID_RESPONSE', 500);
-  }
-  return value.items
-    .map(parseEndpointSummary)
-    .filter((endpoint): endpoint is ABAEndpointSummary => endpoint !== null && endpoint.status === 'ACTIVE');
 }
 
-export async function createEndpointSession(
+export function createEndpointSession(
   identity: EndpointIdentity,
   registration: RegistrationSession,
   input: {
@@ -216,42 +222,44 @@ export async function createEndpointSession(
     readonly workspaceId: string;
   },
 ): Promise<EndpointSessionSummary> {
-  const path = '/gateway/v1/sessions';
-  const body = JSON.stringify({
-    abaEndpointId: input.abaEndpointId,
-    requestedCapabilities: ['prompt', 'session'],
-    runtimeProfileId: input.runtimeProfileId,
-    workspaceId: input.workspaceId,
+  return withGatewayNonceLock(async () => {
+    const path = '/gateway/v1/sessions';
+    const body = JSON.stringify({
+      abaEndpointId: input.abaEndpointId,
+      requestedCapabilities: ['prompt', 'session'],
+      runtimeProfileId: input.runtimeProfileId,
+      workspaceId: input.workspaceId,
+    });
+    const challengeResponse = await gatewaySessionRequest(
+      path,
+      registration.accessToken,
+      input.idempotencyKey,
+      body,
+    );
+    const nonce = challengeResponse.headers.get('DPoP-Nonce');
+    if (challengeResponse.status !== 401 || nonce === null || nonce === '') {
+      throw await gatewayFailure(challengeResponse);
+    }
+    const proof = await createDpopProof({
+      accessToken: registration.accessToken,
+      htm: 'POST',
+      htu: new URL(path, window.location.origin).toString(),
+      nonce,
+      privateKey: identity.signing.privateKey,
+      publicJwk: identity.signing.publicJwk,
+    });
+    const response = await gatewaySessionRequest(
+      path,
+      registration.accessToken,
+      input.idempotencyKey,
+      body,
+      proof.proof,
+    );
+    if (!response.ok) {
+      throw await gatewayFailure(response);
+    }
+    return parseEndpointSession(await response.json());
   });
-  const challengeResponse = await gatewaySessionRequest(
-    path,
-    registration.accessToken,
-    input.idempotencyKey,
-    body,
-  );
-  const nonce = challengeResponse.headers.get('DPoP-Nonce');
-  if (challengeResponse.status !== 401 || nonce === null || nonce === '') {
-    throw await gatewayFailure(challengeResponse);
-  }
-  const proof = await createDpopProof({
-    accessToken: registration.accessToken,
-    htm: 'POST',
-    htu: new URL(path, window.location.origin).toString(),
-    nonce,
-    privateKey: identity.signing.privateKey,
-    publicJwk: identity.signing.publicJwk,
-  });
-  const response = await gatewaySessionRequest(
-    path,
-    registration.accessToken,
-    input.idempotencyKey,
-    body,
-    proof.proof,
-  );
-  if (!response.ok) {
-    throw await gatewayFailure(response);
-  }
-  return parseEndpointSession(await response.json());
 }
 
 export async function getEndpointSession(sessionId: string): Promise<EndpointSessionSummary> {
@@ -425,6 +433,17 @@ function gatewayAuthorizedRequest(
     headers.set('DPoP', proof);
   }
   return fetch(path, { credentials: 'include', headers, method });
+}
+
+let gatewayNonceTail: Promise<void> = Promise.resolve();
+
+function withGatewayNonceLock<T>(operation: () => Promise<T>): Promise<T> {
+  const result = gatewayNonceTail.then(operation, operation);
+  gatewayNonceTail = result.then(
+    () => undefined,
+    () => undefined,
+  );
+  return result;
 }
 
 function gatewaySessionRequest(

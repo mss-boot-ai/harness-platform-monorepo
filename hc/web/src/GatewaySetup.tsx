@@ -38,7 +38,6 @@ export function GatewaySetup({
     try {
       socketRef.current?.close(1000, 'HC reconnecting');
       const activeRegistration = await refreshEndpointSession(identity);
-      onRegistration(activeRegistration);
       const issued = await issueWebSocketTicket(identity, activeRegistration);
       setTicket(issued);
       const trust = await fetchTrustManifest();
@@ -54,6 +53,7 @@ export function GatewaySetup({
       }, trust);
       socketRef.current = ready.socket;
       setConnection(ready);
+      onRegistration(activeRegistration);
       onReady(true);
     } catch (cause) {
       if (cause instanceof HcApiError) {
