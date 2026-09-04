@@ -5,6 +5,8 @@ import {
   type SecureStoreProbe,
 } from '@harness/hc-core';
 import { useEffect, useMemo, useState } from 'react';
+import { PlatformSetup } from './PlatformSetup';
+import type { RegistrationSession } from './api';
 
 const PRIMARY_INSTALLATION_ID = 'primary-browser-installation';
 
@@ -14,7 +16,13 @@ function shortThumbprint(value: string): string {
   return `${value.slice(0, 10)}…${value.slice(-8)}`;
 }
 
-function IdentityCard({ identity }: { readonly identity: EndpointIdentity }) {
+function IdentityCard({
+  identity,
+  registration,
+}: {
+  readonly identity: EndpointIdentity;
+  readonly registration: RegistrationSession | null;
+}) {
   return (
     <section className="identity-card" aria-labelledby="identity-title">
       <div className="section-heading">
@@ -39,7 +47,9 @@ function IdentityCard({ identity }: { readonly identity: EndpointIdentity }) {
         </div>
         <div>
           <dt>Platform 状态</dt>
-          <dd className="pending-text">尚未注册，等待 M2 Gateway</dd>
+          <dd className={registration === null ? 'pending-text' : 'registered-text'}>
+            {registration === null ? '尚未注册' : `已注册 · ${registration.endpointId.slice(0, 10)}…`}
+          </dd>
         </div>
       </dl>
     </section>
@@ -56,6 +66,7 @@ export function App() {
   const [identity, setIdentity] = useState<EndpointIdentity | null>(null);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [registration, setRegistration] = useState<RegistrationSession | null>(null);
 
   useEffect(() => {
     let active = true;
@@ -198,14 +209,25 @@ export function App() {
               <p className="fine-print">不会把私钥、Token 或 Session Key 写入 Local Storage。</p>
             </section>
           ) : (
-            <IdentityCard identity={identity} />
+            <>
+              <IdentityCard identity={identity} registration={registration} />
+              <PlatformSetup
+                identity={identity}
+                registration={registration}
+                onRegistered={setRegistration}
+              />
+            </>
           )}
 
           <section className="next-card">
             <div>
               <p className="eyebrow">NEXT CHECKPOINT</p>
-              <h2>连接 Platform Gateway</h2>
-              <p>Human Session、Endpoint Registration、DPoP 与一次性 WSS Ticket 将在 M2 接入。</p>
+              <h2>{registration === null ? '注册 Platform Endpoint' : '连接 Platform Gateway'}</h2>
+              <p>
+                {registration === null
+                  ? '先完成 Human Session 与本地 Endpoint Key 的双重绑定。'
+                  : '下一步使用内存中的 Access Token、DPoP 与一次性 WSS Ticket 建立安全连接。'}
+              </p>
             </div>
             <span className="status-pill pending">未接通</span>
           </section>
@@ -219,8 +241,8 @@ export function App() {
               <span>{identity === null ? '1' : '✓'}</span>
               <div><strong>本地身份</strong><p>不可导出 P-256 密钥</p></div>
             </li>
-            <li>
-              <span>2</span>
+            <li className={registration === null ? '' : 'complete'}>
+              <span>{registration === null ? '2' : '✓'}</span>
               <div><strong>Platform 注册</strong><p>Human + Endpoint 身份</p></div>
             </li>
             <li>

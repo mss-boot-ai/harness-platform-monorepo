@@ -11,6 +11,17 @@ export default defineConfig({
   },
   server: {
     port: 4173,
+    proxy: {
+      '/admin/api': {
+        changeOrigin: false,
+        target: 'http://127.0.0.1:8080',
+      },
+      '/gateway/v1': {
+        changeOrigin: false,
+        target: 'http://127.0.0.1:8082',
+        ws: true,
+      },
+    },
     strictPort: true,
   },
 });
