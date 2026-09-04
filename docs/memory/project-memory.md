@@ -13,6 +13,9 @@ development:     codex/bootstrap-harness-platform-foundation
 draft PR:        #1
 M1 continuation starting SHA:
                  98f8b3f76326b2dac2e2febe9bc527dbcb5199e0
+latest verified remote implementation SHA:
+                 ae8574ec7bdb28b1c43304bf58ec625bf9da497b
+latest paired CI: push 33855348024 / PR 33855351865
 ```
 
 本项目用于构建一个可从 Web、微信小程序和后续原生客户端安全控制本地 ACP 编程 Agent 的平台。聊天中的完成声明不是证据；当前文件、远端提交、PR 和当前 SHA 的 CI 才是事实源。
@@ -107,37 +110,39 @@ HC <— TLS 1.3 + encrypted AWP —> Platform <— TLS 1.3 + encrypted AWP —> 
 
 ## 8. 当前真实完成度
 
-以起始检查点 `98f8b3f76326b2dac2e2febe9bc527dbcb5199e0` 为基线，已由远端文件和 CI 支持的范围是：
+截至实现检查点 `ae8574ec7bdb28b1c43304bf58ec625bf9da497b`，已由远端文件以及 push Run `33855348024`、PR Run `33855351865` 支持的范围是：
 
 - Platform Thin Host/versioned import 基线与 CI 骨架；
 - AWP v1 Proto 和 ABA Rust/AAD Foundation；
 - MVP PRD、架构、实施与验证计划；
-- Platform Endpoint、Enrollment、Credential、Session、Ticket、Frame、ACK 的 Pure Domain；
-- 上述部分对象的显式 Migration、SQLite Store、事务和冲突测试；
+- Platform Endpoint、Enrollment、Credential、Session、Key Package、Ticket、Frame、ACK、Audit 和 Idempotency 的 Pure Domain；
+- 显式前向 Migration、SQLite Store、事务、并发、冲突和关键唯一索引契约测试；
 - Overview、Enrollment、Endpoint、Session、Delivery 管理后端 API；
-- owner/tenant 隔离和安全 View Model 的部分测试。
+- owner/tenant 精确隔离和安全 View Model；
+- 管理写 API 的持久化脱敏 Audit 与 `Idempotency-Key` 行为；
+- Key Package 只接受 Suite 0001，并按 Session、Issuer ABA、Recipient HC、Credential 和 Generation 状态失败关闭；
+- Readiness 验证关键唯一索引的唯一性、列集合和列顺序；
+- `harness:read`、`harness:operate`、`harness:approve`、`harness:revoke` 的授权 Migration、路由绑定和拒绝测试。
 
-这不等于 Platform M1 完成，更不等于 Platform、ABA、HC MVP 或真实 E2E 完成。
+这仍不等于 Platform M1 完成，更不等于 Platform、ABA、HC MVP 或真实 E2E 完成。当前 PR 正文和工作日志仍停留在早期检查点，且 Admin Web 页面尚未进入远端历史。
 
 ## 9. Platform M1 当前目标与缺口
 
-本开发阶段只补齐 M1，不开始 M2 的 DPoP、Credential 签发或 WSS Gateway。M1 必须完成：
+本开发阶段只补齐 M1，不开始 M2 的 DPoP、Credential 签发或 WSS Gateway。当前剩余 M1 工作是：
 
-- `harness_session_key_packages` 的领域、Migration、Repository 和 SQLite 并发唯一性测试；
-- `harness_audit_events` 的脱敏持久化和查询边界；
-- `harness_idempotency_records`，作用域为 actor + operation + key；
-- 同键同请求返回原结果，同键不同请求稳定冲突，并发只能产生一次副作用；
-- 所有安全敏感管理写操作在同一事务中写 Audit 和幂等结果；
-- 所有读取和变更同时限制 owner 与 tenant；
-- Admin Web 的 Overview、Enrollment、Endpoint、Session、Delivery 页面、服务封装、路由和中英文文案；
-- Loading、Empty、Error、Forbidden 和正常状态；
-- 工作日志、PR #1 正文和当前 HEAD 的验证证据。
+- 在 `platform/web/src/business/` 实现 Overview、Enrollment、Endpoint、Session、Delivery 页面；
+- 补齐 Typed Service、每次写请求的新 `Idempotency-Key`、路由、服务路径投影和中英文文案；
+- 页面覆盖 Loading、Empty、Error、Forbidden 和正常状态，并通过 Node 24 lint/test/build；
+- 启动真实 Thin Host 后使用内置浏览器完成页面和状态验证；
+- 对最终实现 SHA 执行并记录 Race Detector、`mss verify --all` 和 Thin Host no-op upgrade；工具或环境不可用时明确标为未执行；
+- 更新 `docs/memory/work-log.md`、版本化 M1 验证报告和 PR #1 正文，并等待最终文档 SHA 的完整 CI。
 
 ## 10. 当前明确未完成或未验证
 
 除非后续当前 SHA 证据更新，下列项目均按未完成/未验证处理：
 
 - HC TypeScript Workspace 和 HC Job 实际构建测试；
+- Platform Admin Web 五类 Harness 管理页面及其浏览器验收；
 - M2 的 JWK/ES256、Credential 签发、DPoP、Token Family、Ticket API 与 WSS Gateway；
 - ABA Secure Store、Enrollment、Connector、Process Supervisor、Journal 与 ACP Proxy；
 - Test Agent、Compose 和 HC→Platform→ABA→ACP Agent E2E；
