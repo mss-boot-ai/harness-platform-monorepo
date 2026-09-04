@@ -179,20 +179,20 @@ export async function listABAEndpoints(
   registration: RegistrationSession,
 ): Promise<readonly ABAEndpointSummary[]> {
   const path = '/gateway/v1/endpoints/abas';
-  const challengeResponse = await gatewayAuthorizedRequest(path, registration.accessToken, 'GET');
+  const challengeResponse = await gatewayAuthorizedRequest(path, registration.accessToken, 'POST');
   const nonce = challengeResponse.headers.get('DPoP-Nonce');
   if (challengeResponse.status !== 401 || nonce === null || nonce === '') {
     throw await gatewayFailure(challengeResponse);
   }
   const proof = await createDpopProof({
     accessToken: registration.accessToken,
-    htm: 'GET',
+    htm: 'POST',
     htu: new URL(path, window.location.origin).toString(),
     nonce,
     privateKey: identity.signing.privateKey,
     publicJwk: identity.signing.publicJwk,
   });
-  const response = await gatewayAuthorizedRequest(path, registration.accessToken, 'GET', proof.proof);
+  const response = await gatewayAuthorizedRequest(path, registration.accessToken, 'POST', proof.proof);
   if (!response.ok) {
     throw await gatewayFailure(response);
   }

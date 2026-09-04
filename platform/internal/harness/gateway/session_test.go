@@ -69,7 +69,7 @@ func TestHCSessionCreateIsIdempotentAndDeliversSignedOpenTunnel(t *testing.T) {
 	}
 	listProof := signDPoPForMethodPath(
 		t, hcSigningKey, hcPublicJWK, hcAccessToken, listNonce, now,
-		"00000000-0000-4000-8000-000000000400", "GET", "/gateway/v1/endpoints/abas",
+		"00000000-0000-4000-8000-000000000400", "POST", "/gateway/v1/endpoints/abas",
 	)
 	listed := httptest.NewRecorder()
 	handler.ServeHTTP(listed, gatewayABAListRequest(hcAccessToken, listProof))
@@ -216,7 +216,7 @@ func gatewaySessionRequest(accessToken, idempotencyKey string, body []byte, proo
 }
 
 func gatewayABAListRequest(accessToken, proof string) *http.Request {
-	request := httptest.NewRequest(http.MethodGet, "/gateway/v1/endpoints/abas", nil)
+	request := httptest.NewRequest(http.MethodPost, "/gateway/v1/endpoints/abas", nil)
 	request.Header.Set("Origin", "http://127.0.0.1:8001")
 	request.Header.Set("Authorization", "DPoP "+accessToken)
 	if proof != "" {

@@ -144,7 +144,7 @@ func NewHandler(config Config, persistence Persistence, random io.Reader, now fu
 	mux.HandleFunc("OPTIONS /gateway/v1/tokens/refresh", server.preflight)
 	mux.HandleFunc("POST /gateway/v1/sessions", server.createSession)
 	mux.HandleFunc("OPTIONS /gateway/v1/sessions", server.preflight)
-	mux.HandleFunc("GET /gateway/v1/endpoints/abas", server.listABAEndpoints)
+	mux.HandleFunc("POST /gateway/v1/endpoints/abas", server.listABAEndpoints)
 	mux.HandleFunc("OPTIONS /gateway/v1/endpoints/abas", server.preflight)
 	return server.cors(mux), nil
 }

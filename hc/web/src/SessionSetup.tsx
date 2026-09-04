@@ -36,9 +36,13 @@ export function SessionSetup({
           setSelectedABA(values[0]?.id ?? '');
         }
       })
-      .catch(() => {
+      .catch((cause: unknown) => {
         if (active) {
-          setError('无法读取当前用户的 ABA Endpoint。');
+          setError(
+            cause instanceof HcApiError
+              ? `${cause.message}（${cause.code}）`
+              : '无法读取当前用户的 ABA Endpoint。',
+          );
         }
       });
     return () => {
