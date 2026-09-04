@@ -48,6 +48,7 @@ func registerManagementRoutes(group *gin.RouterGroup, runtime business.Runtime) 
 			"conflictFrames":       value.ConflictFrames,
 		})
 	}))
+	registerHCRegistrationRoutes(group, runtime)
 	group.GET("/enrollments", withManagement(runtime, func(c *gin.Context, management managementContext) {
 		values, err := management.store.ListEnrollments(c.Request.Context(), management.owner, management.tenant, queryLimit(c))
 		if err != nil {

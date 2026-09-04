@@ -44,6 +44,8 @@ var harnessAuthorizationRoutes = []harnessAuthorizationRoute{
 	{permission: PermissionApprove, method: http.MethodPost, path: canonicalAdminAPIBasePath + "/harness/v1/enrollments/:id/approve"},
 	{permission: PermissionApprove, method: http.MethodPost, path: canonicalAdminAPIBasePath + "/harness/v1/enrollments/:id/deny"},
 	{permission: PermissionRead, method: http.MethodGet, path: canonicalAdminAPIBasePath + "/harness/v1/endpoints"},
+	{permission: PermissionOperate, method: http.MethodPost, path: canonicalAdminAPIBasePath + "/harness/v1/hc/challenges"},
+	{permission: PermissionOperate, method: http.MethodPost, path: canonicalAdminAPIBasePath + "/harness/v1/hc/endpoints"},
 	{permission: PermissionRevoke, method: http.MethodPost, path: canonicalAdminAPIBasePath + "/harness/v1/endpoints/:id/suspend"},
 	{permission: PermissionRevoke, method: http.MethodPost, path: canonicalAdminAPIBasePath + "/harness/v1/endpoints/:id/resume"},
 	{permission: PermissionRevoke, method: http.MethodPost, path: canonicalAdminAPIBasePath + "/harness/v1/endpoints/:id/revoke"},

@@ -16,7 +16,10 @@ import (
 	"gorm.io/gorm/clause"
 )
 
-const HarnessAuthorizationMigrationID migration.MigrationID = "20260904030000"
+const (
+	HarnessAuthorizationMigrationID               migration.MigrationID = "20260904030000"
+	HarnessHCRegistrationAuthorizationMigrationID migration.MigrationID = "20260904035000"
+)
 
 const (
 	harnessAuthorizationScopeRole   = "role"
@@ -45,7 +48,12 @@ func registerHarnessMigrations(runner *migration.Migration) error {
 	if err := store.RegisterAllMigrations(runner); err != nil {
 		return err
 	}
-	return runner.Register(HarnessAuthorizationMigrationID, func(db *gorm.DB, version string) error {
+	if err := runner.Register(HarnessAuthorizationMigrationID, func(db *gorm.DB, version string) error {
+		return applyHarnessAuthorizationMigration(db, version)
+	}); err != nil {
+		return err
+	}
+	return runner.Register(HarnessHCRegistrationAuthorizationMigrationID, func(db *gorm.DB, version string) error {
 		return applyHarnessAuthorizationMigration(db, version)
 	})
 }
@@ -63,7 +71,7 @@ func applyHarnessAuthorizationMigrationWithHook(
 	if db == nil {
 		return errors.New("harness authorization migration database is required")
 	}
-	if version != HarnessAuthorizationMigrationID.String() {
+	if version != HarnessAuthorizationMigrationID.String() && version != HarnessHCRegistrationAuthorizationMigrationID.String() {
 		return errors.New("harness authorization migration version mismatch")
 	}
 	if err := verifyHarnessAuthorizationPrerequisites(db); err != nil {
