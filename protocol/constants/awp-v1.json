@@ -7,6 +7,10 @@
   "crypto": {
     "suite_id": 1,
     "suite_name": "MSS-AWP-SUITE-0001",
+    "hpke_kem_id": 16,
+    "hpke_kdf_id": 1,
+    "hpke_aead_id": 2,
+    "hpke_enc_length": 65,
     "aad_v1_length": 148,
     "id_length": 16,
     "nonce_prefix_length": 4,

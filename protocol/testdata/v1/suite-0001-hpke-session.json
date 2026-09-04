@@ -1,0 +1,46 @@
+{
+  "fixtureUse": "TEST ONLY - fixed Suite 0001 HPKE and session KDF interoperability fixture",
+  "suiteId": 1,
+  "hpke": {
+    "kemId": 16,
+    "kdfId": 1,
+    "aeadId": 2
+  },
+  "recipient": {
+    "publicJwk": {
+      "crv": "P-256",
+      "kty": "EC",
+      "x": "axfR8uEsQkf4vOblY6RA8ncDfYEt6zOg9KE5RdiYwpY",
+      "y": "T-NC4v4af5uO5-tKfA-eFivOM1drMV7Oy7ZAaDe_UfU"
+    },
+    "privateD": "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAE"
+  },
+  "context": {
+    "sessionIdHex": "01010101010101010101010101010101",
+    "generation": 1,
+    "senderAbaEndpointIdHex": "02020202020202020202020202020202",
+    "recipientHcEndpointIdHex": "03030303030303030303030303030303",
+    "policyRevision": 1
+  },
+  "material": {
+    "srkBase64Url": "BAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQ",
+    "sessionNonceBase64Url": "BQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQU",
+    "hcToAbaNoncePrefixBase64Url": "BgYGBg",
+    "abaToHcNoncePrefixBase64Url": "BwcHBw",
+    "notBeforeMs": 1800000000000,
+    "expiresAtMs": 1800003600000
+  },
+  "infoBase64Url": "bXNzLWtleS1wYWNrYWdlLXYxAQEBAQEBAQEBAQEBAQEBAQAAAAAAAAABAgICAgICAgICAgICAgICAgMDAwMDAwMDAwMDAwMDAwMAAQAAAAAAAAAB",
+  "plaintextBase64Url": "bXNzLWtleS1wYWNrYWdlLXBsYWludGV4dC12MQEBAQEBAQEBAQEBAQEBAQEAAAAAAAAAAQQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUGBgYGBwcHBwAAAaMYXFAAAAABoxiTPoAB",
+  "encBase64Url": "BBiwV_eHC5kWBrtElJ-mVQODhfRl0QTzF4ZDOi3WoSXpbXWq2dcSAq0_owISXS7K0zfw-ApD1wgIE66XUMXNEjU",
+  "ciphertextBase64Url": "J07XghL4TlCgBmdiLYyozNwB_r8a05oFhl9lhbi6HFaG-PNaHk49USGJGFSO9pRdHI8WGLaKGSEzQ3uJEHbrQTevTytgnN-KyEma07l2LVLSteidmLB_udd1FFWPE_XrhiJC3Fmf9zy79tiDHDldX10BlCehdlj2Fa3tuOAcx9nWC1rKbe7OIWWnZCwO2uTu5e7nLYoojfqMrNVNag",
+  "contextHashBase64Url": "UeeR43e5rsEoyV620sB5UEfrCc1nOx7nqp6OTrgY0kU",
+  "directionKeys": {
+    "hcToAbaBase64Url": "sCDmkPL0sWVOTUhd-DxLzLGT-xB8Wy1w3PFIiNEiWEk",
+    "abaToHcBase64Url": "Yd0Iy3m4qLOU3CSkdKK1TSW_0J1z1TIE80V0EPOryC8"
+  },
+  "nonces": {
+    "hcToAbaSequence1Base64Url": "BgYGBgAAAAAAAAAB",
+    "abaToHcSequence1Base64Url": "BwcHBwAAAAAAAAAB"
+  }
+}

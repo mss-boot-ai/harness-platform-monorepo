@@ -7,6 +7,7 @@ cd "${repo_root}"
 proto="protocol/proto/mss/awp/v1/wire.proto"
 constants="protocol/constants/awp-v1.json"
 suite_vector="protocol/testdata/v1/suite-0001-jwk-es256-dpop.json"
+hpke_vector="protocol/testdata/v1/suite-0001-hpke-session.json"
 wire_vector="protocol/testdata/v1/wire-server-challenge.json"
 go_binding="platform/internal/harness/protocol/awpv1/wire.pb.go"
 ts_binding="hc/packages/core/src/generated/mss/awp/v1/wire_pb.ts"
@@ -14,6 +15,7 @@ ts_binding="hc/packages/core/src/generated/mss/awp/v1/wire_pb.ts"
 [[ -s "${proto}" ]] || { echo "error: missing ${proto}" >&2; exit 2; }
 [[ -s "${constants}" ]] || { echo "error: missing ${constants}" >&2; exit 2; }
 [[ -s "${suite_vector}" ]] || { echo "error: missing ${suite_vector}" >&2; exit 2; }
+[[ -s "${hpke_vector}" ]] || { echo "error: missing ${hpke_vector}" >&2; exit 2; }
 [[ -s "${wire_vector}" ]] || { echo "error: missing ${wire_vector}" >&2; exit 2; }
 [[ -s "${go_binding}" ]] || { echo "error: missing ${go_binding}" >&2; exit 2; }
 [[ -s "${ts_binding}" ]] || { echo "error: missing ${ts_binding}" >&2; exit 2; }
@@ -32,6 +34,10 @@ assert data["wire"] == {
 }
 assert data["crypto"]["suite_id"] == 1
 assert data["crypto"]["suite_name"] == "MSS-AWP-SUITE-0001"
+assert data["crypto"]["hpke_kem_id"] == 0x0010
+assert data["crypto"]["hpke_kdf_id"] == 0x0001
+assert data["crypto"]["hpke_aead_id"] == 0x0002
+assert data["crypto"]["hpke_enc_length"] == 65
 assert data["crypto"]["aad_v1_length"] == 148
 assert data["crypto"]["id_length"] == 16
 assert data["crypto"]["nonce_length"] == 12
@@ -105,6 +111,35 @@ assert dpop["signingInput"] == dpop["protectedBase64Url"] + "." + dpop["payloadB
 assert dpop["proof"] == dpop["signingInput"] + "." + dpop["signatureP1363Base64Url"]
 assert len(decode(dpop["signatureP1363Base64Url"])) == 64
 print("AWP Suite 0001 shared identity and DPoP vector is internally consistent.")
+PY
+
+python3 - "${hpke_vector}" <<'PY'
+import base64
+import hashlib
+import json
+import sys
+from pathlib import Path
+
+data = json.loads(Path(sys.argv[1]).read_text(encoding="utf-8"))
+
+def decode(value: str) -> bytes:
+    return base64.urlsafe_b64decode(value + "=" * (-len(value) % 4))
+
+assert data["fixtureUse"].startswith("TEST ONLY")
+assert data["suiteId"] == 1
+assert data["hpke"] == {"kemId": 0x0010, "kdfId": 0x0001, "aeadId": 0x0002}
+assert len(decode(data["recipient"]["privateD"])) == 32
+assert len(decode(data["infoBase64Url"])) == 84
+assert len(decode(data["plaintextBase64Url"])) == 141
+assert len(decode(data["encBase64Url"])) == 65
+assert len(decode(data["ciphertextBase64Url"])) == 157
+assert len(decode(data["directionKeys"]["hcToAbaBase64Url"])) == 32
+assert len(decode(data["directionKeys"]["abaToHcBase64Url"])) == 32
+info = decode(data["infoBase64Url"])
+assert decode(data["contextHashBase64Url"]) == hashlib.sha256(info).digest()
+assert decode(data["nonces"]["hcToAbaSequence1Base64Url"]) == decode(data["material"]["hcToAbaNoncePrefixBase64Url"]) + b"\x00" * 7 + b"\x01"
+assert decode(data["nonces"]["abaToHcSequence1Base64Url"]) == decode(data["material"]["abaToHcNoncePrefixBase64Url"]) + b"\x00" * 7 + b"\x01"
+print("AWP Suite 0001 HPKE and session KDF vector is internally consistent.")
 PY
 
 if grep -Eq '^[[:space:]]*(string|bytes|repeated[[:space:]]+string)[[:space:]]+(command|args|cwd|env)[[:space:]]*=' "${proto}"; then

@@ -88,6 +88,7 @@ fn coordinate(value: &str) -> Result<[u8; 32], CryptoError> {
 }
 
 pub mod dpop;
+pub mod key_package;
 
 #[cfg(test)]
 mod tests {

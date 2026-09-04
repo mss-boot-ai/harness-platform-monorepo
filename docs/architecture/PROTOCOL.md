@@ -294,10 +294,13 @@ message SessionKeyPackage {
   int64 not_before_ms = 8;
   int64 expires_at_ms = 9;
   bytes issuer_signature = 10;
+  bytes key_package_id = 11;
+  bytes issuer_credential_id = 12;
+  uint64 policy_revision = 13;
 }
 ```
 
-`hpke_ciphertext` 的明文由安全文档定义。Platform 可以保存、路由、验证 ABA 签名，但不能解封。
+`hpke_ciphertext` 的 HPKE Suite、`info`/`aad`、141-byte 明文和 Envelope Signature Transcript 由安全文档精确定义。Platform 可以保存、路由、验证 ABA 签名，但不能解封。
 
 ### 6.5 ResumeState
 

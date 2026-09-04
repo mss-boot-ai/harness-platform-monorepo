@@ -35,6 +35,6 @@ make protocol-check
 ./scripts/check-protocol.sh
 ```
 
-The check requires `python3` and `protoc`. Go bindings are generated with `protoc 35.0` and `protoc-gen-go 1.36.12`; TypeScript bindings use `protoc-gen-es 2.14.1`. Shared ServerChallenge bytes are decoded and deterministically re-encoded by both generated bindings. The Suite 0001 fixtures are explicitly test-only. HPKE/AEAD vectors remain later checkpoints, so these vectors alone are not complete protocol interoperability.
+The check requires `python3` and `protoc`. Go bindings are generated with `protoc 35.0` and `protoc-gen-go 1.36.12`; TypeScript bindings use `protoc-gen-es 2.14.1`. Shared ServerChallenge bytes are decoded and deterministically re-encoded by both generated bindings. Suite 0001 fixtures are explicitly test-only. The HPKE/Session KDF fixture is opened by Rust, Go 1.26 `crypto/hpke`, and TypeScript WebCrypto; EncryptedFrame/ACK and complete ACP interoperability remain later checkpoints.
 
 See `docs/architecture/PROTOCOL.md` before changing anything here.

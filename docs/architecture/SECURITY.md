@@ -140,6 +140,8 @@ K_aba_to_hc = HKDF-Expand(
 )
 ```
 
+Suite 0001 将 `<session_id>` 与 `<hc_endpoint_id>` 编码为 32 位小写 hex，将 `<g>` 编码为无前导零十进制 ASCII；即使 MVP 只有一个 HC，也始终使用包含 `/endpoint/<hc_endpoint_id>` 的多参与者形式，禁止两种 info 格式并存。
+
 多 HC 模式下，默认每个参与者拥有独立方向密钥域：`.../endpoint/<hc_endpoint_id>/...`，避免一个 HC 获得另一个 HC 的发送能力。
 
 ### 7.3 Nonce
@@ -425,6 +427,20 @@ crypto_suite
 policy_revision
 ```
 
+Suite 0001 固定使用 HPKE Base Mode：DHKEM(P-256, HKDF-SHA256) `0x0010`、HKDF-SHA256 `0x0001`、AES-256-GCM `0x0002`。`info` 不是 JSON 或 Protobuf，而是以下精确字节串：
+
+```text
+utf8("mss-key-package-v1")
+|| session_id[16]
+|| u64be(generation)
+|| sender_aba_endpoint_id[16]
+|| recipient_hc_endpoint_id[16]
+|| u16be(crypto_suite = 1)
+|| u64be(policy_revision)
+```
+
+HPKE `aad` 与上述 `info` 使用完全相同的 84 字节。P-256 公钥和 `enc` 使用 SEC1 未压缩 65 字节编码。
+
 HPKE 明文包含：
 
 ```text
@@ -436,7 +452,42 @@ generation
 participant role
 ```
 
-ABA 再使用 Endpoint Signing Key 对 Key Package Envelope 签名。Platform 可验证来源但不能解封。
+Suite 0001 的明文精确编码为 141 字节：
+
+```text
+utf8("mss-key-package-plaintext-v1")
+|| session_id[16]
+|| u64be(generation)
+|| SRK[32]
+|| session_nonce[32]
+|| hc_to_aba_nonce_prefix[4]
+|| aba_to_hc_nonce_prefix[4]
+|| i64be(not_before_ms)
+|| i64be(expires_at_ms)
+|| u8(participant_role = 1 /* HC */)
+```
+
+解封后必须重新验证明文 Session、Generation、时间与 Participant Role；不匹配时销毁所得秘密并失败关闭。
+
+ABA 再使用 Endpoint Signing Key 对 Key Package Envelope 签名。Envelope Transcript 为：
+
+```text
+utf8("mss-key-package-envelope-v1")
+|| key_package_id[16]
+|| session_id[16]
+|| u64be(generation)
+|| issuer_aba_endpoint_id[16]
+|| recipient_hc_endpoint_id[16]
+|| issuer_credential_id[16]
+|| u16be(crypto_suite = 1)
+|| u64be(policy_revision)
+|| i64be(not_before_ms)
+|| i64be(expires_at_ms)
+|| u32be(hpke_enc_length) || hpke_enc
+|| u32be(hpke_ciphertext_length) || hpke_ciphertext
+```
+
+Platform 保存 `SHA-256(info)` 作为 Context Hash，可验证来源但不能解封。
 
 ### 14.3 Participant 加入
 
