@@ -1,0 +1,9 @@
+{
+  "name": "Harness HC",
+  "short_name": "Harness HC",
+  "description": "Secure H5 endpoint for Harness Platform",
+  "display": "standalone",
+  "start_url": "/",
+  "background_color": "#f3f6f1",
+  "theme_color": "#10231d"
+}
