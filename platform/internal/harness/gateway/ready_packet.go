@@ -76,6 +76,9 @@ func (server *Server) handleReadyPacket(
 	if err != nil || !awpcrypto.VerifyP1363LowS(publicKey, transcript, control.GetSignature()) {
 		return errors.New("control frame signature is invalid")
 	}
+	if control.GetType() == awpv1.ControlType_CONTROL_TYPE_RESUME_STATE {
+		return server.processResumeState(ctx, endpoint, control)
+	}
 	var receiverID domain.ID
 	switch control.GetType() {
 	case awpv1.ControlType_CONTROL_TYPE_OPEN_TUNNEL_RESULT:
@@ -102,11 +105,13 @@ func (server *Server) handleReadyPacket(
 func readyControlAllowed(endpointType domain.EndpointType, controlType awpv1.ControlType) bool {
 	switch endpointType {
 	case domain.EndpointTypeABA:
-		return controlType == awpv1.ControlType_CONTROL_TYPE_OPEN_TUNNEL_RESULT ||
+		return controlType == awpv1.ControlType_CONTROL_TYPE_RESUME_STATE ||
+			controlType == awpv1.ControlType_CONTROL_TYPE_OPEN_TUNNEL_RESULT ||
 			controlType == awpv1.ControlType_CONTROL_TYPE_SESSION_KEY_PACKAGE ||
 			controlType == awpv1.ControlType_CONTROL_TYPE_CLOSE_TUNNEL_RESULT
 	case domain.EndpointTypeHCWeb, domain.EndpointTypeHCReference:
-		return controlType == awpv1.ControlType_CONTROL_TYPE_SESSION_KEY_PACKAGE_ACK
+		return controlType == awpv1.ControlType_CONTROL_TYPE_RESUME_STATE ||
+			controlType == awpv1.ControlType_CONTROL_TYPE_SESSION_KEY_PACKAGE_ACK
 	default:
 		return false
 	}

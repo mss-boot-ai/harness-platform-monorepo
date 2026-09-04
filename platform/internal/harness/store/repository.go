@@ -771,6 +771,23 @@ func (store *Store) AdvanceAck(ctx context.Context, cursor domain.AckCursor) (do
 		!cursor.Direction.Valid() || cursor.UpdatedAt.IsZero() || !validAckRanges(cursor) {
 		return domain.AckCursor{}, domain.NewProblem(domain.CodeInvalidArgument, "ACK cursor is invalid", nil)
 	}
+	const sqliteAttempts = 8
+	for attempt := 0; attempt < sqliteAttempts; attempt++ {
+		advanced, err := store.advanceAckOnce(ctx, cursor)
+		if err == nil {
+			return advanced, nil
+		}
+		if store.db.Dialector.Name() != "sqlite" || !isSQLiteConcurrencyError(err) || attempt == sqliteAttempts-1 {
+			return domain.AckCursor{}, normalizeConcurrencyError("ACK cursor changed concurrently", err)
+		}
+		if err := waitForSQLiteRetry(ctx, attempt); err != nil {
+			return domain.AckCursor{}, err
+		}
+	}
+	return domain.AckCursor{}, domain.NewProblem(domain.CodeConflict, "ACK cursor changed concurrently", nil)
+}
+
+func (store *Store) advanceAckOnce(ctx context.Context, cursor domain.AckCursor) (domain.AckCursor, error) {
 	var advanced domain.AckCursor
 	err := store.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
 		var row ackRow
@@ -848,6 +865,60 @@ func (store *Store) AdvanceAck(ctx context.Context, cursor domain.AckCursor) (do
 		return nil
 	})
 	return advanced, err
+}
+
+func (store *Store) ReplayEndpointFrames(
+	ctx context.Context,
+	receiverID domain.ID,
+	channelID domain.ID,
+	keyGeneration uint64,
+	direction domain.Direction,
+	highest uint64,
+	ranges []domain.SequenceRange,
+	limit int,
+) ([]domain.EncryptedFrame, error) {
+	if err := requireStore(store, ctx); err != nil {
+		return nil, err
+	}
+	if receiverID.IsZero() || channelID.IsZero() || keyGeneration == 0 || !direction.Valid() ||
+		limit <= 0 || limit > 1024 || !validReplayRanges(highest, ranges) {
+		return nil, domain.NewProblem(domain.CodeInvalidArgument, "replay cursor is invalid", nil)
+	}
+	query := store.db.WithContext(ctx).Where(
+		"receiver_endpoint_id = ? AND channel_id = ? AND key_generation = ? AND direction = ? AND sequence > ? AND status IN ?",
+		receiverID.String(), channelID.String(), keyGeneration, uint8(direction), highest,
+		[]string{string(domain.FrameStatusStored), string(domain.FrameStatusRouted)},
+	)
+	for _, value := range ranges {
+		query = query.Where("NOT (sequence >= ? AND sequence <= ?)", value.Start, value.End)
+	}
+	var rows []frameRow
+	if err := query.Order("sequence").Limit(limit).Find(&rows).Error; err != nil {
+		return nil, classifyPersistence(err, "list replay frames")
+	}
+	frames := make([]domain.EncryptedFrame, 0, len(rows))
+	for _, row := range rows {
+		frame, err := frameFromRow(row)
+		if err != nil {
+			return nil, err
+		}
+		frames = append(frames, frame)
+	}
+	return frames, nil
+}
+
+func validReplayRanges(highest uint64, ranges []domain.SequenceRange) bool {
+	if len(ranges) > 32 {
+		return false
+	}
+	previous := highest
+	for _, value := range ranges {
+		if value.Start == 0 || value.Start > value.End || value.Start <= previous {
+			return false
+		}
+		previous = value.End
+	}
+	return true
 }
 
 func validAckRanges(cursor domain.AckCursor) bool {

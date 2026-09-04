@@ -34,7 +34,6 @@ export function GatewaySetup({
   const issue = async () => {
     setBusy(true);
     setError(null);
-    onReady(null);
     try {
       socketRef.current?.close(1000, 'HC reconnecting');
       const activeRegistration = await refreshEndpointSession(identity);
@@ -66,6 +65,14 @@ export function GatewaySetup({
     }
   };
 
+  const disconnect = () => {
+    socketRef.current?.close(1000, 'HC manual network recovery test');
+    socketRef.current = null;
+    setConnection(null);
+    setTicket(null);
+    setError(null);
+  };
+
   return (
     <section className="gateway-card" aria-labelledby="gateway-title">
       <div className="section-heading">
@@ -88,6 +95,11 @@ export function GatewaySetup({
       <button className="primary-button gateway-button" type="button" disabled={busy} onClick={() => void issue()}>
         {busy ? '正在验证并握手…' : connection === null ? '获取 Ticket 并安全连接' : '重新建立安全连接'}
       </button>
+      {connection === null ? null : (
+        <button className="secondary-button" type="button" disabled={busy} onClick={disconnect}>
+          断开连接（保留 Session）
+        </button>
+      )}
     </section>
   );
 }

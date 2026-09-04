@@ -369,6 +369,62 @@ func TestAdvanceACKAtomicallyMarksContiguousAndRangedFrames(t *testing.T) {
 	}
 }
 
+func TestReplayEndpointFramesReturnsOnlyMissingOriginalFrames(t *testing.T) {
+	store := newTestStore(t)
+	ctx := context.Background()
+	now := time.Unix(1_800_000_000, 0).UTC()
+	first := testFrame(now)
+	second := testFrame(now)
+	second.MessageID = tid(8)
+	second.Sequence = 2
+	second.ContentHash = sha256.Sum256([]byte("second frame"))
+	for _, frame := range []domain.EncryptedFrame{first, second} {
+		if outcome, err := store.PutFrame(ctx, frame, 1024); err != nil || outcome != PutFrameStored {
+			t.Fatalf("PutFrame sequence=%d outcome=%s error=%v", frame.Sequence, outcome, err)
+		}
+	}
+	missing, err := store.ReplayEndpointFrames(
+		ctx, first.ReceiverEndpointID, first.ChannelID, 1, first.Direction, 0,
+		[]domain.SequenceRange{{Start: 1, End: 1}}, 10,
+	)
+	if err != nil || len(missing) != 1 || missing[0].MessageID != second.MessageID ||
+		!bytes.Equal(missing[0].Ciphertext, second.Ciphertext) ||
+		!bytes.Equal(missing[0].Signature, second.Signature) {
+		t.Fatalf("replay frames=%#v error=%v", missing, err)
+	}
+}
+
+func TestConcurrentACKWritersUseBoundedSQLiteRetry(t *testing.T) {
+	store := newTestStore(t)
+	ctx := context.Background()
+	now := time.Unix(1_800_000_000, 0).UTC()
+	const writers = 16
+	start := make(chan struct{})
+	errorsFound := make(chan error, writers)
+	var group sync.WaitGroup
+	for index := 0; index < writers; index++ {
+		group.Add(1)
+		go func(offset byte) {
+			defer group.Done()
+			<-start
+			_, err := store.AdvanceAck(ctx, domain.AckCursor{
+				SessionID: tid(100 + offset), KeyGeneration: 1, Direction: domain.DirectionHCToABA,
+				SenderEndpointID: tid(150 + offset), ReceiverEndpointID: tid(200 + offset),
+				HighestContiguousSequence: 1, UpdatedAt: now,
+			})
+			errorsFound <- err
+		}(byte(index))
+	}
+	close(start)
+	group.Wait()
+	close(errorsFound)
+	for err := range errorsFound {
+		if err != nil {
+			t.Fatalf("concurrent ACK failed after bounded retry: %v", err)
+		}
+	}
+}
+
 func TestRevocationCascadesToCredentialTicketAndSession(t *testing.T) {
 	store := newTestStore(t)
 	ctx := context.Background()

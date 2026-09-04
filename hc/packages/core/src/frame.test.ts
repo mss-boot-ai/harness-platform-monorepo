@@ -4,11 +4,13 @@ import {
   buildAckTranscript,
   buildFrameAAD,
   createHCAckFramePacket,
+  createHCResumeStatePacket,
   createHCToABAFramePacket,
   openABAToHCFramePacket,
   sessionChannelId,
 } from './frame';
 import {
+  ControlType,
   Direction,
   EncryptedFrameSchema,
   FrameType,
@@ -80,6 +82,17 @@ describe('Suite 0001 encrypted frames', () => {
     });
     expect(transcript).toHaveLength(114);
     await expect(verifyP1363LowS(identity.signing.publicKey, transcript, ack.signature)).resolves.toBe(true);
+
+    const resumePacket = await createHCResumeStatePacket(
+      identity, binding, 1n, 0n, 1n, new Date(1_800_000_000_000),
+    );
+    const decodedResume = fromBinary(WirePacketSchema, resumePacket);
+    expect(decodedResume.body.case).toBe('control');
+    if (decodedResume.body.case !== 'control') {
+      throw new Error('HC packet is not ResumeState control');
+    }
+    expect(decodedResume.body.value.type).toBe(ControlType.RESUME_STATE);
+    expect(decodedResume.body.value.receiverEndpointId).toEqual(new Uint8Array(16));
   });
 });
 

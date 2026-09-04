@@ -2,13 +2,18 @@ import { create, fromBinary, toBinary } from '@bufbuild/protobuf';
 import { importP256VerifyingKey, signP1363LowS, verifyP1363LowS } from './crypto';
 import {
   AckFrameSchema,
+  ChannelCursorSchema,
+  ControlFrameSchema,
+  ControlType,
   Direction,
   EncryptedFrameSchema,
   FrameType,
+  ResumeStateSchema,
   WirePacketSchema,
 } from './generated/mss/awp/v1/wire_pb';
 import type { EndpointIdentity, P256PublicJwk } from './identity';
 import type { OpenedSessionKeyPackage } from './session-key-package';
+import { buildControlTranscript } from './session-key-package';
 
 const textEncoder = new TextEncoder();
 
@@ -132,6 +137,61 @@ export async function createHCAckFramePacket(
         keyGeneration,
         sessionId,
         signature: await signP1363LowS(identity.signing.privateKey, transcript),
+      }),
+    },
+    packetId: crypto.getRandomValues(new Uint8Array(16)),
+    wireMajor: 1,
+    wireMinor: 0,
+  }));
+}
+
+export async function createHCResumeStatePacket(
+  identity: EndpointIdentity,
+  binding: FrameBinding,
+  controlSequence: bigint,
+  highestContiguousSequence: bigint,
+  keyGeneration = 1n,
+  now = new Date(),
+): Promise<Uint8Array> {
+  if (controlSequence <= 0n || highestContiguousSequence < 0n || keyGeneration <= 0n) {
+    throw new Error('HC ResumeState input is invalid');
+  }
+  const sessionId = decodeHexId(binding.sessionId);
+  const abaEndpointId = decodeHexId(binding.abaEndpointId);
+  const hcEndpointId = decodeHexId(binding.hcEndpointId);
+  const channelId = await sessionChannelId(sessionId, abaEndpointId, hcEndpointId);
+  const payload = toBinary(ResumeStateSchema, create(ResumeStateSchema, {
+    cursors: [create(ChannelCursorSchema, {
+      channelId,
+      direction: Direction.ABA_TO_HC,
+      highestContiguousSequence,
+      keyGeneration,
+    })],
+  }));
+  const messageId = crypto.getRandomValues(new Uint8Array(16));
+  const platformEndpointId = new Uint8Array(16);
+  const createdAtMs = BigInt(now.getTime());
+  const transcript = buildControlTranscript({
+    controlSequence,
+    controlType: ControlType.RESUME_STATE,
+    createdAtMs,
+    messageId,
+    payload,
+    receiverEndpointId: platformEndpointId,
+    senderEndpointId: hcEndpointId,
+  });
+  return toBinary(WirePacketSchema, create(WirePacketSchema, {
+    body: {
+      case: 'control',
+      value: create(ControlFrameSchema, {
+        controlSequence,
+        createdAtMs,
+        messageId,
+        payload,
+        receiverEndpointId: platformEndpointId,
+        senderEndpointId: hcEndpointId,
+        signature: await signP1363LowS(identity.signing.privateKey, transcript),
+        type: ControlType.RESUME_STATE,
       }),
     },
     packetId: crypto.getRandomValues(new Uint8Array(16)),

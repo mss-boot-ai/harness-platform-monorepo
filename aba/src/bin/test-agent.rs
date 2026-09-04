@@ -46,6 +46,9 @@ async fn main() -> Result<()> {
                     })
                     .collect::<Vec<_>>()
                     .join("\n");
+                if prompt.starts_with("delay:") {
+                    tokio::time::sleep(std::time::Duration::from_millis(500)).await;
+                }
                 connection.send_notification(SessionNotification::new(
                     request.session_id,
                     SessionUpdate::AgentMessageChunk(ContentChunk::new(ContentBlock::Text(

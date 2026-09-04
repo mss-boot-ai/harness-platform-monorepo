@@ -425,6 +425,57 @@ func TestHCSessionCreateIsIdempotentAndDeliversSignedOpenTunnel(t *testing.T) {
 	if err != nil || forwardedType != websocket.BinaryMessage || !bytes.Equal(forwardedABAFrame, abaFrame) {
 		t.Fatalf("read forwarded ABA frame type=%d error=%v", forwardedType, err)
 	}
+	resumePayload, err := proto.MarshalOptions{Deterministic: true}.Marshal(&awpv1.ResumeState{
+		Cursors: []*awpv1.ChannelCursor{{
+			ChannelId: channelID[:], Direction: awpv1.Direction_DIRECTION_ABA_TO_HC,
+			HighestContiguousSequence: 0, KeyGeneration: 1,
+		}},
+	})
+	if err != nil {
+		t.Fatalf("encode ResumeState: %v", err)
+	}
+	resumeMessageID := bytes.Repeat([]byte{97}, 16)
+	platformReceiver := make([]byte, 16)
+	resumeTranscript, err := controlTranscript(
+		resumeMessageID, hcEndpointID[:], platformReceiver, 2, now.UnixMilli(),
+		uint32(awpv1.ControlType_CONTROL_TYPE_RESUME_STATE), resumePayload,
+	)
+	if err != nil {
+		t.Fatalf("ResumeState transcript: %v", err)
+	}
+	resumeSignature, err := awpcrypto.SignP1363LowS(hcSigningKey, resumeTranscript)
+	if err != nil {
+		t.Fatalf("sign ResumeState: %v", err)
+	}
+	resumePacket, err := proto.MarshalOptions{Deterministic: true}.Marshal(&awpv1.WirePacket{
+		WireMajor: 1, PacketId: bytes.Repeat([]byte{98}, 16),
+		Body: &awpv1.WirePacket_Control{Control: &awpv1.ControlFrame{
+			MessageId: resumeMessageID, SenderEndpointId: hcEndpointID[:], ReceiverEndpointId: platformReceiver,
+			ControlSequence: 2, CreatedAtMs: now.UnixMilli(), Type: awpv1.ControlType_CONTROL_TYPE_RESUME_STATE,
+			Payload: resumePayload, Signature: resumeSignature,
+		}},
+	})
+	if err != nil {
+		t.Fatalf("encode ResumeState packet: %v", err)
+	}
+	if err := hcConnection.WriteMessage(websocket.BinaryMessage, resumePacket); err != nil {
+		t.Fatalf("write ResumeState: %v", err)
+	}
+	replayType, replayedABAFrame, err := hcConnection.ReadMessage()
+	if err != nil || replayType != websocket.BinaryMessage {
+		t.Fatalf("read replayed ABA frame type=%d error=%v", replayType, err)
+	}
+	replayedPacket := new(awpv1.WirePacket)
+	originalPacket := new(awpv1.WirePacket)
+	if err := proto.Unmarshal(replayedABAFrame, replayedPacket); err != nil {
+		t.Fatalf("decode replayed ABA frame: %v", err)
+	}
+	if err := proto.Unmarshal(abaFrame, originalPacket); err != nil {
+		t.Fatalf("decode original ABA frame: %v", err)
+	}
+	if !proto.Equal(replayedPacket.GetEncrypted(), originalPacket.GetEncrypted()) {
+		t.Fatalf("replayed encrypted frame changed: original=%#v replay=%#v", originalPacket.GetEncrypted(), replayedPacket.GetEncrypted())
+	}
 	hcACK := testAckFramePacket(
 		t, createdSessionID, channelID, hcEndpointID,
 		awpv1.Direction_DIRECTION_ABA_TO_HC, 1, hcSigningKey, now,
