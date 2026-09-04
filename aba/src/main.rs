@@ -5,6 +5,7 @@ use aba::config::AgentConfig;
 use aba::gateway::GatewayClient;
 use aba::identity::DevFileKeyStore;
 use aba::identity::enrollment::EnrollmentClient;
+use aba::journal::Journal;
 use aba::version::{PRODUCT_NAME, build_info};
 use clap::{Args, Parser, Subcommand};
 use url::Url;
@@ -211,6 +212,11 @@ fn execute(cli: Cli) -> Result<(), Box<dyn std::error::Error>> {
         } => {
             let config =
                 AgentConfig::load_with_loopback_development(config, insecure_dev_keystore)?;
+            let journal_path = store
+                .parent()
+                .ok_or("ABA identity store must have a parent directory")?
+                .join("relay-journal-v1.json");
+            let journal = Journal::open(journal_path, config.limits.journal_max_bytes)?;
             let store = DevFileKeyStore::new(store, &config.platform.url, insecure_dev_keystore)?;
             let identity = store.load()?;
             let ready =
@@ -219,7 +225,7 @@ fn execute(cli: Cli) -> Result<(), Box<dyn std::error::Error>> {
                 "gateway ready: endpoint {} generation {}",
                 ready.endpoint_id, ready.connection_generation
             );
-            ready.run(&identity, &config)?;
+            ready.run(&identity, &config, journal)?;
         }
     }
     Ok(())

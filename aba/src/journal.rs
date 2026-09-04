@@ -26,6 +26,8 @@ pub enum JournalError {
     Conflict,
     #[error("ABA journal state transition is invalid")]
     InvalidState,
+    #[error("another ABA instance already owns the relay journal")]
+    LeaseHeld,
 }
 
 #[derive(Debug, Clone, Copy, Deserialize, Serialize, PartialEq, Eq)]
@@ -172,7 +174,7 @@ impl Journal {
     }
 
     #[cfg(test)]
-    fn memory(max_bytes: u64) -> Self {
+    pub(crate) fn memory(max_bytes: u64) -> Self {
         Self {
             inner: Arc::new(JournalInner {
                 state: Mutex::new(JournalState::empty()),
@@ -560,7 +562,7 @@ fn acquire_lease(path: &Path) -> Result<File, JournalError> {
     let file = options.open(lease_path).map_err(JournalError::Io)?;
     #[cfg(unix)]
     rustix::fs::flock(&file, rustix::fs::FlockOperation::NonBlockingLockExclusive)
-        .map_err(|_| JournalError::InvalidState)?;
+        .map_err(|_| JournalError::LeaseHeld)?;
     Ok(file)
 }
 
@@ -720,7 +722,7 @@ mod tests {
         let journal = Journal::open(&path, 1 << 20)?;
         assert!(matches!(
             Journal::open(&path, 1 << 20),
-            Err(JournalError::InvalidState)
+            Err(JournalError::LeaseHeld)
         ));
         let inbound = InboundFrame {
             message_id: [1; 16],

@@ -33,7 +33,11 @@ pub enum GatewayError {
     #[error(transparent)]
     Frame(#[from] crate::crypto::frame::FrameCryptoError),
     #[error(transparent)]
+    Ack(#[from] crate::crypto::ack::AckError),
+    #[error(transparent)]
     Agent(#[from] crate::process::ProcessError),
+    #[error(transparent)]
+    Journal(#[from] crate::journal::JournalError),
     #[error(transparent)]
     KeyStore(#[from] crate::identity::KeyStoreError),
 }

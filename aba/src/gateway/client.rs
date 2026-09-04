@@ -25,6 +25,7 @@ use crate::config::AgentConfig;
 use crate::crypto::dpop::{DpopInput, NonceDpopInput, create_dpop_proof, create_nonce_dpop_proof};
 use crate::crypto::{sign_p1363_low_s, verify_p1363_low_s};
 use crate::identity::{DevFileKeyStore, EndpointCredentials, EndpointIdentity};
+use crate::journal::Journal;
 use crate::protocol::awpv1::{ChallengeResponse, WirePacket, wire_packet};
 
 const PROTOCOL: &str = "mss.awp.v1";
@@ -376,8 +377,9 @@ impl ReadyConnection {
         mut self,
         identity: &EndpointIdentity,
         config: &AgentConfig,
+        journal: Journal,
     ) -> Result<(), GatewayError> {
-        let mut controls = ControlState::new();
+        let mut controls = ControlState::new(journal);
         loop {
             let message = match self.socket.read() {
                 Ok(message) => message,

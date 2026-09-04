@@ -10,16 +10,20 @@ use prost::Message as _;
 use super::GatewayError;
 use super::transcript::{ControlInput, control};
 use crate::config::AgentConfig;
-use crate::crypto::frame::{open_frame, seal_frame, session_channel_id};
+use crate::crypto::ack::{sign_ack, verify_ack};
+use crate::crypto::frame::{frame_content_hash, open_frame, seal_frame, session_channel_id};
 use crate::crypto::key_package::{
     KeyPackageEnvelope, KeyPackageMaterial, SUITE_NAME, key_package_envelope_transcript,
     p256_public_jwk_from_sec1, seal_key_package,
 };
 use crate::crypto::{sign_p1363_low_s, verify_p1363_low_s};
 use crate::identity::EndpointIdentity;
+use crate::journal::{
+    ChannelKey, InboundFrame, InboundState, IntakeOutcome, Journal, OutboundFrame,
+};
 use crate::process::AgentProcess;
 use crate::protocol::awpv1::{
-    ControlFrame, ControlType, Direction as WireDirection, EncryptedFrame,
+    AckFrame, ControlFrame, ControlType, Direction as WireDirection, EncryptedFrame,
     FrameType as WireFrameType, OpenTunnelRequest, OpenTunnelResult, OpenTunnelStatus,
     SessionKeyPackage, SessionKeyPackageAck, WirePacket, wire_packet,
 };
@@ -32,6 +36,7 @@ pub(super) struct ControlState {
     hc_inbound_sequences: HashMap<[u8; 16], u64>,
     outbound_sequence: u64,
     sessions: HashMap<[u8; 16], LocalSession>,
+    journal: Journal,
 }
 
 struct LocalSession {
@@ -60,12 +65,13 @@ struct PolicyDecision {
 }
 
 impl ControlState {
-    pub fn new() -> Self {
+    pub fn new(journal: Journal) -> Self {
         Self {
             platform_inbound_sequence: 0,
             hc_inbound_sequences: HashMap::new(),
             outbound_sequence: 0,
             sessions: HashMap::new(),
+            journal,
         }
     }
 
@@ -89,6 +95,9 @@ impl ControlState {
             Some(wire_packet::Body::Control(value)) => value,
             Some(wire_packet::Body::Encrypted(value)) => {
                 return self.handle_encrypted_frame(value, endpoint_id, identity, now);
+            }
+            Some(wire_packet::Body::Ack(value)) => {
+                return self.handle_ack_frame(value, endpoint_id, now);
             }
             _ => return Err(GatewayError::Protocol),
         };
@@ -382,6 +391,7 @@ impl ControlState {
         identity: &EndpointIdentity,
         now: SystemTime,
     ) -> Result<Vec<Vec<u8>>, GatewayError> {
+        let journal = self.journal.clone();
         let session_id: [u8; 16] = frame
             .session_id
             .as_slice()
@@ -413,8 +423,12 @@ impl ControlState {
         {
             return Err(GatewayError::ProtocolStage("encrypted frame route"));
         }
-        if frame.sequence != session.hc_frame_sequence + 1 {
-            return Err(GatewayError::ProtocolStage("encrypted frame sequence"));
+        let next_sequence = session
+            .hc_frame_sequence
+            .checked_add(1)
+            .ok_or(GatewayError::ProtocolStage("encrypted frame sequence"))?;
+        if frame.sequence > next_sequence {
+            return Err(GatewayError::ProtocolStage("encrypted frame sequence gap"));
         }
         if frame.key_generation != session.material.generation
             || frame.key_id != session.material.key_id
@@ -461,23 +475,112 @@ impl ControlState {
             &frame.ciphertext,
             &frame.signature,
         )?;
-        let responses = session
-            .agent
-            .prompt(&plaintext, &lower_hex(&session_id))
-            .map_err(GatewayError::from)?;
-        session.hc_frame_sequence = frame.sequence;
-        let mut packets = Vec::with_capacity(responses.len());
+        let encoded_aad = aad.encode().map_err(|_| GatewayError::Protocol)?;
+        let intake = journal.record_inbound(InboundFrame {
+            message_id: aad.message_id,
+            session_id,
+            channel_id,
+            direction: Direction::HcToAba as u8,
+            sequence: frame.sequence,
+            key_generation: frame.key_generation,
+            content_hash: frame_content_hash(&encoded_aad, &frame.ciphertext, &frame.signature),
+            updated_at_ms: now_ms,
+        })?;
+        if intake == IntakeOutcome::New {
+            if frame.sequence != next_sequence {
+                return Err(GatewayError::ProtocolStage(
+                    "encrypted frame journal cursor",
+                ));
+            }
+            session.hc_frame_sequence = frame.sequence;
+        } else if frame.sequence > session.hc_frame_sequence {
+            return Err(GatewayError::ProtocolStage("encrypted frame replay cursor"));
+        }
+        let acknowledgment = signed_frame_ack(session, endpoint_id, identity, channel_id, now_ms)?;
+        match intake {
+            IntakeOutcome::Duplicate(InboundState::Responded) => {
+                let mut packets = vec![acknowledgment];
+                packets.extend(journal.unacknowledged(session_id, Direction::AbaToHc as u8)?);
+                return Ok(packets);
+            }
+            IntakeOutcome::Duplicate(InboundState::DispatchStarted | InboundState::Uncertain) => {
+                return Ok(vec![acknowledgment]);
+            }
+            IntakeOutcome::New | IntakeOutcome::Duplicate(InboundState::Received) => {}
+        }
+        journal.start_dispatch(aad.message_id, now_ms)?;
+        let responses = match session.agent.prompt(&plaintext, &lower_hex(&session_id)) {
+            Ok(responses) => responses,
+            Err(error) => {
+                let _ = journal.mark_uncertain(aad.message_id, now_ms);
+                return Err(GatewayError::from(error));
+            }
+        };
+        let mut packets = Vec::with_capacity(responses.len() + 1);
+        packets.push(acknowledgment);
         for response in responses {
-            packets.push(seal_aba_frame(
+            match seal_aba_frame(
                 session,
                 endpoint_id,
                 identity,
                 channel_id,
                 &response,
                 now_ms,
-            )?);
+                &journal,
+            ) {
+                Ok(packet) => packets.push(packet),
+                Err(error) => {
+                    let _ = journal.mark_uncertain(aad.message_id, now_ms);
+                    return Err(error);
+                }
+            }
         }
+        journal.mark_responded(aad.message_id, now_ms)?;
         Ok(packets)
+    }
+
+    fn handle_ack_frame(
+        &mut self,
+        frame: AckFrame,
+        endpoint_id: &[u8; 16],
+        now: SystemTime,
+    ) -> Result<Vec<Vec<u8>>, GatewayError> {
+        let session_id: [u8; 16] = frame
+            .session_id
+            .as_slice()
+            .try_into()
+            .map_err(|_| GatewayError::Protocol)?;
+        let session = self
+            .sessions
+            .get(&session_id)
+            .ok_or(GatewayError::ProtocolStage("ACK session"))?;
+        let channel_id = session_channel_id(
+            &session_id,
+            endpoint_id,
+            &session.material.recipient_hc_endpoint_id,
+        )?;
+        let now_ms = unix_millis(now)?;
+        let ranges = ack_ranges(&frame, session.aba_frame_sequence)?;
+        if !session.active
+            || frame.channel_id != channel_id
+            || frame.endpoint_id != session.material.recipient_hc_endpoint_id
+            || frame.acknowledged_direction != WireDirection::AbaToHc as i32
+            || frame.key_generation != session.material.generation
+            || frame.highest_contiguous_sequence > session.aba_frame_sequence
+            || frame.created_at_ms < now_ms - 300_000
+            || frame.created_at_ms > now_ms + 300_000
+        {
+            return Err(GatewayError::ProtocolStage("ACK binding"));
+        }
+        verify_ack(&frame, &session.hc_signing_key)?;
+        self.journal.acknowledge_outbound(
+            session_id,
+            Direction::AbaToHc as u8,
+            frame.key_generation,
+            frame.highest_contiguous_sequence,
+            &ranges,
+        )?;
+        Ok(Vec::new())
     }
 }
 
@@ -488,11 +591,18 @@ fn seal_aba_frame(
     channel_id: [u8; 16],
     plaintext: &[u8],
     now_ms: i64,
+    journal: &Journal,
 ) -> Result<Vec<u8>, GatewayError> {
-    session.aba_frame_sequence = session
-        .aba_frame_sequence
-        .checked_add(1)
-        .ok_or(GatewayError::Protocol)?;
+    let sequence = journal.reserve_outbound_sequence(ChannelKey {
+        session_id: session.material.session_id,
+        channel_id,
+        direction: Direction::AbaToHc as u8,
+        key_generation: session.material.generation,
+    })?;
+    if sequence <= session.aba_frame_sequence {
+        return Err(GatewayError::ProtocolStage("outbound journal sequence"));
+    }
+    session.aba_frame_sequence = sequence;
     let message_id = random_array::<16>();
     let aad = FrameAadV1 {
         crypto_suite: CryptoSuite::Suite0001,
@@ -504,7 +614,7 @@ fn seal_aba_frame(
         sender_endpoint_id: *endpoint_id,
         receiver_endpoint_id: session.material.recipient_hc_endpoint_id,
         direction: Direction::AbaToHc,
-        sequence: session.aba_frame_sequence,
+        sequence,
         key_generation: session.material.generation,
         key_id: session.material.key_id,
         created_at_ms: now_ms,
@@ -518,7 +628,7 @@ fn seal_aba_frame(
         aad,
         plaintext,
     )?;
-    Ok(WirePacket {
+    let encoded = WirePacket {
         wire_major: 1,
         wire_minor: 0,
         packet_id: random_array::<16>().to_vec(),
@@ -532,7 +642,7 @@ fn seal_aba_frame(
             sender_endpoint_id: endpoint_id.to_vec(),
             receiver_endpoint_id: session.material.recipient_hc_endpoint_id.to_vec(),
             direction: WireDirection::AbaToHc as i32,
-            sequence: session.aba_frame_sequence,
+            sequence,
             key_generation: session.material.generation,
             key_id: session.material.key_id.to_vec(),
             created_at_ms: now_ms,
@@ -540,7 +650,69 @@ fn seal_aba_frame(
             signature: protected.signature.to_vec(),
         })),
     }
+    .encode_to_vec();
+    journal.record_outbound(OutboundFrame {
+        message_id,
+        session_id: session.material.session_id,
+        channel_id,
+        direction: Direction::AbaToHc as u8,
+        sequence,
+        key_generation: session.material.generation,
+        packet: encoded.clone(),
+        created_at_ms: now_ms,
+    })?;
+    Ok(encoded)
+}
+
+fn signed_frame_ack(
+    session: &LocalSession,
+    endpoint_id: &[u8; 16],
+    identity: &EndpointIdentity,
+    channel_id: [u8; 16],
+    now_ms: i64,
+) -> Result<Vec<u8>, GatewayError> {
+    let mut acknowledgment = AckFrame {
+        ack_id: random_array::<16>().to_vec(),
+        channel_id: channel_id.to_vec(),
+        session_id: session.material.session_id.to_vec(),
+        endpoint_id: endpoint_id.to_vec(),
+        acknowledged_direction: WireDirection::HcToAba as i32,
+        highest_contiguous_sequence: session.hc_frame_sequence,
+        received_ranges: Vec::new(),
+        key_generation: session.material.generation,
+        created_at_ms: now_ms,
+        signature: Vec::new(),
+    };
+    sign_ack(&mut acknowledgment, identity.signing_key())?;
+    Ok(WirePacket {
+        wire_major: 1,
+        wire_minor: 0,
+        packet_id: random_array::<16>().to_vec(),
+        body: Some(wire_packet::Body::Ack(acknowledgment)),
+    }
     .encode_to_vec())
+}
+
+fn ack_ranges(frame: &AckFrame, maximum: u64) -> Result<Vec<(u64, u64)>, GatewayError> {
+    if frame.received_ranges.len() > 32
+        || (frame.highest_contiguous_sequence == 0 && frame.received_ranges.is_empty())
+    {
+        return Err(GatewayError::ProtocolStage("ACK ranges"));
+    }
+    let mut previous = frame.highest_contiguous_sequence;
+    let mut output = Vec::with_capacity(frame.received_ranges.len());
+    for value in &frame.received_ranges {
+        if value.start == 0
+            || value.start > value.end
+            || value.start <= previous
+            || value.end > maximum
+        {
+            return Err(GatewayError::ProtocolStage("ACK ranges"));
+        }
+        output.push((value.start, value.end));
+        previous = value.end;
+    }
+    Ok(output)
 }
 
 fn lower_hex(value: &[u8]) -> String {
@@ -687,6 +859,7 @@ mod tests {
         CONFIG_SCHEMA_VERSION, Limits, PlatformConfig, RuntimeProfile, WorkspaceProfile,
     };
     use crate::identity::DevFileKeyStore;
+    use crate::journal::Journal;
     use base64::{Engine as _, engine::general_purpose::URL_SAFE_NO_PAD};
     use p256::ecdsa::SigningKey;
     use url::Url;
@@ -746,7 +919,7 @@ mod tests {
             ..Default::default()
         });
         let packet = platform_open_packet(&online, &endpoint_id, request, unix_millis(now)?, 1)?;
-        let mut state = ControlState::new();
+        let mut state = ControlState::new(Journal::memory(1 << 20));
         let credential_id = [15_u8; 16];
         let encoded = state.handle(
             packet,
@@ -892,7 +1065,7 @@ mod tests {
             workspaces: Vec::new(),
         };
         assert!(matches!(
-            ControlState::new().handle(
+            ControlState::new(Journal::memory(1 << 20)).handle(
                 packet,
                 ControlContext {
                     endpoint_id: &endpoint_id,
@@ -938,7 +1111,7 @@ mod tests {
             runtimes: Vec::new(),
             workspaces: Vec::new(),
         };
-        let encoded = ControlState::new().handle(
+        let encoded = ControlState::new(Journal::memory(1 << 20)).handle(
             packet,
             ControlContext {
                 endpoint_id: &endpoint_id,

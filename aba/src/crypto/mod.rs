@@ -87,6 +87,7 @@ fn coordinate(value: &str) -> Result<[u8; 32], CryptoError> {
         .map_err(|_| CryptoError::CoordinateLength)
 }
 
+pub mod ack;
 pub mod dpop;
 pub mod frame;
 pub mod key_package;
