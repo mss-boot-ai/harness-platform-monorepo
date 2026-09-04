@@ -44,7 +44,7 @@ func RegisterM2GatewayMigration(runner *migration.Migration) error {
 	if runner == nil {
 		return errors.New("harness M2 Gateway migration runner is required")
 	}
-	return runner.Register(M2GatewayMigrationID, func(db *gorm.DB, version string) error {
+	if err := runner.Register(M2GatewayMigrationID, func(db *gorm.DB, version string) error {
 		if version != M2GatewayMigrationID.String() {
 			return errors.New("harness M2 Gateway migration version mismatch")
 		}
@@ -52,7 +52,10 @@ func RegisterM2GatewayMigration(runner *migration.Migration) error {
 			return err
 		}
 		return runner.CreateVersion(db, version)
-	})
+	}); err != nil {
+		return err
+	}
+	return RegisterM2ConnectionMigration(runner)
 }
 
 func CreateM2GatewaySchema(db *gorm.DB) error {

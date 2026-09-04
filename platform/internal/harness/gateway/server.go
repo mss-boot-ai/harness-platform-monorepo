@@ -11,7 +11,6 @@ import (
 	"io"
 	"net/http"
 	"strings"
-	"sync/atomic"
 	"time"
 
 	"github.com/mss-boot-ai/harness-platform-monorepo/platform/internal/harness/domain"
@@ -38,6 +37,7 @@ type Persistence interface {
 	RotateEndpointNonce(context.Context, domain.ID, [32]byte, [32]byte, time.Time, time.Time) error
 	InspectRefreshCredential(context.Context, [32]byte, time.Time) (domain.Endpoint, domain.RefreshCredential, error)
 	RotateRefreshCredential(context.Context, [32]byte, string, domain.EndpointCredential, domain.RefreshCredential, domain.SecurityAuditEvent, time.Time) error
+	NextConnectionGeneration(context.Context, domain.ID, time.Time) (uint64, error)
 	UseDPoPReplay(context.Context, string, string, time.Time, time.Time, int64) error
 }
 
@@ -53,12 +53,11 @@ type Config struct {
 }
 
 type Server struct {
-	config               Config
-	persistence          Persistence
-	random               io.Reader
-	now                  func() time.Time
-	trust                *TrustBundle
-	connectionGeneration atomic.Uint64
+	config      Config
+	persistence Persistence
+	random      io.Reader
+	now         func() time.Time
+	trust       *TrustBundle
 }
 
 func NewHandler(config Config, persistence Persistence, random io.Reader, now func() time.Time) (http.Handler, error) {

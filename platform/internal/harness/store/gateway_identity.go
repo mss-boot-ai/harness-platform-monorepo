@@ -129,6 +129,36 @@ func (store *Store) InspectTicket(
 	return ticket, nil
 }
 
+func (store *Store) NextConnectionGeneration(
+	ctx context.Context,
+	endpointID domain.ID,
+	now time.Time,
+) (uint64, error) {
+	if err := requireStore(store, ctx); err != nil {
+		return 0, err
+	}
+	if endpointID.IsZero() || now.IsZero() {
+		return 0, domain.NewProblem(domain.CodeInvalidArgument, "connection generation input is invalid", nil)
+	}
+	row := connectionGenerationRow{EndpointID: endpointID.String(), Generation: 1, UpdatedAt: now}
+	result := store.db.WithContext(ctx).Clauses(
+		clause.OnConflict{
+			Columns: []clause.Column{{Name: "endpoint_id"}},
+			DoUpdates: clause.Assignments(map[string]any{
+				"generation": gorm.Expr("generation + 1"), "updated_at": now,
+			}),
+		},
+		clause.Returning{Columns: []clause.Column{{Name: "generation"}}},
+	).Create(&row)
+	if result.Error != nil {
+		return 0, normalizeConcurrencyError("allocate connection generation", result.Error)
+	}
+	if row.Generation == 0 {
+		return 0, domain.NewProblem(domain.CodeConflict, "connection generation was not returned", nil)
+	}
+	return row.Generation, nil
+}
+
 func (store *Store) UseDPoPReplay(
 	ctx context.Context,
 	jkt string,

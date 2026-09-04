@@ -1,6 +1,7 @@
 package gateway
 
 import (
+	"context"
 	"crypto/sha256"
 	"crypto/subtle"
 	"encoding/base64"
@@ -125,7 +126,10 @@ func (server *Server) performChallenge(
 	if err != nil {
 		return err
 	}
-	generation := server.connectionGeneration.Add(1)
+	generation, err := server.persistence.NextConnectionGeneration(context.Background(), endpoint.ID, now)
+	if err != nil {
+		return err
+	}
 	serverTimeMS := now.UnixMilli()
 	credentialRevision := uint64(1)
 	transcript, err := serverChallengeTranscript(

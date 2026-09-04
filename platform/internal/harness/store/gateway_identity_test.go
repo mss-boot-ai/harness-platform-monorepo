@@ -94,3 +94,28 @@ func TestM2GatewaySchemaIsRepeatable(t *testing.T) {
 		t.Fatalf("VerifyM2GatewaySchema: %v", err)
 	}
 }
+
+func TestConnectionGenerationRemainsMonotonicAcrossStoreInstances(t *testing.T) {
+	persistence := newTestStore(t)
+	now := time.Unix(1_800_000_000, 0).UTC()
+	endpointID := tid(120)
+	first, err := persistence.NextConnectionGeneration(context.Background(), endpointID, now)
+	if err != nil {
+		t.Fatalf("first generation: %v", err)
+	}
+	second, err := persistence.NextConnectionGeneration(context.Background(), endpointID, now.Add(time.Second))
+	if err != nil {
+		t.Fatalf("second generation: %v", err)
+	}
+	restarted, err := New(persistence.db)
+	if err != nil {
+		t.Fatalf("restart Store: %v", err)
+	}
+	third, err := restarted.NextConnectionGeneration(context.Background(), endpointID, now.Add(2*time.Second))
+	if err != nil {
+		t.Fatalf("third generation: %v", err)
+	}
+	if first != 1 || second != 2 || third != 3 {
+		t.Fatalf("connection generations = %d, %d, %d", first, second, third)
+	}
+}
