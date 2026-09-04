@@ -69,8 +69,13 @@ func (store *Store) ListEnrollments(ctx context.Context, owner, tenant string, l
 	if err := requireOwnerStore(store, ctx, owner); err != nil {
 		return nil, err
 	}
+	owner = strings.TrimSpace(owner)
+	tenant = strings.TrimSpace(tenant)
 	var rows []enrollmentRow
-	if err := scoped(store.db.WithContext(ctx).Where("owner_user_id = ?", strings.TrimSpace(owner)), tenant).
+	if err := store.db.WithContext(ctx).Where(
+		"(owner_user_id = ? AND tenant_id = ?) OR (owner_user_id = '' AND tenant_id = '')",
+		owner, tenant,
+	).
 		Order("created_at DESC").Limit(managementLimit(limit)).Find(&rows).Error; err != nil {
 		return nil, err
 	}
