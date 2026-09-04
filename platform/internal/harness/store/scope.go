@@ -16,3 +16,17 @@ func requireM1Scope(store *Store, ctx context.Context, owner string) error {
 	}
 	return nil
 }
+
+func normalizeConcurrencyError(message string, err error) error {
+	if err == nil {
+		return nil
+	}
+	value := strings.ToLower(err.Error())
+	if strings.Contains(value, "database is locked") ||
+		strings.Contains(value, "database table is locked") ||
+		strings.Contains(value, "sqlite_busy") ||
+		strings.Contains(value, "sqlite_locked") {
+		return domain.NewProblem(domain.CodeConflict, message, err)
+	}
+	return err
+}

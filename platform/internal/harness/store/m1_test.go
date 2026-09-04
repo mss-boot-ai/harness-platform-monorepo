@@ -68,6 +68,12 @@ func seedKeyPackageSession(t *testing.T, persistence *Store, now time.Time) (dom
 	if err := persistence.CreateSession(ctx, session); err != nil {
 		t.Fatalf("CreateSession: %v", err)
 	}
+	session, err = persistence.UpdateSession(ctx, session.ID, func(value *domain.Session) error {
+		return value.WaitForKey(now)
+	})
+	if err != nil {
+		t.Fatalf("WaitForKey: %v", err)
+	}
 	return aba, hc, issuerCredential, session
 }
 
@@ -78,7 +84,7 @@ func testKeyPackage(now time.Time, aba, hc domain.Endpoint, credential domain.En
 		Generation:            1,
 		IssuerABAEndpointID:   aba.ID,
 		RecipientHCEndpointID: hc.ID,
-		CryptoSuite:           1,
+		CryptoSuite:           domain.CryptoSuiteMSSAWPSuite0001,
 		EncapsulatedKey:       []byte{1, 2, 3},
 		Ciphertext:            []byte{4, 5, 6},
 		ContextHash:           sha256.Sum256([]byte("key-package-context")),

@@ -3,6 +3,7 @@ package store
 import (
 	"bytes"
 	"context"
+	"errors"
 	"fmt"
 	"strings"
 	"time"
@@ -39,31 +40,62 @@ func (store *Store) PutSessionKeyPackage(
 	if value.Status != domain.KeyPackageStatusPending {
 		return PutKeyPackageResult{}, domain.NewProblem(domain.CodeInvalidState, "new key package must be pending", nil)
 	}
+	owner = strings.TrimSpace(owner)
+	tenant = strings.TrimSpace(tenant)
 	row := keyPackageToRow(value)
 	var resultValue PutKeyPackageResult
 	var semanticConflict error
 	err := store.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
-		var session sessionRow
-		if err := tx.First(&session,
-			"id = ? AND owner_user_id = ? AND tenant_id = ?",
-			value.SessionID.String(), strings.TrimSpace(owner), strings.TrimSpace(tenant),
-		).Error; err != nil {
-			return notFoundOr("read key package session", "session was not found", err)
+		session, err := lockKeyPackageSession(tx, value.SessionID, owner, tenant)
+		if err != nil {
+			return err
+		}
+		sessionValue, err := sessionFromRow(session)
+		if err != nil {
+			return err
 		}
 		if session.ABAEndpointID != value.IssuerABAEndpointID.String() || session.HCEndpointID != value.RecipientHCEndpointID.String() {
 			return domain.NewProblem(domain.CodeSecurityViolation, "key package endpoints do not match the session", nil)
 		}
-		var credentialCount int64
-		if err := tx.Model(new(credentialRow)).Where(
-			"id = ? AND endpoint_id = ? AND status = ? AND expires_at > ?",
-			value.IssuerCredentialID.String(), value.IssuerABAEndpointID.String(),
-			string(domain.CredentialStatusActive), value.CreatedAt,
-		).Count(&credentialCount).Error; err != nil {
-			return fmt.Errorf("verify key package issuer credential: %w", err)
+		if err := sessionValue.ValidateNextKeyPackageGeneration(value.Generation); err != nil {
+			return err
 		}
-		if credentialCount != 1 {
+		if err := fenceKeyPackageSession(tx, session, owner, tenant); err != nil {
+			return err
+		}
+
+		issuer, err := lockKeyPackageEndpoint(tx, value.IssuerABAEndpointID, owner, tenant)
+		if err != nil {
+			return err
+		}
+		if issuer.Type != string(domain.EndpointTypeABA) {
+			return domain.NewProblem(domain.CodeSecurityViolation, "key package issuer is not an ABA endpoint", nil)
+		}
+		if err := requireKeyPackageEndpointActive("issuer ABA", issuer.Status); err != nil {
+			return err
+		}
+
+		recipient, err := lockKeyPackageEndpoint(tx, value.RecipientHCEndpointID, owner, tenant)
+		if err != nil {
+			return err
+		}
+		if recipient.Type != string(domain.EndpointTypeHCWeb) && recipient.Type != string(domain.EndpointTypeHCReference) {
+			return domain.NewProblem(domain.CodeSecurityViolation, "key package recipient is not an HC endpoint", nil)
+		}
+		if err := requireKeyPackageEndpointActive("recipient HC", recipient.Status); err != nil {
+			return err
+		}
+
+		credential, err := lockKeyPackageIssuerCredential(tx, value.IssuerCredentialID, value.IssuerABAEndpointID)
+		if err != nil {
+			return err
+		}
+		if credential.Status != string(domain.CredentialStatusActive) || credential.RevokedAt != nil ||
+			!credential.ExpiresAt.After(value.CreatedAt) || value.CreatedAt.Before(credential.CreatedAt) ||
+			credential.FamilyID != issuer.CredentialFamilyID || credential.SigningJKT != issuer.SigningJKT {
 			return domain.NewProblem(domain.CodeSecurityViolation, "key package issuer credential is unavailable", nil)
 		}
+
 		insert := tx.Clauses(clause.OnConflict{DoNothing: true}).Create(&row)
 		if insert.Error != nil {
 			return classifyPersistence(insert.Error, "store key package")
@@ -91,12 +123,79 @@ func (store *Store) PutSessionKeyPackage(
 		return nil
 	})
 	if err != nil {
-		return PutKeyPackageResult{}, err
+		return PutKeyPackageResult{}, normalizeConcurrencyError("key package changed concurrently", err)
 	}
 	if semanticConflict != nil {
 		return PutKeyPackageResult{}, semanticConflict
 	}
 	return resultValue, nil
+}
+
+func lockKeyPackageSession(tx *gorm.DB, id domain.ID, owner, tenant string) (sessionRow, error) {
+	var session sessionRow
+	if err := tx.Clauses(clause.Locking{Strength: "UPDATE"}).First(
+		&session,
+		"id = ? AND owner_user_id = ? AND tenant_id = ?",
+		id.String(), owner, tenant,
+	).Error; err != nil {
+		return sessionRow{}, notFoundOr("lock key package session", "session was not found", err)
+	}
+	return session, nil
+}
+
+func fenceKeyPackageSession(tx *gorm.DB, session sessionRow, owner, tenant string) error {
+	if tx.Dialector.Name() != "sqlite" {
+		return nil
+	}
+	result := tx.Model(new(sessionRow)).Where(
+		"id = ? AND owner_user_id = ? AND tenant_id = ? AND row_version = ? AND status = ?",
+		session.ID, owner, tenant, session.RowVersion, session.Status,
+	).UpdateColumn("row_version", gorm.Expr("row_version"))
+	if result.Error != nil {
+		return fmt.Errorf("fence key package session: %w", result.Error)
+	}
+	if result.RowsAffected != 1 {
+		return domain.NewProblem(domain.CodeConflict, "key package session changed concurrently", nil)
+	}
+	return nil
+}
+
+func lockKeyPackageEndpoint(tx *gorm.DB, id domain.ID, owner, tenant string) (endpointRow, error) {
+	var endpoint endpointRow
+	if err := tx.Clauses(clause.Locking{Strength: "UPDATE"}).First(
+		&endpoint,
+		"id = ? AND owner_user_id = ? AND tenant_id = ?",
+		id.String(), owner, tenant,
+	).Error; err != nil {
+		return endpointRow{}, notFoundOr("lock key package endpoint", "key package endpoint was not found", err)
+	}
+	return endpoint, nil
+}
+
+func lockKeyPackageIssuerCredential(tx *gorm.DB, id, issuerEndpointID domain.ID) (credentialRow, error) {
+	var credential credentialRow
+	if err := tx.Clauses(clause.Locking{Strength: "UPDATE"}).First(
+		&credential,
+		"id = ? AND endpoint_id = ?",
+		id.String(), issuerEndpointID.String(),
+	).Error; err != nil {
+		if errors.Is(err, gorm.ErrRecordNotFound) {
+			return credentialRow{}, domain.NewProblem(domain.CodeSecurityViolation, "key package issuer credential is unavailable", err)
+		}
+		return credentialRow{}, fmt.Errorf("lock key package issuer credential: %w", err)
+	}
+	return credential, nil
+}
+
+func requireKeyPackageEndpointActive(role, status string) error {
+	value := domain.EndpointStatus(status)
+	if value.AllowsSessionKeyPackage() {
+		return nil
+	}
+	if value == domain.EndpointStatusRevoked {
+		return domain.NewProblem(domain.CodeRevoked, "key package "+role+" endpoint is revoked", nil)
+	}
+	return domain.NewProblem(domain.CodeSecurityViolation, "key package "+role+" endpoint is not active", nil)
 }
 
 func (store *Store) ListSessionKeyPackages(
@@ -152,21 +251,41 @@ func (store *Store) AcknowledgeSessionKeyPackage(
 	if id.IsZero() || recipient.IsZero() || now.IsZero() {
 		return domain.SessionKeyPackage{}, domain.NewProblem(domain.CodeInvalidArgument, "key package acknowledgment is invalid", nil)
 	}
+	owner = strings.TrimSpace(owner)
+	tenant = strings.TrimSpace(tenant)
 	var updated domain.SessionKeyPackage
 	err := store.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
-		var row keyPackageRow
-		if err := tx.Clauses(clause.Locking{Strength: "UPDATE"}).First(&row, "id = ? AND recipient_hc_endpoint_id = ?", id.String(), recipient.String()).Error; err != nil {
-			return notFoundOr("lock key package", "key package was not found", err)
+		// Read immutable routing fields first, then acquire mutable locks in the
+		// shared Session -> Endpoint -> Package order used by revocation.
+		var candidate keyPackageRow
+		if err := tx.First(&candidate, "id = ? AND recipient_hc_endpoint_id = ?", id.String(), recipient.String()).Error; err != nil {
+			return notFoundOr("read key package", "key package was not found", err)
 		}
-		var sessionCount int64
-		if err := tx.Model(new(sessionRow)).Where(
-			"id = ? AND owner_user_id = ? AND tenant_id = ?",
-			row.SessionID, strings.TrimSpace(owner), strings.TrimSpace(tenant),
-		).Count(&sessionCount).Error; err != nil {
+		sessionID, err := parseID(candidate.SessionID)
+		if err != nil {
 			return err
 		}
-		if sessionCount != 1 {
-			return domain.NewProblem(domain.CodeNotFound, "key package was not found", nil)
+		session, err := lockKeyPackageSession(tx, sessionID, owner, tenant)
+		if err != nil {
+			return domain.NewProblem(domain.CodeNotFound, "key package was not found", err)
+		}
+		if session.HCEndpointID != recipient.String() {
+			return domain.NewProblem(domain.CodeSecurityViolation, "key package recipient does not match the session", nil)
+		}
+		recipientEndpoint, err := lockKeyPackageEndpoint(tx, recipient, owner, tenant)
+		if err != nil {
+			return domain.NewProblem(domain.CodeNotFound, "key package was not found", err)
+		}
+		if err := requireKeyPackageEndpointActive("recipient HC", recipientEndpoint.Status); err != nil {
+			return err
+		}
+		var row keyPackageRow
+		if err := tx.Clauses(clause.Locking{Strength: "UPDATE"}).First(
+			&row,
+			"id = ? AND session_id = ? AND recipient_hc_endpoint_id = ?",
+			id.String(), candidate.SessionID, recipient.String(),
+		).Error; err != nil {
+			return notFoundOr("lock key package", "key package was not found", err)
 		}
 		value, err := keyPackageFromRow(row)
 		if err != nil {
@@ -194,7 +313,7 @@ func (store *Store) AcknowledgeSessionKeyPackage(
 		updated = value
 		return nil
 	})
-	return updated, err
+	return updated, normalizeConcurrencyError("key package acknowledgment changed concurrently", err)
 }
 
 func keyPackageToRow(value domain.SessionKeyPackage) keyPackageRow {

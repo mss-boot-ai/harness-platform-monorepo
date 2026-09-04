@@ -9,7 +9,7 @@ import (
 )
 
 func TestScopedRevocationCannotCrossTenant(t *testing.T) {
-	persistence := newTestStore(t)
+	persistence := newM1TestStore(t)
 	ctx := context.Background()
 	now := time.Unix(1_800_000_000, 0).UTC()
 	value := endpoint(91, 92, 93, domain.EndpointTypeHCWeb, "owner", now)
