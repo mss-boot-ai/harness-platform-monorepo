@@ -3,6 +3,7 @@ package store
 import (
 	"errors"
 	"fmt"
+	"slices"
 	"time"
 
 	"github.com/mss-boot-io/mss-boot-admin/mss-boot/pkg/migration"
@@ -85,6 +86,35 @@ var requiredM1Indexes = []struct {
 	{new(idempotencyRow), "idx_harness_idempotency_expiry"},
 }
 
+type m1UniqueIndexContract struct {
+	model   any
+	name    string
+	columns []string
+}
+
+var criticalM1UniqueIndexes = []m1UniqueIndexContract{
+	{
+		model: new(keyPackageRow),
+		name:  "ux_harness_key_package_recipient",
+		columns: []string{
+			"session_id",
+			"generation",
+			"recipient_hc_endpoint_id",
+		},
+	},
+	{
+		model: new(idempotencyRow),
+		name:  "ux_harness_idempotency_scope",
+		columns: []string{
+			"owner_user_id",
+			"tenant_id",
+			"actor_id",
+			"operation",
+			"idempotency_key",
+		},
+	},
+}
+
 func RegisterAllMigrations(runner *migration.Migration) error {
 	if err := RegisterMigrations(runner); err != nil {
 		return err
@@ -149,5 +179,37 @@ func VerifyM1Schema(db *gorm.DB) error {
 			return fmt.Errorf("Harness M1 index %s is unavailable", index.name)
 		}
 	}
+	for _, contract := range criticalM1UniqueIndexes {
+		if err := verifyM1UniqueIndex(db, contract); err != nil {
+			return err
+		}
+	}
 	return nil
+}
+
+func verifyM1UniqueIndex(db *gorm.DB, contract m1UniqueIndexContract) error {
+	indexes, err := db.Migrator().GetIndexes(contract.model)
+	if err != nil {
+		return fmt.Errorf("inspect Harness M1 index %s: %w", contract.name, err)
+	}
+	for _, index := range indexes {
+		if index.Name() != contract.name {
+			continue
+		}
+		unique, known := index.Unique()
+		if !known || !unique {
+			return fmt.Errorf("Harness M1 index %s must be unique", contract.name)
+		}
+		columns := index.Columns()
+		if !slices.Equal(columns, contract.columns) {
+			return fmt.Errorf(
+				"Harness M1 index %s columns = %v, want %v",
+				contract.name,
+				columns,
+				contract.columns,
+			)
+		}
+		return nil
+	}
+	return fmt.Errorf("Harness M1 index %s is unavailable", contract.name)
 }
