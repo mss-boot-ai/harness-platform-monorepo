@@ -50,6 +50,15 @@ enum Command {
         #[arg(long)]
         insecure_dev_keystore: bool,
     },
+    /// Run the authenticated ABA control loop using strict local policy.
+    Run {
+        #[arg(long, value_name = "PATH")]
+        config: PathBuf,
+        #[arg(long, value_name = "PATH")]
+        store: PathBuf,
+        #[arg(long)]
+        insecure_dev_keystore: bool,
+    },
 }
 
 #[derive(Debug, Args)]
@@ -194,6 +203,23 @@ fn execute(cli: Cli) -> Result<(), Box<dyn std::error::Error>> {
             );
             println!("trust-root-jkt: {}", ready.root_jkt);
             ready.close()?;
+        }
+        Command::Run {
+            config,
+            store,
+            insecure_dev_keystore,
+        } => {
+            let config =
+                AgentConfig::load_with_loopback_development(config, insecure_dev_keystore)?;
+            let store = DevFileKeyStore::new(store, &config.platform.url, insecure_dev_keystore)?;
+            let identity = store.load()?;
+            let ready =
+                GatewayClient::new(config.platform.url.clone())?.connect(&identity, &store)?;
+            println!(
+                "gateway ready: endpoint {} generation {}",
+                ready.endpoint_id, ready.connection_generation
+            );
+            ready.run(&identity, &config)?;
         }
     }
     Ok(())

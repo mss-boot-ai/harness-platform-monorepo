@@ -98,3 +98,37 @@ pub(super) fn connection_ready(input: ConnectionReadyInput<'_>) -> Result<Vec<u8
     output.extend_from_slice(input.endpoint_id);
     Ok(output)
 }
+
+pub(super) struct ControlInput<'a> {
+    pub message_id: &'a [u8],
+    pub sender_endpoint_id: &'a [u8],
+    pub receiver_endpoint_id: &'a [u8],
+    pub sequence: u64,
+    pub created_at_ms: i64,
+    pub control_type: u32,
+    pub payload: &'a [u8],
+}
+
+pub(super) fn control(input: ControlInput<'_>) -> Result<Vec<u8>, GatewayError> {
+    if input.message_id.len() != 16
+        || input.sender_endpoint_id.len() != 16
+        || input.receiver_endpoint_id.len() != 16
+        || input.sequence == 0
+        || input.control_type == 0
+        || input.payload.is_empty()
+        || input.payload.len() > 1 << 20
+    {
+        return Err(GatewayError::Protocol);
+    }
+    let payload_length = u32::try_from(input.payload.len()).map_err(|_| GatewayError::Protocol)?;
+    let mut output = b"mss-awp-control-v1".to_vec();
+    output.extend_from_slice(input.message_id);
+    output.extend_from_slice(input.sender_endpoint_id);
+    output.extend_from_slice(input.receiver_endpoint_id);
+    output.extend_from_slice(&input.sequence.to_be_bytes());
+    output.extend_from_slice(&input.created_at_ms.to_be_bytes());
+    output.extend_from_slice(&input.control_type.to_be_bytes());
+    output.extend_from_slice(&payload_length.to_be_bytes());
+    output.extend_from_slice(input.payload);
+    Ok(output)
+}

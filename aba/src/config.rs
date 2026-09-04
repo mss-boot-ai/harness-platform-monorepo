@@ -131,25 +131,46 @@ pub enum ValidationError {
 
 impl AgentConfig {
     pub fn load(path: impl AsRef<Path>) -> Result<Self, ConfigError> {
+        Self::load_with_loopback_development(path, false)
+    }
+
+    pub fn load_with_loopback_development(
+        path: impl AsRef<Path>,
+        allow_loopback_development: bool,
+    ) -> Result<Self, ConfigError> {
         let path = path.as_ref();
         let contents = fs::read_to_string(path).map_err(|source| ConfigError::Read {
             path: path.to_path_buf(),
             source,
         })?;
-        Self::parse(&contents)
+        Self::parse_with_loopback_development(&contents, allow_loopback_development)
     }
 
     pub fn parse(contents: &str) -> Result<Self, ConfigError> {
+        Self::parse_with_loopback_development(contents, false)
+    }
+
+    pub fn parse_with_loopback_development(
+        contents: &str,
+        allow_loopback_development: bool,
+    ) -> Result<Self, ConfigError> {
         let config: Self = toml::from_str(contents).map_err(ConfigError::Parse)?;
-        config.validate()?;
+        config.validate_with_loopback_development(allow_loopback_development)?;
         Ok(config)
     }
 
     pub fn validate(&self) -> Result<(), ValidationError> {
+        self.validate_with_loopback_development(false)
+    }
+
+    fn validate_with_loopback_development(
+        &self,
+        allow_loopback_development: bool,
+    ) -> Result<(), ValidationError> {
         if self.schema_version != CONFIG_SCHEMA_VERSION {
             return Err(ValidationError::UnsupportedSchemaVersion);
         }
-        validate_platform_url(&self.platform.url)?;
+        validate_platform_url(&self.platform.url, allow_loopback_development)?;
         validate_limits(&self.limits)?;
 
         let mut runtime_ids = BTreeSet::new();
@@ -200,8 +221,18 @@ impl AgentConfig {
     }
 }
 
-fn validate_platform_url(url: &Url) -> Result<(), ValidationError> {
-    if url.scheme() != "https"
+fn validate_platform_url(
+    url: &Url,
+    allow_loopback_development: bool,
+) -> Result<(), ValidationError> {
+    let loopback = url.host_str().is_some_and(|host| {
+        host.eq_ignore_ascii_case("localhost")
+            || host
+                .parse::<std::net::IpAddr>()
+                .is_ok_and(|address| address.is_loopback())
+    });
+    if (url.scheme() != "https"
+        && !(allow_loopback_development && url.scheme() == "http" && loopback))
         || url.host_str().is_none()
         || !url.username().is_empty()
         || url.password().is_some()
@@ -305,6 +336,15 @@ follow_symlinks = false
     fn accepts_strict_local_profiles() {
         let result = AgentConfig::parse(VALID_CONFIG);
         assert!(result.is_ok());
+    }
+
+    #[test]
+    fn loopback_platform_requires_explicit_development_parse() {
+        let local = VALID_CONFIG.replace("https://platform.example.com", "http://127.0.0.1:8082");
+        assert!(AgentConfig::parse(&local).is_err());
+        assert!(AgentConfig::parse_with_loopback_development(&local, true).is_ok());
+        let remote = local.replace("127.0.0.1", "platform.example.com");
+        assert!(AgentConfig::parse_with_loopback_development(&remote, true).is_err());
     }
 
     #[test]

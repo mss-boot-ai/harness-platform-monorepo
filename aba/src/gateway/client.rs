@@ -15,11 +15,13 @@ use tungstenite::{Message, connect};
 use url::Url;
 
 use super::GatewayError;
+use super::control::ControlState;
 use super::transcript::{
     ClientChallengeInput, ConnectionReadyInput, ServerChallengeInput, client_challenge,
     connection_ready, server_challenge,
 };
 use super::trust::{TrustManifestEnvelope, VerifiedTrust};
+use crate::config::AgentConfig;
 use crate::crypto::dpop::{DpopInput, NonceDpopInput, create_dpop_proof, create_nonce_dpop_proof};
 use crate::crypto::{sign_p1363_low_s, verify_p1363_low_s};
 use crate::identity::{DevFileKeyStore, EndpointCredentials, EndpointIdentity};
@@ -39,6 +41,8 @@ pub struct ReadyConnection {
     pub endpoint_id: String,
     pub heartbeat_interval_ms: u32,
     pub root_jkt: String,
+    endpoint_id_bytes: [u8; 16],
+    online_key: p256::ecdsa::VerifyingKey,
     socket: WebSocket<MaybeTlsStream<std::net::TcpStream>>,
 }
 
@@ -354,6 +358,8 @@ impl GatewayClient {
             endpoint_id: credentials.endpoint_id.clone(),
             heartbeat_interval_ms: ready.heartbeat_interval_ms,
             root_jkt: trust.root_jkt.clone(),
+            endpoint_id_bytes: endpoint_id,
+            online_key: trust.online_key,
             socket,
         })
     }
@@ -364,6 +370,43 @@ impl GatewayClient {
 }
 
 impl ReadyConnection {
+    pub fn run(
+        mut self,
+        identity: &EndpointIdentity,
+        config: &AgentConfig,
+    ) -> Result<(), GatewayError> {
+        let mut controls = ControlState::new();
+        loop {
+            let message = match self.socket.read() {
+                Ok(message) => message,
+                Err(tungstenite::Error::ConnectionClosed | tungstenite::Error::AlreadyClosed) => {
+                    return Ok(());
+                }
+                Err(error) => return Err(GatewayError::WebSocket(error)),
+            };
+            match message {
+                Message::Binary(encoded) => {
+                    if encoded.is_empty() || encoded.len() > MAX_PACKET_BYTES {
+                        return Err(GatewayError::Protocol);
+                    }
+                    let packet = WirePacket::decode(encoded).map_err(|_| GatewayError::Protocol)?;
+                    let response = controls.handle(
+                        packet,
+                        &self.endpoint_id_bytes,
+                        &self.online_key,
+                        identity,
+                        config,
+                        SystemTime::now(),
+                    )?;
+                    self.socket.send(Message::binary(response))?;
+                }
+                Message::Ping(_) | Message::Pong(_) => self.socket.flush()?,
+                Message::Close(_) => return Ok(()),
+                Message::Text(_) | Message::Frame(_) => return Err(GatewayError::Protocol),
+            }
+        }
+    }
+
     pub fn close(mut self) -> Result<(), GatewayError> {
         self.socket.close(None)?;
         Ok(())
