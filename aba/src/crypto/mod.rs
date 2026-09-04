@@ -3,7 +3,7 @@ use p256::ecdsa::{
     Signature, SigningKey, VerifyingKey,
     signature::{Signer, Verifier},
 };
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use thiserror::Error;
 
@@ -17,9 +17,15 @@ pub enum CryptoError {
     Curve,
     #[error("JWK point is not on P-256")]
     Point,
+    #[error("invalid DPoP input: {0}")]
+    DpopInput(&'static str),
+    #[error("serialize DPoP proof")]
+    Json(#[from] serde_json::Error),
+    #[error("invalid DPoP target URI")]
+    Url(#[from] url::ParseError),
 }
 
-#[derive(Clone, Debug, Deserialize)]
+#[derive(Clone, Debug, Deserialize, Serialize)]
 #[serde(deny_unknown_fields)]
 pub struct P256PublicJwk {
     #[serde(rename = "crv")]
@@ -80,6 +86,8 @@ fn coordinate(value: &str) -> Result<[u8; 32], CryptoError> {
         .try_into()
         .map_err(|_| CryptoError::CoordinateLength)
 }
+
+pub mod dpop;
 
 #[cfg(test)]
 mod tests {
