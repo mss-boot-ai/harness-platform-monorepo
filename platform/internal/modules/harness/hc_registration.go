@@ -97,7 +97,7 @@ func registerHCRegistrationRoutesWithFactory(
 		}
 		setHCRefreshCookie(c, result)
 		c.JSON(http.StatusCreated, gin.H{
-			"endpointId": result.EndpointID.String(), "tokenType": "DPoP",
+			"endpointId": result.EndpointID.String(), "credentialId": result.CredentialID.String(), "tokenType": "DPoP",
 			"accessToken": result.AccessToken, "accessExpiresAt": result.AccessExpiresAt,
 			"signingJkt": result.SigningJKT, "kemJkt": result.KEMJKT,
 		})

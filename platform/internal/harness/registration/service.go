@@ -68,6 +68,7 @@ type RegisterInput struct {
 
 type Registration struct {
 	EndpointID       domain.ID
+	CredentialID     domain.ID
 	AccessToken      string
 	AccessExpiresAt  time.Time
 	RefreshToken     string
@@ -220,7 +221,7 @@ func (service Service) Register(
 		return Registration{}, err
 	}
 	return Registration{
-		EndpointID: endpointID, AccessToken: base64.RawURLEncoding.EncodeToString(accessToken),
+		EndpointID: endpointID, CredentialID: accessID, AccessToken: base64.RawURLEncoding.EncodeToString(accessToken),
 		AccessExpiresAt: accessExpiresAt, RefreshToken: base64.RawURLEncoding.EncodeToString(refreshToken),
 		RefreshExpiresAt: refreshExpiresAt, SigningJKT: signingJKT, KEMJKT: kemJKT,
 	}, nil

@@ -1,4 +1,5 @@
 export * from './connection-state';
+export * from './awp-handshake';
 export * from './crypto';
 export * from './dpop';
 export * from './identity';

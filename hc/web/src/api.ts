@@ -1,10 +1,17 @@
-import { createDpopProof, createRegistrationProof, type EndpointIdentity } from '@harness/hc-core';
+import {
+  createDpopProof,
+  createRegistrationProof,
+  verifyTrustManifest,
+  type EndpointIdentity,
+  type VerifiedTrustManifest,
+} from '@harness/hc-core';
 
 const adminBase = '/admin/api';
 
 export interface RegistrationSession {
   readonly accessExpiresAt: string;
   readonly accessToken: string;
+  readonly credentialId: string;
   readonly endpointId: string;
   readonly kemJkt: string;
   readonly signingJkt: string;
@@ -138,6 +145,17 @@ export async function refreshEndpointSession(identity: EndpointIdentity): Promis
   return parseRegistration(await response.json());
 }
 
+export async function fetchTrustManifest(): Promise<VerifiedTrustManifest> {
+  const response = await fetch('/gateway/v1/trust-manifest', {
+    credentials: 'include',
+    headers: { Accept: 'application/json' },
+  });
+  if (!response.ok) {
+    throw await gatewayFailure(response);
+  }
+  return verifyTrustManifest(await response.json());
+}
+
 async function requestJson<T>(path: string, init: RequestInit): Promise<T> {
   const headers = new Headers(init.headers);
   headers.set('Accept', 'application/json');
@@ -200,6 +218,8 @@ function parseRegistration(input: unknown): RegistrationSession {
   if (
     typeof value.endpointId !== 'string' ||
     !/^[0-9a-f]{32}$/u.test(value.endpointId) ||
+    typeof value.credentialId !== 'string' ||
+    !/^[0-9a-f]{32}$/u.test(value.credentialId) ||
     value.tokenType !== 'DPoP' ||
     typeof value.accessToken !== 'string' ||
     value.accessToken.length !== 43 ||

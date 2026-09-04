@@ -54,6 +54,81 @@ func (store *Store) AuthenticateAccessToken(
 	return endpoint, credential, nil
 }
 
+func (store *Store) GetEndpointCredential(
+	ctx context.Context,
+	endpointID domain.ID,
+	credentialID domain.ID,
+	now time.Time,
+) (domain.Endpoint, domain.EndpointCredential, error) {
+	if err := requireStore(store, ctx); err != nil {
+		return domain.Endpoint{}, domain.EndpointCredential{}, err
+	}
+	if endpointID.IsZero() || credentialID.IsZero() || now.IsZero() {
+		return domain.Endpoint{}, domain.EndpointCredential{}, domain.NewProblem(domain.CodeInvalidArgument, "endpoint credential lookup is invalid", nil)
+	}
+	var credentialRecord credentialRow
+	if err := store.db.WithContext(ctx).Where("id = ? AND endpoint_id = ?", credentialID.String(), endpointID.String()).Take(&credentialRecord).Error; err != nil {
+		return domain.Endpoint{}, domain.EndpointCredential{}, gatewayCredentialError(err)
+	}
+	credential, err := credentialFromRow(credentialRecord)
+	if err != nil {
+		return domain.Endpoint{}, domain.EndpointCredential{}, err
+	}
+	var endpointRecord endpointRow
+	if err := store.db.WithContext(ctx).Where("id = ?", endpointID.String()).Take(&endpointRecord).Error; err != nil {
+		return domain.Endpoint{}, domain.EndpointCredential{}, gatewayCredentialError(err)
+	}
+	endpoint, err := endpointFromRow(endpointRecord)
+	if err != nil {
+		return domain.Endpoint{}, domain.EndpointCredential{}, err
+	}
+	if endpoint.Status != domain.EndpointStatusActive || credential.Status != domain.CredentialStatusActive ||
+		endpoint.RevokedAt != nil || credential.RevokedAt != nil {
+		return domain.Endpoint{}, domain.EndpointCredential{}, domain.NewProblem(domain.CodeRevoked, "endpoint credential is unavailable", nil)
+	}
+	if !now.Before(credential.ExpiresAt) {
+		return domain.Endpoint{}, domain.EndpointCredential{}, domain.NewProblem(domain.CodeExpired, "endpoint credential is expired", nil)
+	}
+	if credential.FamilyID != endpoint.CredentialFamilyID || credential.SigningJKT != endpoint.SigningJKT {
+		return domain.Endpoint{}, domain.EndpointCredential{}, domain.NewProblem(domain.CodeSecurityViolation, "endpoint credential binding is invalid", nil)
+	}
+	return endpoint, credential, nil
+}
+
+func (store *Store) InspectTicket(
+	ctx context.Context,
+	tokenHash [32]byte,
+	now time.Time,
+) (domain.WSTicket, error) {
+	if err := requireStore(store, ctx); err != nil {
+		return domain.WSTicket{}, err
+	}
+	if zeroHash(tokenHash) || now.IsZero() {
+		return domain.WSTicket{}, domain.NewProblem(domain.CodeInvalidArgument, "WebSocket ticket lookup is invalid", nil)
+	}
+	var row ticketRow
+	if err := store.db.WithContext(ctx).Where("token_hash = ?", hashString(tokenHash)).Take(&row).Error; err != nil {
+		return domain.WSTicket{}, notFoundOr("inspect WebSocket ticket", "WebSocket ticket is unavailable", err)
+	}
+	ticket, err := ticketFromRow(row)
+	if err != nil {
+		return domain.WSTicket{}, err
+	}
+	switch ticket.Status {
+	case domain.TicketStatusIssued:
+	case domain.TicketStatusConsumed:
+		return domain.WSTicket{}, domain.NewProblem(domain.CodeConflict, "WebSocket ticket was already consumed", nil)
+	case domain.TicketStatusRevoked:
+		return domain.WSTicket{}, domain.NewProblem(domain.CodeRevoked, "WebSocket ticket is revoked", nil)
+	default:
+		return domain.WSTicket{}, domain.NewProblem(domain.CodeExpired, "WebSocket ticket is expired", nil)
+	}
+	if !now.Before(ticket.ExpiresAt) {
+		return domain.WSTicket{}, domain.NewProblem(domain.CodeExpired, "WebSocket ticket is expired", nil)
+	}
+	return ticket, nil
+}
+
 func (store *Store) UseDPoPReplay(
 	ctx context.Context,
 	jkt string,

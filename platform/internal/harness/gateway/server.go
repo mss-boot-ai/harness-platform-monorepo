@@ -11,6 +11,7 @@ import (
 	"io"
 	"net/http"
 	"strings"
+	"sync/atomic"
 	"time"
 
 	"github.com/mss-boot-ai/harness-platform-monorepo/platform/internal/harness/domain"
@@ -29,6 +30,9 @@ const (
 type Persistence interface {
 	AuthenticateAccessToken(context.Context, [32]byte, time.Time) (domain.Endpoint, domain.EndpointCredential, error)
 	CreateTicket(context.Context, domain.WSTicket, time.Duration) error
+	InspectTicket(context.Context, [32]byte, time.Time) (domain.WSTicket, error)
+	GetEndpointCredential(context.Context, domain.ID, domain.ID, time.Time) (domain.Endpoint, domain.EndpointCredential, error)
+	ConsumeTicket(context.Context, [32]byte, domain.ID, domain.ID, string, string, string, time.Time) (domain.WSTicket, error)
 	GetEndpointNonceHash(context.Context, domain.ID, time.Time) ([32]byte, error)
 	PutEndpointNonce(context.Context, domain.ID, [32]byte, time.Time, time.Time) error
 	RotateEndpointNonce(context.Context, domain.ID, [32]byte, [32]byte, time.Time, time.Time) error
@@ -49,11 +53,12 @@ type Config struct {
 }
 
 type Server struct {
-	config      Config
-	persistence Persistence
-	random      io.Reader
-	now         func() time.Time
-	trust       *TrustBundle
+	config               Config
+	persistence          Persistence
+	random               io.Reader
+	now                  func() time.Time
+	trust                *TrustBundle
+	connectionGeneration atomic.Uint64
 }
 
 func NewHandler(config Config, persistence Persistence, random io.Reader, now func() time.Time) (http.Handler, error) {
@@ -104,6 +109,7 @@ func NewHandler(config Config, persistence Persistence, random io.Reader, now fu
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET /gateway/v1/health", server.health)
 	mux.HandleFunc("GET /gateway/v1/trust-manifest", server.trustManifest)
+	mux.HandleFunc("GET /gateway/v1/ws", server.websocket)
 	mux.HandleFunc("POST /gateway/v1/ws/tickets", server.issueTicket)
 	mux.HandleFunc("OPTIONS /gateway/v1/ws/tickets", server.preflight)
 	mux.HandleFunc("POST /gateway/v1/tokens/refresh", server.refreshToken)
@@ -233,7 +239,7 @@ func (server *Server) refreshToken(writer http.ResponseWriter, request *http.Req
 	setRefreshCookie(writer, refreshToken, refreshExpiresAt, server.config.ExternalOrigin)
 	writer.Header().Set("DPoP-Nonce", nextNonce)
 	writeJSON(writer, http.StatusOK, map[string]any{
-		"endpointId": endpoint.ID.String(), "tokenType": "DPoP", "accessToken": accessToken,
+		"endpointId": endpoint.ID.String(), "credentialId": accessID.String(), "tokenType": "DPoP", "accessToken": accessToken,
 		"accessExpiresAt": accessExpiresAt, "signingJkt": endpoint.SigningJKT, "kemJkt": endpoint.KEMJKT,
 	})
 }
