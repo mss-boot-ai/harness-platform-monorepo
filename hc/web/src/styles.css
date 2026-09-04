@@ -30,8 +30,8 @@ h1 { color: #10231d; font-family: Georgia, "Times New Roman", serif; font-size: 
 .trust-icon { width: 38px; height: 38px; display: grid; place-items: center; border: 1px solid #718178; border-radius: 50%; color: #e0a04b; font-size: 22px; }
 .workspace-grid { max-width: 1180px; margin: 0 auto; display: grid; grid-template-columns: minmax(0, 1.6fr) minmax(300px, .8fr); gap: 22px; }
 .primary-column { display: grid; gap: 22px; }
-.setup-card, .identity-card, .platform-card, .next-card, .progress-card { background: rgba(255,255,255,.78); border: 1px solid rgba(190,202,193,.8); border-radius: 22px; box-shadow: 0 14px 42px rgba(23,43,34,.06); }
-.setup-card, .identity-card, .platform-card, .progress-card { padding: 30px; }
+.setup-card, .identity-card, .platform-card, .gateway-card, .next-card, .progress-card { background: rgba(255,255,255,.78); border: 1px solid rgba(190,202,193,.8); border-radius: 22px; box-shadow: 0 14px 42px rgba(23,43,34,.06); }
+.setup-card, .identity-card, .platform-card, .gateway-card, .progress-card { padding: 30px; }
 .section-heading { display: flex; justify-content: space-between; gap: 24px; align-items: flex-start; }
 h2 { color: #17251f; font-family: Georgia, "Times New Roman", serif; font-size: 28px; font-weight: 560; letter-spacing: -.025em; margin: 0; }
 .status-dot { width: 13px; height: 13px; border-radius: 50%; background: #b5bbb7; box-shadow: 0 0 0 7px rgba(181,187,183,.18); margin-top: 9px; }
@@ -77,6 +77,7 @@ button:disabled { cursor: not-allowed; opacity: .48; }
 .login-form .primary-button { min-width: 170px; }
 .login-form .error-banner { grid-column: 1 / -1; margin: 0; }
 .registered-card { display: flex; justify-content: space-between; align-items: center; gap: 22px; }
+.gateway-button { margin-top: 20px; }
 
 @media (max-width: 850px) {
   .app-shell { padding: 0 22px 48px; }
@@ -96,7 +97,7 @@ button:disabled { cursor: not-allowed; opacity: .48; }
   .hero { margin-bottom: 28px; }
   h1 { font-size: 45px; }
   .hero-description { font-size: 15px; }
-  .setup-card, .identity-card, .platform-card, .progress-card { padding: 22px; border-radius: 18px; }
+  .setup-card, .identity-card, .platform-card, .gateway-card, .progress-card { padding: 22px; border-radius: 18px; }
   .action-stack, .identity-grid { grid-template-columns: 1fr; }
   .next-card { align-items: flex-start; padding: 22px; }
   .progress-list { grid-template-columns: 1fr 1fr; gap: 18px 8px; }

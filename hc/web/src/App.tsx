@@ -6,6 +6,7 @@ import {
 } from '@harness/hc-core';
 import { useEffect, useMemo, useState } from 'react';
 import { PlatformSetup } from './PlatformSetup';
+import { GatewaySetup } from './GatewaySetup';
 import type { RegistrationSession } from './api';
 
 const PRIMARY_INSTALLATION_ID = 'primary-browser-installation';
@@ -216,6 +217,9 @@ export function App() {
                 registration={registration}
                 onRegistered={setRegistration}
               />
+              {registration === null ? null : (
+                <GatewaySetup identity={identity} registration={registration} />
+              )}
             </>
           )}
 
