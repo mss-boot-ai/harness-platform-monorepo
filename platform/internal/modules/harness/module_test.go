@@ -51,8 +51,8 @@ func TestProtectedHealthRouteUsesCurrentPrincipalAndSchema(t *testing.T) {
 		t.Fatalf("sql DB: %v", err)
 	}
 	t.Cleanup(func() { _ = sqlDB.Close() })
-	if err := store.CreateSchema(db); err != nil {
-		t.Fatalf("CreateSchema: %v", err)
+	if err := store.CreateAllSchema(db); err != nil {
+		t.Fatalf("CreateAllSchema: %v", err)
 	}
 
 	router := gin.New()
@@ -76,6 +76,9 @@ func TestProtectedHealthRouteUsesCurrentPrincipalAndSchema(t *testing.T) {
 	}
 	if body.Status != "ready" || body.UserID != "owner" || body.TenantID != "tenant" {
 		t.Fatalf("unexpected response: %#v", body)
+	}
+	if len(body.SchemaMigrations) != 2 || body.SchemaMigrations[1] != store.M1PersistenceMigrationID.String() {
+		t.Fatalf("unexpected schema migrations: %#v", body.SchemaMigrations)
 	}
 }
 
@@ -103,17 +106,17 @@ func (testEvents) Collect(context.Context, business.Event) {}
 
 type testPrincipal struct{}
 
-func (testPrincipal) GetUserID() string                  { return "owner" }
-func (testPrincipal) GetTenantID() string                { return "tenant" }
-func (testPrincipal) GetRoleID() string                  { return "role" }
-func (testPrincipal) GetEmail() string                   { return "owner@example.test" }
-func (testPrincipal) GetUsername() string                { return "owner" }
-func (testPrincipal) GetRefreshTokenDisable() bool       { return false }
-func (testPrincipal) SetRefreshTokenDisable(bool)        {}
+func (testPrincipal) GetUserID() string                        { return "owner" }
+func (testPrincipal) GetTenantID() string                      { return "tenant" }
+func (testPrincipal) GetRoleID() string                        { return "role" }
+func (testPrincipal) GetEmail() string                         { return "owner@example.test" }
+func (testPrincipal) GetUsername() string                      { return "owner" }
+func (testPrincipal) GetRefreshTokenDisable() bool             { return false }
+func (testPrincipal) SetRefreshTokenDisable(bool)              {}
 func (testPrincipal) CheckToken(context.Context, string) error { return nil }
-func (testPrincipal) Root() bool                         { return false }
+func (testPrincipal) Root() bool                               { return false }
 func (testPrincipal) Verify(context.Context) (bool, security.Verifier, error) {
 	return true, testPrincipal{}, nil
 }
-func (testPrincipal) GetPersonAccessToken() string  { return "" }
-func (testPrincipal) SetPersonAccessToken(string)   {}
+func (testPrincipal) GetPersonAccessToken() string { return "" }
+func (testPrincipal) SetPersonAccessToken(string)  {}

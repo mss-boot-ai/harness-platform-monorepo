@@ -25,7 +25,7 @@ func (Module) Register(registry *business.Registry) error {
 	}
 	return registry.Register(business.Registration{
 		Descriptor: descriptor(),
-		Migrations: store.RegisterMigrations,
+		Migrations: store.RegisterAllMigrations,
 		Readiness:  readiness,
 		Routes:     registerRoutes,
 	})
@@ -71,18 +71,18 @@ func descriptor() business.Descriptor {
 }
 
 func readiness(ctx context.Context, db *gorm.DB) error {
-	if err := business.RequireAppliedMigrations(ctx, db, store.SchemaMigrationID); err != nil {
+	if err := business.RequireAppliedMigrations(ctx, db, store.SchemaMigrationID, store.M1PersistenceMigrationID); err != nil {
 		return err
 	}
-	return store.VerifySchema(db)
+	return store.VerifyAllSchema(db)
 }
 
 type healthResponse struct {
-	Status          string `json:"status"`
-	Module          string `json:"module"`
-	UserID          string `json:"userId"`
-	TenantID        string `json:"tenantId"`
-	SchemaMigration string `json:"schemaMigration"`
+	Status           string   `json:"status"`
+	Module           string   `json:"module"`
+	UserID           string   `json:"userId"`
+	TenantID         string   `json:"tenantId"`
+	SchemaMigrations []string `json:"schemaMigrations"`
 }
 
 func registerRoutes(protectedAPI *gin.RouterGroup, runtime business.Runtime) error {
@@ -114,7 +114,7 @@ func registerRoutes(protectedAPI *gin.RouterGroup, runtime business.Runtime) err
 			})
 			return
 		}
-		if err := store.VerifySchema(db.WithContext(c.Request.Context())); err != nil {
+		if err := store.VerifyAllSchema(db.WithContext(c.Request.Context())); err != nil {
 			c.JSON(503, gin.H{
 				"code":    "HARNESS_NOT_READY",
 				"message": "Harness schema is not ready",
@@ -122,11 +122,14 @@ func registerRoutes(protectedAPI *gin.RouterGroup, runtime business.Runtime) err
 			return
 		}
 		c.JSON(200, healthResponse{
-			Status:          "ready",
-			Module:          ModuleName,
-			UserID:          principal.GetUserID(),
-			TenantID:        principal.GetTenantID(),
-			SchemaMigration: store.SchemaMigrationID.String(),
+			Status:   "ready",
+			Module:   ModuleName,
+			UserID:   principal.GetUserID(),
+			TenantID: principal.GetTenantID(),
+			SchemaMigrations: []string{
+				store.SchemaMigrationID.String(),
+				store.M1PersistenceMigrationID.String(),
+			},
 		})
 	})
 	registerManagementRoutes(group, runtime)
