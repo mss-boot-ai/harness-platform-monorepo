@@ -1,0 +1,14 @@
+{
+  "fixtureUse": "TEST ONLY - deterministic generated binding interoperability fixture",
+  "wirePacketBase64": "CAEaEAEBAQEBAQEBAQEBAQEBAQFSfwoQAgICAgICAgICAgICAgICAhAHGiADAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAyDSCSgFMAk6QAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQ",
+  "wireMajor": 1,
+  "wireMinor": 0,
+  "packetIdByte": 1,
+  "connectionIdByte": 2,
+  "connectionGeneration": 7,
+  "serverNonceByte": 3,
+  "serverTimeMs": 1234,
+  "trustManifestRevision": 5,
+  "credentialStatusRevision": 9,
+  "serverSignatureByte": 4
+}

@@ -7,10 +7,16 @@ cd "${repo_root}"
 proto="protocol/proto/mss/awp/v1/wire.proto"
 constants="protocol/constants/awp-v1.json"
 suite_vector="protocol/testdata/v1/suite-0001-jwk-es256-dpop.json"
+wire_vector="protocol/testdata/v1/wire-server-challenge.json"
+go_binding="platform/internal/harness/protocol/awpv1/wire.pb.go"
+ts_binding="hc/packages/core/src/generated/mss/awp/v1/wire_pb.ts"
 
 [[ -s "${proto}" ]] || { echo "error: missing ${proto}" >&2; exit 2; }
 [[ -s "${constants}" ]] || { echo "error: missing ${constants}" >&2; exit 2; }
 [[ -s "${suite_vector}" ]] || { echo "error: missing ${suite_vector}" >&2; exit 2; }
+[[ -s "${wire_vector}" ]] || { echo "error: missing ${wire_vector}" >&2; exit 2; }
+[[ -s "${go_binding}" ]] || { echo "error: missing ${go_binding}" >&2; exit 2; }
+[[ -s "${ts_binding}" ]] || { echo "error: missing ${ts_binding}" >&2; exit 2; }
 
 python3 - "${constants}" <<'PY'
 import json
@@ -35,6 +41,28 @@ assert data["limits"]["max_ack_ranges"] == 32
 assert data["limits"]["max_resume_cursors"] == 256
 print("AWP v1 constants are internally consistent.")
 PY
+
+python3 - "${wire_vector}" <<'PY'
+import base64
+import json
+import sys
+from pathlib import Path
+
+data = json.loads(Path(sys.argv[1]).read_text(encoding="utf-8"))
+assert data["fixtureUse"].startswith("TEST ONLY")
+packet = base64.b64decode(data["wirePacketBase64"] + "=" * (-len(data["wirePacketBase64"]) % 4))
+assert len(packet) == 143
+assert data["wireMajor"] == 1 and data["wireMinor"] == 0
+assert data["connectionGeneration"] > 0
+assert data["trustManifestRevision"] > 0
+assert data["credentialStatusRevision"] > 0
+print("AWP generated binding packet vector is internally consistent.")
+PY
+
+grep -Fq 'protoc-gen-go v1.36.12' "${go_binding}"
+grep -Fq 'package awpv1' "${go_binding}"
+grep -Fq 'protoc-gen-es v2.14.1' "${ts_binding}"
+grep -Fq 'mss.awp.v1.WirePacket' "${ts_binding}"
 
 python3 - "${suite_vector}" <<'PY'
 import base64

@@ -2,7 +2,7 @@ syntax = "proto3";
 
 package mss.awp.v1;
 
-option go_package = "github.com/mss-boot-ai/harness-platform-monorepo/protocol/gen/go/mss/awp/v1;awpv1";
+option go_package = "github.com/mss-boot-ai/harness-platform-monorepo/platform/internal/harness/protocol/awpv1;awpv1";
 
 // WirePacket is the only top-level WebSocket binary payload in AWP v1.
 // Every bytes identifier has a fixed length defined by the protocol document
