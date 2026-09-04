@@ -6,6 +6,53 @@
 
 ---
 
+## 2026-09-04 23:06 +08:00 — Platform M1 本地部署与验证收口
+
+### 请求范围
+
+- 复核 ChatGPT 会话声称的工作与真实远端代码，不采信未 push 的完成声明。
+- 补齐 Platform M1 工作日志并建立可审查的 PR 检查点。
+- 在本地启动真实 Thin Host，用内置浏览器完成管理页面调试。
+- 遇到缺陷继续迭代；HC 后续优先用 H5 端调试，最终目标仍是完整 MVP。
+
+### 远端恢复与实现
+
+本地分支从 `98f8b3f76326b2dac2e2febe9bc527dbcb5199e0` 安全 fast-forward 到远端 `ae8574ec7bdb28b1c43304bf58ec625bf9da497b`。未执行 amend、rebase、force-push 或覆盖未知修改。
+
+新增并 push：
+
+| 提交 | 结果 |
+| --- | --- |
+| `54d1cb83b0a5fdb5457827032148e4b9877fbc18` | 恢复完整决策历史并校正当前 M1 记忆 |
+| `ac6a4fc313c3606fe8adbedf5cd445a5aab4bdf6` | 五类 Admin Web 页面、Typed API、路由、权限、中英文和状态处理 |
+| `0f1437239ec8b0459119911a186a133f119b480c` | 修复 SQLite Key Package 并发锁冲突的偶发失败 |
+| `bafa9da3b567c47ebf689c5d6036a124a149fd1e` | 修复 Delivery 数字方向枚举合同并增加测试 |
+
+### CI 与失败记录
+
+- `54d1cb83...`：push `33861459564`、PR `33861463672`，均成功。
+- `ac6a4fc...`：push `33862678753`、PR `33862681772`，均失败；失败发生在 `TestKeyPackageUniqueScopeIsIdempotentAndTenantBound`，SQLite lock/deadlock 被归一化成 `HARNESS_CONFLICT`。
+- `0f143723...`：增加最大 8 次、1–128ms、上下文感知的有界重试；50 次定向回归、Go 全量、vet、关键包 Race Detector 均通过；push `33863007760`、PR `33863012152` 成功。
+- `bafa9da3...`：前端 4 个文件 11 个测试、lint、build 通过；push `33886744485`、PR `33886748998` 成功。
+
+### Thin Host 与浏览器验证
+
+- 官方 `mss v1.3.7` 和 Node `v24.20.0` 资产按官方 SHA256 核验；
+- `mss setup` 初始化忽略的本地 SQLite，`mss dev --detach` 启动后端 `127.0.0.1:8080` 与 Admin Web `127.0.0.1:8001`；
+- 当前 SHA 上 `mss doctor --strict`、`mss verify --all`、`mss upgrade admin v1.3.7 --format json` 均成功，upgrade 为无冲突 dry-run，Harness 自定义 seam 全部保留；
+- 内置浏览器验证 Overview、Enrollments、Endpoints、Sessions、Delivery 的空态与正常态；
+- 实际执行 Enrollment Approve、HC Endpoint Suspend/Resume；
+- 验证不存在 Session 的 Error 状态和无权限用户的 403 Forbidden 状态；
+- 初次 Delivery 暴露数字枚举合同缺陷，形成 `bafa9da3...` 后重测正常。
+
+详细命令、状态矩阵和边界见 `docs/roadmap/verification/2026-09-04-platform-m1.md`。本地账号、密码、Cookie 和测试数据未提交；`.db`、运行日志与报告仍为忽略项。
+
+### 结论与下一检查点
+
+Platform M1 已达到 Accepted M1 范围的实现与验证检查点，但完整 MVP 尚未完成。下一检查点先建立可真实 lint/test/build 的 HC TypeScript/H5 workspace，再按 M2 安全依赖实现 JWK/ES256/DPoP、Endpoint Credential 和一次性 Ticket/WSS；不能用绕过身份或明文存储的临时通道伪装端到端链路。
+
+---
+
 ## 2026-09-04 10:29 +08:00 — Foundation 与 Platform M1 Draft PR 检查点
 
 ### 请求范围

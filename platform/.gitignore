@@ -11,6 +11,7 @@ web/.pnpm-store/
 web/dist/
 web/.umi/
 web/.umi-production/
+web/.turbopack/
 web/src/.umi/
 web/src/.umi-production/
 web/test-results/

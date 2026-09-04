@@ -46,6 +46,8 @@ CI 仍在执行时不 push 下一检查点，避免 `cancel-in-progress` 隐藏�
 
 ## 4. M1：Platform 领域与持久化
 
+**当前状态**：Verified；实现与浏览器验证证据见 [`verification/2026-09-04-platform-m1.md`](verification/2026-09-04-platform-m1.md)。
+
 ### 1.1 Pure Domain
 
 实现 Endpoint、Enrollment、Credential、Session、KeyPackage、Ticket、Frame、ACK、Audit 和 Idempotency 状态模型。Clock、ID、Random、Hasher 通过接口注入，单元测试不依赖真实时间。

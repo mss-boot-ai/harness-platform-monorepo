@@ -14,8 +14,8 @@ draft PR:        #1
 M1 continuation starting SHA:
                  98f8b3f76326b2dac2e2febe9bc527dbcb5199e0
 latest verified remote implementation SHA:
-                 ae8574ec7bdb28b1c43304bf58ec625bf9da497b
-latest paired CI: push 33855348024 / PR 33855351865
+                 bafa9da3b567c47ebf689c5d6036a124a149fd1e
+latest paired CI: push 33886744485 / PR 33886748998
 ```
 
 本项目用于构建一个可从 Web、微信小程序和后续原生客户端安全控制本地 ACP 编程 Agent 的平台。聊天中的完成声明不是证据；当前文件、远端提交、PR 和当前 SHA 的 CI 才是事实源。
@@ -110,7 +110,7 @@ HC <— TLS 1.3 + encrypted AWP —> Platform <— TLS 1.3 + encrypted AWP —> 
 
 ## 8. 当前真实完成度
 
-截至实现检查点 `ae8574ec7bdb28b1c43304bf58ec625bf9da497b`，已由远端文件以及 push Run `33855348024`、PR Run `33855351865` 支持的范围是：
+截至实现检查点 `bafa9da3b567c47ebf689c5d6036a124a149fd1e`，已由远端文件以及 push Run `33886744485`、PR Run `33886748998` 支持的范围是：
 
 - Platform Thin Host/versioned import 基线与 CI 骨架；
 - AWP v1 Proto 和 ABA Rust/AAD Foundation；
@@ -123,33 +123,33 @@ HC <— TLS 1.3 + encrypted AWP —> Platform <— TLS 1.3 + encrypted AWP —> 
 - Key Package 只接受 Suite 0001，并按 Session、Issuer ABA、Recipient HC、Credential 和 Generation 状态失败关闭；
 - Readiness 验证关键唯一索引的唯一性、列集合和列顺序；
 - `harness:read`、`harness:operate`、`harness:approve`、`harness:revoke` 的授权 Migration、路由绑定和拒绝测试。
+- Overview、Enrollment、Endpoint、Session、Delivery 五类 Admin Web 页面；
+- Typed API、每次写操作的新 `Idempotency-Key`、中英文文案以及 Loading/Empty/Error/Forbidden/Ready 状态；
+- 官方 Thin Host 本地部署、`mss doctor --strict`、`mss verify --all` 和 v1.3.7 no-op upgrade dry-run；
+- 内置浏览器对五页面空态、正常态、审批/暂停/恢复操作、错误态和 403 禁止态的验收。
 
-这仍不等于 Platform M1 完成，更不等于 Platform、ABA、HC MVP 或真实 E2E 完成。当前 PR 正文和工作日志仍停留在早期检查点，且 Admin Web 页面尚未进入远端历史。
+Platform M1 已达到当前 Accepted M1 范围的实现与验证检查点；详细证据见 `docs/roadmap/verification/2026-09-04-platform-m1.md`。这仍不等于 Platform、ABA、HC MVP 或真实 E2E 完成。
 
-## 9. Platform M1 当前目标与缺口
+## 9. 当前目标与缺口
 
-本开发阶段只补齐 M1，不开始 M2 的 DPoP、Credential 签发或 WSS Gateway。当前剩余 M1 工作是：
+下一阶段按 M2/M3 安全依赖推进，同时优先建立可在浏览器调试的 HC H5 workspace。HC H5 可以先实现共享类型、安全存储能力探测、状态机与 UI，但在 M2 的 DPoP、Credential、Ticket/WSS API 就绪前不得伪造“已联通”。当前主要工作是：
 
-- 在 `platform/web/src/business/` 实现 Overview、Enrollment、Endpoint、Session、Delivery 页面；
-- 补齐 Typed Service、每次写请求的新 `Idempotency-Key`、路由、服务路径投影和中英文文案；
-- 页面覆盖 Loading、Empty、Error、Forbidden 和正常状态，并通过 Node 24 lint/test/build；
-- 启动真实 Thin Host 后使用内置浏览器完成页面和状态验证；
-- 对最终实现 SHA 执行并记录 Race Detector、`mss verify --all` 和 Thin Host no-op upgrade；工具或环境不可用时明确标为未执行；
-- 更新 `docs/memory/work-log.md`、版本化 M1 验证报告和 PR #1 正文，并等待最终文档 SHA 的完整 CI。
+- 创建严格锁定的 HC TypeScript workspace 与 H5 应用；
+- 实现 WebCrypto 非导出 P-256 Signing/KEM Key、IndexedDB 能力探测和显式 ephemeral fallback；
+- 实现 Endpoint enrollment、DPoP 与连接状态机的纯逻辑和测试；
+- 先补 M2 的跨语言 JWK/ES256/DPoP Golden Vector，再接 Credential 与一次性 Ticket/WSS；
+- 继续实现 ABA Enrollment/Connector、Session、HPKE/Relay 和确定性 ACP Test Agent；
+- 形成 HC H5 → Platform → ABA → ACP Agent 的真实本地 E2E，再进入可靠性、吊销和部署收口。
 
 ## 10. 当前明确未完成或未验证
 
 除非后续当前 SHA 证据更新，下列项目均按未完成/未验证处理：
 
 - HC TypeScript Workspace 和 HC Job 实际构建测试；
-- Platform Admin Web 五类 Harness 管理页面及其浏览器验收；
 - M2 的 JWK/ES256、Credential 签发、DPoP、Token Family、Ticket API 与 WSS Gateway；
 - ABA Secure Store、Enrollment、Connector、Process Supervisor、Journal 与 ACP Proxy；
 - Test Agent、Compose 和 HC→Platform→ABA→ACP Agent E2E；
 - 浏览器和微信真机；
-- Race Detector；
-- `mss verify --all`；
-- Thin Host no-op upgrade；
 - Opaque Canary；
 - 负向安全、故障注入和容量；
 - 生产数据库、多实例 Gateway、KMS/HSM 和外部安全评审。
