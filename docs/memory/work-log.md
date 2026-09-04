@@ -6,6 +6,39 @@
 
 ---
 
+## 2026-09-05 00:20 +08:00 — HC H5 注册与 M2 身份基础
+
+### 交付
+
+- 建立真实 HC TypeScript workspace、响应式 H5、不可导出 WebCrypto Signing/KEM Key 与 IndexedDB `CryptoKey` 持久化；
+- 三语言实现 RFC 7638、ES256 P1363 low-S 和 DPoP primitives，共享 Suite 0001 测试向量；
+- 实现 Go DPoP verifier、有界 replay cache，以及 HC/ABA proof 生成；
+- 以 ADR-0005 固化 HC Human-bound 注册使用 Admin Browser Session Path，Endpoint 数据面仍与 Gateway 隔离；
+- 实现一次性 Registration Challenge、Access/Refresh Credential、原子 Store、RBAC/Migration 和 H5 登录注册 UI；
+- 更新 Draft PR 标题和正文为完整 MVP 连续开发检查点。
+
+### 检查点与 CI
+
+关键提交：`0af88555010cff6cb317fbb005eff20c13ac4095`、`88e221caea5b572422f9fcae02fb4b46b72ac893`、`b8087ca492fc4823cccd0421daa3086ff8a9388f`、`1f0c05e58d3de0bb28ae18b73da621b5f6cd743d`、`1d9f89abd655496a09a756d86996ee670fbf4276`、`0e038709f4b1fc4d402e135c7317bb6046cd1025`、`b0ab1b832793059d8bb6a639140a5436e825f46e`、`c8d7dccb0afc86610f4898dbc54855f7c90d6666`、`4df928e4c99f0ff2be578e51d9a02cc4940a56c2`、`b8ed5187354e8ea7ea665680eddc43110f1c7fb5`、`e854c68fc31434943759a48f93821e8499a31308`、`a491c49e725e34871afbce04624a9ece9c60deb5`、`6239ad3ba45ff82018d233e878c119a2f01443a1`。
+
+当前 SHA `6239ad3...`：push CI `33894174661`、PR CI `33894180563` 均成功。主要中间成功 Run：`b8087ca...` push/PR `33890207942`/`33890211065`；`0e038709...` `33891378431`/`33891388801`；`4df928e4...` `33892576829`/`33892582130`；`b8ed518...` `33893232763`/`33893237167`；`a491c49...` `33893819720`/`33893825854`。
+
+### 失败与修复
+
+- Vitest globals、一次性 Cargo lock workflow、DPoP replay 时钟、M2 Schema Verify 顺序、授权矩阵数量分别暴露问题；均保留原提交/Run，并通过后续新提交修复，没有 amend/rebase/force-push。
+- `b8087ca...` 的额外 Cargo workflow Run `33890207853` 失败；`1f0c05e...` 的验证 Run `33890525374` 成功。
+- 新 Migration 未应用时本地 Backend Readiness 明确拒绝启动；官方 `mss setup` 应用 Migration 后恢复健康。
+
+### 浏览器证据
+
+内置浏览器实际完成 H5 `web-software` 探测、密钥生成、刷新恢复、390px 无横向溢出、Admin Browser Session 登录、Challenge、Transcript 签名和 Endpoint 注册。注册 Endpoint 缩略 ID 为 `051e4bc61a…`；数据库只读核对 Challenge `CONSUMED`，Access/Refresh 均仅保存 64 位 Hash。详细证据和边界见 `docs/roadmap/verification/2026-09-05-hc-registration.md`。
+
+### 下一检查点
+
+实现 Refresh rotation、数据库共享 DPoP Replay/Nonce、Endpoint Token 鉴权、一次性 Ticket 和独立 WSS Gateway；H5 继续作为首个真实调试端。
+
+---
+
 ## 2026-09-04 23:06 +08:00 — Platform M1 本地部署与验证收口
 
 ### 请求范围

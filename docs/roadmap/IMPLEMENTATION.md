@@ -84,6 +84,8 @@ feat(platform): persist harness identity and relay state
 
 ## 5. M2：Endpoint 身份、DPoP 与 Gateway
 
+**当前状态**：In progress；JWK/ES256/DPoP primitives 与 HC H5 Human-bound 注册已完成，证据见 [`verification/2026-09-05-hc-registration.md`](verification/2026-09-05-hc-registration.md)。Refresh rotation、共享 Replay/Nonce、Ticket/WSS 尚未完成。
+
 ### 2.1 JWK/Signature
 
 Go/Rust/TS 实现 RFC 7638、ES256 P1363 low-S 和固定向量。

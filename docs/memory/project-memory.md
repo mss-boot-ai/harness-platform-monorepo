@@ -14,8 +14,8 @@ draft PR:        #1
 M1 continuation starting SHA:
                  98f8b3f76326b2dac2e2febe9bc527dbcb5199e0
 latest verified remote implementation SHA:
-                 bafa9da3b567c47ebf689c5d6036a124a149fd1e
-latest paired CI: push 33886744485 / PR 33886748998
+                 6239ad3ba45ff82018d233e878c119a2f01443a1
+latest paired CI: push 33894174661 / PR 33894180563
 ```
 
 本项目用于构建一个可从 Web、微信小程序和后续原生客户端安全控制本地 ACP 编程 Agent 的平台。聊天中的完成声明不是证据；当前文件、远端提交、PR 和当前 SHA 的 CI 才是事实源。
@@ -130,14 +130,14 @@ HC <— TLS 1.3 + encrypted AWP —> Platform <— TLS 1.3 + encrypted AWP —> 
 
 Platform M1 已达到当前 Accepted M1 范围的实现与验证检查点；详细证据见 `docs/roadmap/verification/2026-09-04-platform-m1.md`。这仍不等于 Platform、ABA、HC MVP 或真实 E2E 完成。
 
+在此基础上，M2 已完成可独立验证的身份子切片：HC H5 workspace、本地不可导出 P-256 双密钥、IndexedDB `CryptoKey` 持久化、Suite 0001 三语言 JWK/ES256/DPoP 向量、nonce-bound DPoP primitives、ADR-0005 Human-bound 注册边界，以及真实 Browser Session → Challenge → Endpoint Registration。证据见 `docs/roadmap/verification/2026-09-05-hc-registration.md`。
+
 ## 9. 当前目标与缺口
 
 下一阶段按 M2/M3 安全依赖推进，同时优先建立可在浏览器调试的 HC H5 workspace。HC H5 可以先实现共享类型、安全存储能力探测、状态机与 UI，但在 M2 的 DPoP、Credential、Ticket/WSS API 就绪前不得伪造“已联通”。当前主要工作是：
 
-- 创建严格锁定的 HC TypeScript workspace 与 H5 应用；
-- 实现 WebCrypto 非导出 P-256 Signing/KEM Key、IndexedDB 能力探测和显式 ephemeral fallback；
-- 实现 Endpoint enrollment、DPoP 与连接状态机的纯逻辑和测试；
-- 先补 M2 的跨语言 JWK/ES256/DPoP Golden Vector，再接 Credential 与一次性 Ticket/WSS；
+- 完成 Refresh Family rotation、数据库共享 DPoP Replay/Nonce 和 Endpoint 鉴权；
+- 实现一次性 Ticket 与 WSS Challenge/READY/Fencing；
 - 继续实现 ABA Enrollment/Connector、Session、HPKE/Relay 和确定性 ACP Test Agent；
 - 形成 HC H5 → Platform → ABA → ACP Agent 的真实本地 E2E，再进入可靠性、吊销和部署收口。
 
@@ -145,8 +145,7 @@ Platform M1 已达到当前 Accepted M1 范围的实现与验证检查点；详�
 
 除非后续当前 SHA 证据更新，下列项目均按未完成/未验证处理：
 
-- HC TypeScript Workspace 和 HC Job 实际构建测试；
-- M2 的 JWK/ES256、Credential 签发、DPoP、Token Family、Ticket API 与 WSS Gateway；
+- M2 的 Refresh Token Family rotation、持久 DPoP Replay/Nonce、HEC/Trust Manifest、Ticket API 与 WSS Gateway；
 - ABA Secure Store、Enrollment、Connector、Process Supervisor、Journal 与 ACP Proxy；
 - Test Agent、Compose 和 HC→Platform→ABA→ACP Agent E2E；
 - 浏览器和微信真机；
