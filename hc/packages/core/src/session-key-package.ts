@@ -84,7 +84,7 @@ export async function openSessionKeyPackagePacket(
     keyPackage.policyRevision !== 1n ||
     keyPackage.cryptoSuite !== 'MSS-AWP-SUITE-0001' ||
     keyPackage.hpkeEnc.length !== 65 ||
-    keyPackage.hpkeCiphertext.length !== 157 ||
+    keyPackage.hpkeCiphertext.length !== 173 ||
     keyPackage.issuerSignature.length !== 64 ||
     keyPackage.notBeforeMs > BigInt(now.getTime() + 60_000) ||
     keyPackage.expiresAtMs <= BigInt(now.getTime()) ||

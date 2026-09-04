@@ -36,6 +36,7 @@ describe('Suite 0001 HPKE and session KDF vector', () => {
       base64UrlDecode(vector.ciphertextBase64Url),
     );
     expect(base64Url(material.srk)).toBe(vector.material.srkBase64Url);
+    expect(base64Url(material.keyId)).toBe(vector.material.keyIdBase64Url);
     expect(base64Url(material.sessionNonce)).toBe(vector.material.sessionNonceBase64Url);
     expect(base64Url(material.hcToAbaNoncePrefix)).toBe(
       vector.material.hcToAbaNoncePrefixBase64Url,

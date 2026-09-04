@@ -13,7 +13,7 @@ use super::P256PublicJwk;
 pub const SUITE_ID: u16 = 1;
 pub const SUITE_NAME: &str = "MSS-AWP-SUITE-0001";
 pub const KEY_PACKAGE_INFO_BYTES: usize = 84;
-pub const KEY_PACKAGE_PLAINTEXT_BYTES: usize = 141;
+pub const KEY_PACKAGE_PLAINTEXT_BYTES: usize = 157;
 
 type Kem = DhP256HkdfSha256;
 
@@ -24,6 +24,7 @@ pub struct KeyPackageMaterial {
     pub sender_aba_endpoint_id: [u8; 16],
     pub recipient_hc_endpoint_id: [u8; 16],
     pub policy_revision: u64,
+    pub key_id: [u8; 16],
     pub srk: [u8; 32],
     pub session_nonce: [u8; 32],
     pub hc_to_aba_nonce_prefix: [u8; 4],
@@ -141,6 +142,7 @@ pub fn key_package_plaintext(material: &KeyPackageMaterial) -> Result<Vec<u8>, K
     output.extend_from_slice(b"mss-key-package-plaintext-v1");
     output.extend_from_slice(&material.session_id);
     output.extend_from_slice(&material.generation.to_be_bytes());
+    output.extend_from_slice(&material.key_id);
     output.extend_from_slice(&material.srk);
     output.extend_from_slice(&material.session_nonce);
     output.extend_from_slice(&material.hc_to_aba_nonce_prefix);
@@ -235,6 +237,7 @@ fn validate_material(material: &KeyPackageMaterial) -> Result<(), KeyPackageErro
             .all(|value| *value == 0)
         || material.sender_aba_endpoint_id == material.recipient_hc_endpoint_id
         || material.policy_revision == 0
+        || material.key_id.iter().all(|value| *value == 0)
         || material.srk.iter().all(|value| *value == 0)
         || material.session_nonce.iter().all(|value| *value == 0)
         || material.hc_to_aba_nonce_prefix == material.aba_to_hc_nonce_prefix
@@ -328,6 +331,7 @@ mod tests {
             sender_aba_endpoint_id: [2_u8; 16],
             recipient_hc_endpoint_id: [3_u8; 16],
             policy_revision: 1,
+            key_id: [8_u8; 16],
             srk: [4_u8; 32],
             session_nonce: [5_u8; 32],
             hc_to_aba_nonce_prefix: [6_u8; 4],

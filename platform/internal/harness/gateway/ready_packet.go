@@ -186,7 +186,7 @@ func (server *Server) processSessionKeyPackage(
 		session.ABAEndpointID != endpoint.ID || session.Status != domain.SessionStatusWaitingKey ||
 		message.GetKeyGeneration() != 1 || message.GetCryptoSuite() != keyPackageSuiteName ||
 		message.GetPolicyRevision() != 1 || len(message.GetHpkeEnc()) != 65 ||
-		len(message.GetHpkeCiphertext()) != 157 || len(message.GetIssuerSignature()) != 64 {
+		len(message.GetHpkeCiphertext()) != 173 || len(message.GetIssuerSignature()) != 64 {
 		return domain.ID{}, errors.New("SessionKeyPackage binding is invalid")
 	}
 	notBefore := time.UnixMilli(message.GetNotBeforeMs()).UTC()

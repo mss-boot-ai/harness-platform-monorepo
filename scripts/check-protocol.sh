@@ -130,9 +130,9 @@ assert data["suiteId"] == 1
 assert data["hpke"] == {"kemId": 0x0010, "kdfId": 0x0001, "aeadId": 0x0002}
 assert len(decode(data["recipient"]["privateD"])) == 32
 assert len(decode(data["infoBase64Url"])) == 84
-assert len(decode(data["plaintextBase64Url"])) == 141
+assert len(decode(data["plaintextBase64Url"])) == 157
 assert len(decode(data["encBase64Url"])) == 65
-assert len(decode(data["ciphertextBase64Url"])) == 157
+assert len(decode(data["ciphertextBase64Url"])) == 173
 assert len(decode(data["directionKeys"]["hcToAbaBase64Url"])) == 32
 assert len(decode(data["directionKeys"]["abaToHcBase64Url"])) == 32
 info = decode(data["infoBase64Url"])

@@ -386,6 +386,7 @@ func testKeyPackagePlaintext(sessionID domain.ID, now time.Time) []byte {
 	output.WriteString("mss-key-package-plaintext-v1")
 	output.Write(sessionID[:])
 	_ = binary.Write(&output, binary.BigEndian, uint64(1))
+	output.Write(bytes.Repeat([]byte{8}, 16))
 	output.Write(bytes.Repeat([]byte{4}, 32))
 	output.Write(bytes.Repeat([]byte{5}, 32))
 	output.Write(bytes.Repeat([]byte{6}, 4))

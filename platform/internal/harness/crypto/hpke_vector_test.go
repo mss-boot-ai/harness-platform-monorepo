@@ -88,7 +88,7 @@ func TestSuite0001HPKEAndDirectionKDFVector(t *testing.T) {
 		t.Fatalf("wrap recipient private key: %v", err)
 	}
 	enc := decodeBase64URL(t, vector.EncBase64URL, 65)
-	ciphertext := decodeBase64URL(t, vector.CiphertextBase64URL, 157)
+	ciphertext := decodeBase64URL(t, vector.CiphertextBase64URL, 173)
 	recipient, err := hpke.NewRecipient(enc, hpkePrivate, hpke.HKDFSHA256(), hpke.AES256GCM(), info.Bytes())
 	if err != nil {
 		t.Fatalf("create HPKE recipient: %v", err)

@@ -176,6 +176,7 @@ impl ControlState {
                 .try_into()
                 .map_err(|_| GatewayError::Protocol)?,
             policy_revision: request.authorization_revision,
+            key_id: random_array::<16>(),
             srk: random_array::<32>(),
             session_nonce: random_array::<32>(),
             hc_to_aba_nonce_prefix: hc_to_aba_prefix,
@@ -579,7 +580,7 @@ mod tests {
         assert_eq!(package.issuer_credential_id, vec![15_u8; 16]);
         assert_eq!(package.crypto_suite, SUITE_NAME);
         assert_eq!(package.hpke_enc.len(), 65);
-        assert_eq!(package.hpke_ciphertext.len(), 157);
+        assert_eq!(package.hpke_ciphertext.len(), 173);
         let mut hc_scalar = [0_u8; 32];
         hc_scalar[31] = 1;
         let hc_signing = SigningKey::from_slice(&hc_scalar)?;

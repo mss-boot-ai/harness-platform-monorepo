@@ -3,7 +3,7 @@ import type { P256PublicJwk } from './identity';
 
 export const suiteName = 'MSS-AWP-SUITE-0001';
 export const keyPackageInfoBytes = 84;
-export const keyPackagePlaintextBytes = 141;
+export const keyPackagePlaintextBytes = 157;
 
 const textEncoder = new TextEncoder();
 const kemSuite = concatenate([textEncoder.encode('KEM'), uint16(0x0010)]);
@@ -27,6 +27,7 @@ export interface SessionKeyMaterial {
   readonly expiresAtMs: bigint;
   readonly generation: bigint;
   readonly hcToAbaNoncePrefix: Uint8Array;
+  readonly keyId: Uint8Array;
   readonly notBeforeMs: bigint;
   readonly sessionId: Uint8Array;
   readonly sessionNonce: Uint8Array;
@@ -152,6 +153,7 @@ function parseKeyPackagePlaintext(
   let offset = label.length;
   const sessionId = plaintext.slice(offset, offset += 16);
   const generation = readUint64(plaintext, offset); offset += 8;
+  const keyId = plaintext.slice(offset, offset += 16);
   const srk = plaintext.slice(offset, offset += 32);
   const sessionNonce = plaintext.slice(offset, offset += 32);
   const hcToAbaNoncePrefix = plaintext.slice(offset, offset += 4);
@@ -176,6 +178,7 @@ function parseKeyPackagePlaintext(
     expiresAtMs,
     generation,
     hcToAbaNoncePrefix,
+    keyId,
     notBeforeMs,
     sessionId,
     sessionNonce,

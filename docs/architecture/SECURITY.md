@@ -454,12 +454,13 @@ generation
 participant role
 ```
 
-Suite 0001 的明文精确编码为 141 字节：
+Suite 0001 的明文精确编码为 157 字节：
 
 ```text
 utf8("mss-key-package-plaintext-v1")
 || session_id[16]
 || u64be(generation)
+|| key_id[16]
 || SRK[32]
 || session_nonce[32]
 || hc_to_aba_nonce_prefix[4]
