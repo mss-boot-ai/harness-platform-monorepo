@@ -4,6 +4,7 @@ pub mod config;
 pub mod crypto;
 pub mod gateway;
 pub mod identity;
+pub mod journal;
 pub mod protocol {
     pub mod awpv1 {
         include!(concat!(env!("OUT_DIR"), "/mss.awp.v1.rs"));

@@ -41,7 +41,7 @@ prost-build = "0.14.4"
 protoc-bin-vendored = "3.2.0"
 
 [target.'cfg(unix)'.dependencies]
-rustix = { version = "1.1.4", default-features = false, features = ["process"] }
+rustix = { version = "1.1.4", default-features = false, features = ["fs", "process"] }
 
 [lints.rust]
 unsafe_code = "forbid"
