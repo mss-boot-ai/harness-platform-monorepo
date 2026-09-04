@@ -42,6 +42,28 @@ func (store *Store) PutSessionKeyPackage(
 	}
 	owner = strings.TrimSpace(owner)
 	tenant = strings.TrimSpace(tenant)
+	const sqliteAttempts = 8
+	for attempt := 0; attempt < sqliteAttempts; attempt++ {
+		result, err := store.putSessionKeyPackageOnce(ctx, owner, tenant, value)
+		if err == nil {
+			return result, nil
+		}
+		if store.db.Dialector.Name() != "sqlite" || !isSQLiteConcurrencyError(err) || attempt == sqliteAttempts-1 {
+			return PutKeyPackageResult{}, normalizeConcurrencyError("key package changed concurrently", err)
+		}
+		if err := waitForSQLiteRetry(ctx, attempt); err != nil {
+			return PutKeyPackageResult{}, err
+		}
+	}
+	return PutKeyPackageResult{}, domain.NewProblem(domain.CodeConflict, "key package changed concurrently", nil)
+}
+
+func (store *Store) putSessionKeyPackageOnce(
+	ctx context.Context,
+	owner string,
+	tenant string,
+	value domain.SessionKeyPackage,
+) (PutKeyPackageResult, error) {
 	row := keyPackageToRow(value)
 	var resultValue PutKeyPackageResult
 	var semanticConflict error
@@ -123,7 +145,7 @@ func (store *Store) PutSessionKeyPackage(
 		return nil
 	})
 	if err != nil {
-		return PutKeyPackageResult{}, normalizeConcurrencyError("key package changed concurrently", err)
+		return PutKeyPackageResult{}, err
 	}
 	if semanticConflict != nil {
 		return PutKeyPackageResult{}, semanticConflict

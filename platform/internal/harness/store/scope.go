@@ -3,6 +3,7 @@ package store
 import (
 	"context"
 	"strings"
+	"time"
 
 	"github.com/mss-boot-ai/harness-platform-monorepo/platform/internal/harness/domain"
 )
@@ -21,12 +22,31 @@ func normalizeConcurrencyError(message string, err error) error {
 	if err == nil {
 		return nil
 	}
-	value := strings.ToLower(err.Error())
-	if strings.Contains(value, "database is locked") ||
-		strings.Contains(value, "database table is locked") ||
-		strings.Contains(value, "sqlite_busy") ||
-		strings.Contains(value, "sqlite_locked") {
+	if isSQLiteConcurrencyError(err) {
 		return domain.NewProblem(domain.CodeConflict, message, err)
 	}
 	return err
+}
+
+func isSQLiteConcurrencyError(err error) bool {
+	if err == nil {
+		return false
+	}
+	value := strings.ToLower(err.Error())
+	return strings.Contains(value, "database is locked") ||
+		strings.Contains(value, "database table is locked") ||
+		strings.Contains(value, "sqlite_busy") ||
+		strings.Contains(value, "sqlite_locked")
+}
+
+func waitForSQLiteRetry(ctx context.Context, attempt int) error {
+	backoff := time.Duration(1<<attempt) * time.Millisecond
+	timer := time.NewTimer(backoff)
+	defer timer.Stop()
+	select {
+	case <-ctx.Done():
+		return ctx.Err()
+	case <-timer.C:
+		return nil
+	}
 }
