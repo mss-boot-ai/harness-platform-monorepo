@@ -64,6 +64,14 @@ export class HcApiError extends Error {
   }
 }
 
+export function accessCredentialNeedsRefresh(
+  registration: RegistrationSession,
+  nowMillis = Date.now(),
+): boolean {
+  const expiresAt = Date.parse(registration.accessExpiresAt);
+  return !Number.isFinite(expiresAt) || expiresAt <= nowMillis + 60_000;
+}
+
 export async function loginBrowserSession(username: string, password: string): Promise<string> {
   const response = await requestJson<unknown>(`${adminBase}/user/session/login`, {
     body: JSON.stringify({ password, username }),
@@ -279,6 +287,24 @@ export async function getEndpointSession(sessionId: string): Promise<EndpointSes
     throw new HcApiError('Created session was not found', 'HC_SESSION_NOT_FOUND', 404);
   }
   return session;
+}
+
+export async function closeEndpointSession(sessionId: string): Promise<EndpointSessionSummary> {
+  if (!/^[0-9a-f]{32}$/u.test(sessionId)) {
+    throw new HcApiError('Session ID is invalid', 'HC_INVALID_SESSION_ID', 400);
+  }
+  const response = await requestJson<unknown>(
+    `${adminBase}/harness/v1/sessions/${sessionId}/close`,
+    {
+      body: '{}',
+      headers: {
+        ...csrfHeaders(),
+        'Idempotency-Key': crypto.randomUUID(),
+      },
+      method: 'POST',
+    },
+  );
+  return parseManagementSession(response);
 }
 
 async function requestJson<T>(path: string, init: RequestInit): Promise<T> {

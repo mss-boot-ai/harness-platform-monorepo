@@ -232,6 +232,7 @@ export function App() {
                 <SessionSetup
                   connection={gatewayConnection}
                   identity={identity}
+                  onRegistration={setRegistration}
                   registration={registration}
                 />
               ) : null}

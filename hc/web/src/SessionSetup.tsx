@@ -9,10 +9,13 @@ import {
 } from '@harness/hc-core';
 import { useEffect, useRef, useState } from 'react';
 import {
+  accessCredentialNeedsRefresh,
+  closeEndpointSession,
   createEndpointSession,
   getEndpointSession,
   HcApiError,
   listABAEndpoints,
+  refreshEndpointSession,
   type ABAEndpointSummary,
   type EndpointSessionSummary,
   type RegistrationSession,
@@ -23,10 +26,12 @@ const POLL_ATTEMPTS = 20;
 export function SessionSetup({
   connection,
   identity,
+  onRegistration,
   registration,
 }: {
   readonly connection: ReadyGatewayConnection;
   readonly identity: EndpointIdentity;
+  readonly onRegistration: (registration: RegistrationSession) => void;
   readonly registration: RegistrationSession;
 }) {
   const [endpoints, setEndpoints] = useState<readonly ABAEndpointSummary[]>([]);
@@ -179,12 +184,31 @@ export function SessionSetup({
     inboundFrameSequence.current = 0n;
     setMessages([]);
     try {
-      let current = await createEndpointSession(identity, registration, {
+      const idempotencyKey = crypto.randomUUID();
+      let activeRegistration = registration;
+      let refreshed = false;
+      if (accessCredentialNeedsRefresh(activeRegistration)) {
+        activeRegistration = await refreshEndpointSession(identity);
+        refreshed = true;
+        onRegistration(activeRegistration);
+      }
+      const submit = (candidate: RegistrationSession) => createEndpointSession(identity, candidate, {
         abaEndpointId: selectedABA,
-        idempotencyKey: crypto.randomUUID(),
+        idempotencyKey,
         runtimeProfileId: runtimeProfileId.trim(),
         workspaceId: workspaceId.trim(),
       });
+      let current: EndpointSessionSummary;
+      try {
+        current = await submit(activeRegistration);
+      } catch (cause) {
+        if (!(cause instanceof HcApiError) || cause.code !== 'ENDPOINT_CREDENTIAL_EXPIRED' || refreshed) {
+          throw cause;
+        }
+        activeRegistration = await refreshEndpointSession(identity);
+        onRegistration(activeRegistration);
+        current = await submit(activeRegistration);
+      }
       setSession(current);
       for (let attempt = 0; attempt < POLL_ATTEMPTS && current.status === 'CREATING'; attempt += 1) {
         await new Promise((resolve) => setTimeout(resolve, 250));
@@ -235,6 +259,25 @@ export function SessionSetup({
     }
   };
 
+  const close = async () => {
+    if (session === null) {
+      return;
+    }
+    setBusy(true);
+    setError(null);
+    try {
+      const closed = await closeEndpointSession(session.sessionId);
+      zeroOpenedPackage(openedPackage.current);
+      openedPackage.current = null;
+      setKeyReady(false);
+      setSession(closed);
+    } catch (cause) {
+      setError(cause instanceof HcApiError ? `${cause.message}（${cause.code}）` : 'Session 关闭失败。');
+    } finally {
+      setBusy(false);
+    }
+  };
+
   return (
     <section className="session-card" aria-labelledby="session-title">
       <div className="section-heading">
@@ -277,10 +320,17 @@ export function SessionSetup({
       </div>
       {endpoints.length === 0 && error === null ? <p className="fine-print">没有可用的 ACTIVE ABA Endpoint。</p> : null}
       {session === null ? null : (
-        <p className="session-result">
-          Session {session.sessionId.slice(0, 10)}… · {session.status}
-          {keyReady ? ' · HPKE KEY READY' : ''}
-        </p>
+        <>
+          <p className="session-result">
+            Session {session.sessionId.slice(0, 10)}… · {session.status}
+            {keyReady ? ' · HPKE KEY READY' : ''}
+          </p>
+          {['CLOSED', 'FAILED', 'ABA_REVOKED'].includes(session.status) ? null : (
+            <button className="secondary-button" type="button" disabled={busy} onClick={() => void close()}>
+              {busy ? '正在处理…' : '关闭当前 Session'}
+            </button>
+          )}
+        </>
       )}
       {keyReady ? (
         <div className="prompt-panel">
