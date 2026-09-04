@@ -534,6 +534,26 @@ message SequenceRange {
 - ACK 只能单调前进；回退值忽略并记录。
 - ACK Signature Transcript 包含所有字段的固定编码和 Range 列表。
 
+ACK Signature Transcript 使用以下唯一编码；所有整数均为大端，`created_at_ms` 按
+`i64` 的二进制补码写入对应 8 字节，签名算法仍为 Suite 0001 ES256 P1363 low-S：
+
+```text
+ASCII "mss-awp-ack-v1"
+ack_id[16]
+channel_id[16]
+session_id[16]
+endpoint_id[16]
+acknowledged_direction u8
+reserved zero[7]
+highest_contiguous_sequence u64be
+key_generation u64be
+created_at_ms i64be
+range_count u32be
+repeat range_count times:
+  start u64be
+  end u64be
+```
+
 ### 12.1 ACK 时机
 
 HC：成功验签、解密并将明文放入可恢复 Inbox/状态机后 ACK。

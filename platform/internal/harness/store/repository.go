@@ -768,7 +768,7 @@ func (store *Store) AdvanceAck(ctx context.Context, cursor domain.AckCursor) (do
 	}
 	if cursor.SessionID.IsZero() || cursor.SenderEndpointID.IsZero() ||
 		cursor.ReceiverEndpointID.IsZero() || cursor.KeyGeneration == 0 ||
-		!cursor.Direction.Valid() || cursor.UpdatedAt.IsZero() {
+		!cursor.Direction.Valid() || cursor.UpdatedAt.IsZero() || !validAckRanges(cursor) {
 		return domain.AckCursor{}, domain.NewProblem(domain.CodeInvalidArgument, "ACK cursor is invalid", nil)
 	}
 	var advanced domain.AckCursor
@@ -791,6 +791,9 @@ func (store *Store) AdvanceAck(ctx context.Context, cursor domain.AckCursor) (do
 				return classifyPersistence(result.Error, "create ACK cursor")
 			}
 			if result.RowsAffected == 1 {
+				if err := markAcknowledgedFrames(tx, cursor); err != nil {
+					return err
+				}
 				cursor.RowVersion = 1
 				advanced = cursor
 				return nil
@@ -805,7 +808,14 @@ func (store *Store) AdvanceAck(ctx context.Context, cursor domain.AckCursor) (do
 		if err != nil {
 			return err
 		}
-		if cursor.HighestContiguousSequence <= current.HighestContiguousSequence {
+		if cursor.HighestContiguousSequence < current.HighestContiguousSequence {
+			advanced = current
+			return nil
+		}
+		if cursor.HighestContiguousSequence == current.HighestContiguousSequence {
+			if err := markAcknowledgedFrames(tx, cursor); err != nil {
+				return err
+			}
 			advanced = current
 			return nil
 		}
@@ -831,10 +841,56 @@ func (store *Store) AdvanceAck(ctx context.Context, cursor domain.AckCursor) (do
 			return domain.NewProblem(domain.CodeConflict, "ACK cursor changed concurrently", nil)
 		}
 		cursor.RowVersion = row.RowVersion + 1
+		if err := markAcknowledgedFrames(tx, cursor); err != nil {
+			return err
+		}
 		advanced = cursor
 		return nil
 	})
 	return advanced, err
+}
+
+func validAckRanges(cursor domain.AckCursor) bool {
+	if cursor.HighestContiguousSequence == 0 && len(cursor.ReceivedRanges) == 0 {
+		return false
+	}
+	if len(cursor.ReceivedRanges) > 32 {
+		return false
+	}
+	previous := cursor.HighestContiguousSequence
+	for _, value := range cursor.ReceivedRanges {
+		if value.Start == 0 || value.Start > value.End || value.Start <= previous {
+			return false
+		}
+		previous = value.End
+	}
+	return true
+}
+
+func markAcknowledgedFrames(tx *gorm.DB, cursor domain.AckCursor) error {
+	updates := map[string]any{
+		"status":          string(domain.FrameStatusReceiverAcknowledged),
+		"acknowledged_at": cursor.UpdatedAt,
+	}
+	matching := func() *gorm.DB {
+		return tx.Model(new(frameRow)).Where(
+			"session_id = ? AND key_generation = ? AND direction = ? AND sender_endpoint_id = ? AND receiver_endpoint_id = ? AND status IN ?",
+			cursor.SessionID.String(), cursor.KeyGeneration, uint8(cursor.Direction),
+			cursor.SenderEndpointID.String(), cursor.ReceiverEndpointID.String(),
+			[]string{string(domain.FrameStatusStored), string(domain.FrameStatusRouted)},
+		)
+	}
+	if cursor.HighestContiguousSequence > 0 {
+		if err := matching().Where("sequence <= ?", cursor.HighestContiguousSequence).Updates(updates).Error; err != nil {
+			return fmt.Errorf("mark contiguous acknowledged frames: %w", err)
+		}
+	}
+	for _, value := range cursor.ReceivedRanges {
+		if err := matching().Where("sequence >= ? AND sequence <= ?", value.Start, value.End).Updates(updates).Error; err != nil {
+			return fmt.Errorf("mark ranged acknowledged frames: %w", err)
+		}
+	}
+	return nil
 }
 
 func endpointToRow(value domain.Endpoint) endpointRow {

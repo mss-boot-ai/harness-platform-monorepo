@@ -402,6 +402,13 @@ func TestHCSessionCreateIsIdempotentAndDeliversSignedOpenTunnel(t *testing.T) {
 	if err != nil || forwardedType != websocket.BinaryMessage || !bytes.Equal(forwardedHCFrame, hcFrame) {
 		t.Fatalf("read forwarded HC frame type=%d error=%v", forwardedType, err)
 	}
+	abaACK := testAckFramePacket(
+		t, createdSessionID, channelID, abaEndpoint.ID,
+		awpv1.Direction_DIRECTION_HC_TO_ABA, 1, abaSigningKey, now,
+	)
+	if err := abaConnection.WriteMessage(websocket.BinaryMessage, abaACK); err != nil {
+		t.Fatalf("write ABA ACK: %v", err)
+	}
 	abaFrame := testEncryptedFramePacket(
 		t, createdSessionID, channelID, abaEndpoint.ID, hcEndpointID, gatewayID(8),
 		awpv1.Direction_DIRECTION_ABA_TO_HC, abaToHCKey, []byte{7, 7, 7, 7}, abaSigningKey,
@@ -414,10 +421,30 @@ func TestHCSessionCreateIsIdempotentAndDeliversSignedOpenTunnel(t *testing.T) {
 	if err != nil || forwardedType != websocket.BinaryMessage || !bytes.Equal(forwardedABAFrame, abaFrame) {
 		t.Fatalf("read forwarded ABA frame type=%d error=%v", forwardedType, err)
 	}
+	hcACK := testAckFramePacket(
+		t, createdSessionID, channelID, hcEndpointID,
+		awpv1.Direction_DIRECTION_ABA_TO_HC, 1, hcSigningKey, now,
+	)
+	if err := hcConnection.WriteMessage(websocket.BinaryMessage, hcACK); err != nil {
+		t.Fatalf("write HC ACK: %v", err)
+	}
+	for attempt := 0; attempt < 20; attempt++ {
+		delivery, err := persistence.Delivery(
+			t.Context(), createdSessionID, abaEndpoint.OwnerUserID, abaEndpoint.TenantID, 10,
+		)
+		if err == nil && len(delivery.Frames) == 2 &&
+			delivery.Frames[0].Status == domain.FrameStatusReceiverAcknowledged &&
+			delivery.Frames[1].Status == domain.FrameStatusReceiverAcknowledged {
+			break
+		}
+		time.Sleep(5 * time.Millisecond)
+	}
 	delivery, err := persistence.Delivery(
 		t.Context(), createdSessionID, abaEndpoint.OwnerUserID, abaEndpoint.TenantID, 10,
 	)
-	if err != nil || len(delivery.Frames) != 2 {
+	if err != nil || len(delivery.Frames) != 2 ||
+		delivery.Frames[0].Status != domain.FrameStatusReceiverAcknowledged ||
+		delivery.Frames[1].Status != domain.FrameStatusReceiverAcknowledged {
 		t.Fatalf("encrypted delivery frames=%#v error=%v", delivery.Frames, err)
 	}
 
@@ -429,6 +456,22 @@ func TestHCSessionCreateIsIdempotentAndDeliversSignedOpenTunnel(t *testing.T) {
 	_ = abaConnection.SetReadDeadline(time.Now().Add(100 * time.Millisecond))
 	if _, _, err := abaConnection.ReadMessage(); err == nil {
 		t.Fatal("idempotent session replay delivered a duplicate OpenTunnel control")
+	}
+	tamperedACK := new(awpv1.WirePacket)
+	if err := proto.Unmarshal(hcACK, tamperedACK); err != nil || tamperedACK.GetAck() == nil {
+		t.Fatalf("decode ACK for tamper test: %v", err)
+	}
+	tamperedACK.GetAck().Signature[0] ^= 1
+	tamperedBytes, err := proto.MarshalOptions{Deterministic: true}.Marshal(tamperedACK)
+	if err != nil {
+		t.Fatalf("encode tampered ACK: %v", err)
+	}
+	if err := hcConnection.WriteMessage(websocket.BinaryMessage, tamperedBytes); err != nil {
+		t.Fatalf("write tampered ACK: %v", err)
+	}
+	_ = hcConnection.SetReadDeadline(time.Now().Add(time.Second))
+	if _, _, err := hcConnection.ReadMessage(); err == nil {
+		t.Fatal("Gateway kept the connection open after a tampered ACK")
 	}
 }
 
@@ -483,6 +526,44 @@ func testEncryptedFramePacket(
 	})
 	if err != nil {
 		t.Fatalf("encode encrypted frame: %v", err)
+	}
+	return encoded
+}
+
+func testAckFramePacket(
+	t *testing.T,
+	sessionID, channelID, endpointID domain.ID,
+	direction awpv1.Direction,
+	highest uint64,
+	signingKey *ecdsa.PrivateKey,
+	now time.Time,
+) []byte {
+	t.Helper()
+	offset := byte(140)
+	if direction == awpv1.Direction_DIRECTION_ABA_TO_HC {
+		offset = 160
+	}
+	ackID := gatewayID(offset)
+	packetID := gatewayID(offset + 1)
+	ack := &awpv1.AckFrame{
+		AckId: ackID[:], ChannelId: channelID[:], SessionId: sessionID[:], EndpointId: endpointID[:],
+		AcknowledgedDirection: direction, HighestContiguousSequence: highest,
+		KeyGeneration: 1, CreatedAtMs: now.UnixMilli(),
+	}
+	transcript, err := ackTranscript(ack)
+	if err != nil {
+		t.Fatalf("ACK transcript: %v", err)
+	}
+	ack.Signature, err = awpcrypto.SignP1363LowS(signingKey, transcript)
+	if err != nil {
+		t.Fatalf("sign ACK: %v", err)
+	}
+	encoded, err := proto.MarshalOptions{Deterministic: true}.Marshal(&awpv1.WirePacket{
+		WireMajor: 1, PacketId: packetID[:],
+		Body: &awpv1.WirePacket_Ack{Ack: ack},
+	})
+	if err != nil {
+		t.Fatalf("encode ACK: %v", err)
 	}
 	return encoded
 }

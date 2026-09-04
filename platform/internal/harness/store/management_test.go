@@ -124,7 +124,7 @@ func TestManagementQueriesRespectOwnerAndExposeDeliveryMetadata(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Overview: %v", err)
 	}
-	if overview.ActiveEndpoints != 2 || overview.ActiveSessions != 1 || overview.Unacknowledged != 1 {
+	if overview.ActiveEndpoints != 2 || overview.ActiveSessions != 1 || overview.Unacknowledged != 0 {
 		t.Fatalf("Overview = %#v", overview)
 	}
 	closed, err := persistence.CloseSessionForOwner(ctx, session.ID, "owner", "tenant", now.Add(3*time.Second))

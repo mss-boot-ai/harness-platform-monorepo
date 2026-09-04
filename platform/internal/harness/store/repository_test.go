@@ -308,6 +308,67 @@ func TestFrameIdempotencyConflictAndMonotonicACK(t *testing.T) {
 	}
 }
 
+func TestAdvanceACKAtomicallyMarksContiguousAndRangedFrames(t *testing.T) {
+	store := newTestStore(t)
+	ctx := context.Background()
+	now := time.Unix(1_800_000_000, 0).UTC()
+	first := testFrame(now)
+	third := testFrame(now)
+	third.MessageID = tid(7)
+	third.Sequence = 3
+	third.ContentHash = sha256.Sum256([]byte("third frame"))
+	for _, frame := range []domain.EncryptedFrame{first, third} {
+		if outcome, err := store.PutFrame(ctx, frame, 1024); err != nil || outcome != PutFrameStored {
+			t.Fatalf("PutFrame sequence=%d outcome=%s error=%v", frame.Sequence, outcome, err)
+		}
+	}
+	cursor := domain.AckCursor{
+		SessionID: first.SessionID, KeyGeneration: first.KeyGeneration, Direction: first.Direction,
+		SenderEndpointID: first.SenderEndpointID, ReceiverEndpointID: first.ReceiverEndpointID,
+		HighestContiguousSequence: 1,
+		ReceivedRanges:            []domain.SequenceRange{{Start: 3, End: 3}},
+		UpdatedAt:                 now.Add(time.Second),
+	}
+	advanced, err := store.AdvanceAck(ctx, cursor)
+	if err != nil || advanced.HighestContiguousSequence != 1 || advanced.RowVersion != 1 {
+		t.Fatalf("AdvanceAck result=%#v error=%v", advanced, err)
+	}
+	var rows []frameRow
+	if err := store.db.Where("session_id = ?", first.SessionID.String()).Order("sequence").Find(&rows).Error; err != nil {
+		t.Fatalf("read acknowledged frames: %v", err)
+	}
+	if len(rows) != 2 {
+		t.Fatalf("acknowledged frame count=%d", len(rows))
+	}
+	for _, row := range rows {
+		if row.Status != string(domain.FrameStatusReceiverAcknowledged) || row.AcknowledgedAt == nil {
+			t.Fatalf("frame sequence=%d status=%s acknowledged=%v", row.Sequence, row.Status, row.AcknowledgedAt)
+		}
+	}
+	fifth := testFrame(now)
+	fifth.MessageID = tid(8)
+	fifth.Sequence = 5
+	fifth.ContentHash = sha256.Sum256([]byte("fifth frame"))
+	if outcome, err := store.PutFrame(ctx, fifth, 1024); err != nil || outcome != PutFrameStored {
+		t.Fatalf("PutFrame sequence=5 outcome=%s error=%v", outcome, err)
+	}
+	cursor.ReceivedRanges = []domain.SequenceRange{{Start: 3, End: 3}, {Start: 5, End: 5}}
+	if _, err := store.AdvanceAck(ctx, cursor); err != nil {
+		t.Fatalf("same-contiguous ACK with a new range: %v", err)
+	}
+	var fifthRow frameRow
+	if err := store.db.First(&fifthRow, "message_id = ?", fifth.MessageID.String()).Error; err != nil ||
+		fifthRow.Status != string(domain.FrameStatusReceiverAcknowledged) || fifthRow.AcknowledgedAt == nil {
+		t.Fatalf("ranged frame status=%s acknowledged=%v error=%v", fifthRow.Status, fifthRow.AcknowledgedAt, err)
+	}
+
+	invalid := cursor
+	invalid.ReceivedRanges = []domain.SequenceRange{{Start: 3, End: 4}, {Start: 4, End: 5}}
+	if _, err := store.AdvanceAck(ctx, invalid); !domain.HasCode(err, domain.CodeInvalidArgument) {
+		t.Fatalf("overlapping ACK ranges error=%v", err)
+	}
+}
+
 func TestRevocationCascadesToCredentialTicketAndSession(t *testing.T) {
 	store := newTestStore(t)
 	ctx := context.Background()

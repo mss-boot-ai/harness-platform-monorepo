@@ -237,7 +237,7 @@ type EndpointCredential struct {
 type Session struct {
 	ID                    ID
 	OwnerUserID           string
-	TenantID               string
+	TenantID              string
 	ABAEndpointID         ID
 	HCEndpointID          ID
 	RuntimeProfileID      string
@@ -341,20 +341,26 @@ func (frame EncryptedFrame) Validate(maxCiphertextBytes int) error {
 }
 
 type AckCursor struct {
-	SessionID                   ID
-	KeyGeneration               uint64
-	Direction                   Direction
-	SenderEndpointID            ID
-	ReceiverEndpointID          ID
-	HighestContiguousSequence   uint64
-	UpdatedAt                   time.Time
-	RowVersion                  uint64
+	SessionID                 ID
+	KeyGeneration             uint64
+	Direction                 Direction
+	SenderEndpointID          ID
+	ReceiverEndpointID        ID
+	HighestContiguousSequence uint64
+	ReceivedRanges            []SequenceRange
+	UpdatedAt                 time.Time
+	RowVersion                uint64
+}
+
+type SequenceRange struct {
+	Start uint64
+	End   uint64
 }
 
 type AuditEvent struct {
 	ID              ID
 	OwnerUserID     string
-	TenantID         string
+	TenantID        string
 	ActorEndpointID ID
 	Action          string
 	ObjectType      string

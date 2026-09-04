@@ -35,6 +35,9 @@ func (server *Server) handleReadyPacket(
 	if packet.GetEncrypted() != nil {
 		return server.processEncryptedFrame(ctx, endpoint, packet, encoded, now)
 	}
+	if packet.GetAck() != nil {
+		return server.processAckFrame(ctx, endpoint, packet, now)
+	}
 	control := packet.GetControl()
 	if packet.GetWireMajor() != 1 || packet.GetWireMinor() != 0 || len(packet.GetPacketId()) != 16 ||
 		control == nil || !readyControlAllowed(endpoint.Type, control.GetType()) {
