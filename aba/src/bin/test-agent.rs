@@ -46,6 +46,9 @@ async fn main() -> Result<()> {
                     })
                     .collect::<Vec<_>>()
                     .join("\n");
+                if prompt.starts_with("crash:") {
+                    std::process::exit(70);
+                }
                 if prompt.starts_with("delay:") {
                     tokio::time::sleep(std::time::Duration::from_millis(500)).await;
                 }

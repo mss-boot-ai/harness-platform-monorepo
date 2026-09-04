@@ -6,6 +6,7 @@ import {
   Direction,
   IndexedDbSecureStore,
   openABAToHCFramePacket,
+  openABAUncertainErrorPacket,
   openSessionKeyPackagePacket,
   type EndpointIdentity,
   type OpenedSessionKeyPackage,
@@ -70,6 +71,16 @@ export function SessionSetup({
       const aba = endpoints.find((endpoint) => endpoint.id === session.abaEndpointId);
       if (aba === undefined) {
         throw new Error('Session ABA identity is unavailable');
+      }
+      const uncertain = await openABAUncertainErrorPacket(aba.signingPublicJwk, encoded);
+      if (uncertain !== null) {
+        zeroOpenedPackage(openedPackage.current);
+        openedPackage.current = null;
+        setKeyReady(false);
+        setSession((current) => current === null ? null : { ...current, status: 'UNCERTAIN' });
+        setMessages((current) => [...current, 'SYSTEM: 本地 Agent 执行结果不确定，已禁止自动重试。']);
+        setError('Session 进入 UNCERTAIN；请检查本地 Workspace 后关闭 Session。');
+        return;
       }
       const opened = await openSessionKeyPackagePacket(encoded, {
         abaEndpointId: aba.id,

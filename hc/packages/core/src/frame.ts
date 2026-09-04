@@ -7,6 +7,7 @@ import {
   ControlType,
   Direction,
   EncryptedFrameSchema,
+  ErrorCode,
   FrameType,
   ResumeStateSchema,
   WirePacketSchema,
@@ -327,6 +328,75 @@ export async function openABAToHCFramePacket(
     plaintext,
     sequence: frame.sequence,
   };
+}
+
+export async function openABAUncertainErrorPacket(
+  abaSigningPublicJwk: P256PublicJwk,
+  encoded: Uint8Array,
+): Promise<{ readonly relatedMessageId: Uint8Array } | null> {
+  const packet = fromBinary(WirePacketSchema, encoded);
+  if (packet.body.case !== 'error') {
+    return null;
+  }
+  if (packet.wireMajor !== 1 || packet.wireMinor !== 0 || packet.packetId.length !== 16) {
+    throw new Error('ErrorFrame packet is invalid');
+  }
+  const frame = packet.body.value;
+  if (
+    frame.errorId.length !== 16 || frame.errorId.every((byte) => byte === 0) ||
+    frame.relatedMessageId.length !== 16 || frame.relatedMessageId.every((byte) => byte === 0) ||
+    frame.code !== ErrorCode.LOCAL_DISPATCH_UNCERTAIN || frame.retryable ||
+    frame.retryAfterMs !== 0 || frame.safeMessage !== 'Local agent dispatch result is uncertain' ||
+    frame.signature.length !== 64
+  ) {
+    throw new Error('ErrorFrame binding is invalid');
+  }
+  const transcript = buildErrorFrameTranscript({
+    code: frame.code,
+    errorId: frame.errorId,
+    relatedMessageId: frame.relatedMessageId,
+    retryable: frame.retryable,
+    retryAfterMs: frame.retryAfterMs,
+    safeMessage: frame.safeMessage,
+  });
+  const signingKey = await importP256VerifyingKey(abaSigningPublicJwk);
+  if (!(await verifyP1363LowS(signingKey, transcript, frame.signature))) {
+    throw new Error('ErrorFrame signature is invalid');
+  }
+  return { relatedMessageId: frame.relatedMessageId.slice() };
+}
+
+interface ErrorFrameTranscriptInput {
+  readonly code: ErrorCode;
+  readonly errorId: Uint8Array;
+  readonly relatedMessageId: Uint8Array;
+  readonly retryable: boolean;
+  readonly retryAfterMs: number;
+  readonly safeMessage: string;
+}
+
+export function buildErrorFrameTranscript(input: ErrorFrameTranscriptInput): Uint8Array {
+  const safeMessage = textEncoder.encode(input.safeMessage);
+  if (
+    input.errorId.length !== 16 || input.errorId.every((byte) => byte === 0) ||
+    input.relatedMessageId.length !== 16 || input.code <= 0 ||
+    input.retryAfterMs < 0 || input.retryAfterMs > 0xffff_ffff ||
+    safeMessage.length === 0 || safeMessage.length > 256 || /\p{Cc}/u.test(input.safeMessage) ||
+    (!input.retryable && input.retryAfterMs !== 0)
+  ) {
+    throw new Error('ErrorFrame transcript input is invalid');
+  }
+  const output = new Uint8Array(64 + safeMessage.length);
+  output.set(textEncoder.encode('mss-awp-error-v1'), 0);
+  output.set(input.errorId, 16);
+  output.set(input.relatedMessageId, 32);
+  const view = new DataView(output.buffer);
+  view.setUint32(48, input.code, false);
+  output[52] = input.retryable ? 1 : 0;
+  view.setUint32(56, input.retryAfterMs, false);
+  view.setUint32(60, safeMessage.length, false);
+  output.set(safeMessage, 64);
+  return output;
 }
 
 interface FrameAADInput {

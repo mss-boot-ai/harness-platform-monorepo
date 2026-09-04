@@ -89,6 +89,7 @@ fn coordinate(value: &str) -> Result<[u8; 32], CryptoError> {
 
 pub mod ack;
 pub mod dpop;
+pub mod error_frame;
 pub mod frame;
 pub mod key_package;
 

@@ -705,6 +705,20 @@ func (store *Store) PutEndpointFrame(
 	return outcome == PutFrameDuplicate, err
 }
 
+func (store *Store) GetFrame(ctx context.Context, messageID domain.ID) (domain.EncryptedFrame, error) {
+	if err := requireStore(store, ctx); err != nil {
+		return domain.EncryptedFrame{}, err
+	}
+	if messageID.IsZero() {
+		return domain.EncryptedFrame{}, domain.NewProblem(domain.CodeInvalidArgument, "frame message ID is required", nil)
+	}
+	var row frameRow
+	if err := store.db.WithContext(ctx).First(&row, "message_id = ?", messageID.String()).Error; err != nil {
+		return domain.EncryptedFrame{}, notFoundOr("read encrypted frame", "encrypted frame was not found", err)
+	}
+	return frameFromRow(row)
+}
+
 func (store *Store) PutFrame(
 	ctx context.Context,
 	frame domain.EncryptedFrame,

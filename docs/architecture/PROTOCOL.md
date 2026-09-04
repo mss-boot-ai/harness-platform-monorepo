@@ -685,6 +685,24 @@ INTERNAL_TEMPORARY
 
 `safe_message` 不包含内部堆栈、路径、SQL、密钥或 Payload。客户端逻辑依赖 ErrorCode，不解析文字。
 
+ErrorFrame Signature Transcript 使用以下唯一编码；整数均为大端，`retryable` 只允许
+`0` 或 `1`，保留字节必须为零：
+
+```text
+ASCII "mss-awp-error-v1"
+error_id[16]
+related_message_id[16]
+code u32be
+retryable u8
+reserved zero[3]
+retry_after_ms u32be
+safe_message_length u32be
+safe_message UTF-8 bytes
+```
+
+Suite 0001 对以上字节执行 ES256 P1363 low-S 签名。`safe_message` 最多 256
+字节且不得包含控制字符；`retryable=false` 时 `retry_after_ms` 必须为零。
+
 ## 19. Session 状态机
 
 Platform 权威状态：

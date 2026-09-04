@@ -2,9 +2,11 @@ import { create, fromBinary, toBinary } from '@bufbuild/protobuf';
 import { signP1363LowS, verifyP1363LowS } from './crypto';
 import {
   buildAckTranscript,
+  buildErrorFrameTranscript,
   buildFrameAAD,
   createHCAckFramePacket,
   createHCResumeStatePacket,
+  openABAUncertainErrorPacket,
   createHCToABAFramePacket,
   openABAToHCFramePacket,
   sessionChannelId,
@@ -13,6 +15,8 @@ import {
   ControlType,
   Direction,
   EncryptedFrameSchema,
+  ErrorCode,
+  ErrorFrameSchema,
   FrameType,
   WirePacketSchema,
 } from './generated/mss/awp/v1/wire_pb';
@@ -93,6 +97,35 @@ describe('Suite 0001 encrypted frames', () => {
     }
     expect(decodedResume.body.value.type).toBe(ControlType.RESUME_STATE);
     expect(decodedResume.body.value.receiverEndpointId).toEqual(new Uint8Array(16));
+
+    const errorId = new Uint8Array(16).fill(11);
+    const relatedMessageId = new Uint8Array(16).fill(12);
+    const safeMessage = 'Local agent dispatch result is uncertain';
+    const errorTranscript = buildErrorFrameTranscript({
+      code: ErrorCode.LOCAL_DISPATCH_UNCERTAIN,
+      errorId,
+      relatedMessageId,
+      retryable: false,
+      retryAfterMs: 0,
+      safeMessage,
+    });
+    const errorPacket = toBinary(WirePacketSchema, create(WirePacketSchema, {
+      body: {
+        case: 'error',
+        value: create(ErrorFrameSchema, {
+          code: ErrorCode.LOCAL_DISPATCH_UNCERTAIN,
+          errorId,
+          relatedMessageId,
+          safeMessage,
+          signature: await signP1363LowS(abaSigning.privateKey, errorTranscript),
+        }),
+      },
+      packetId: new Uint8Array(16).fill(13),
+      wireMajor: 1,
+    }));
+    await expect(openABAUncertainErrorPacket(abaSigningJwk, errorPacket)).resolves.toEqual({
+      relatedMessageId,
+    });
   });
 });
 

@@ -11,6 +11,7 @@ use super::GatewayError;
 use super::transcript::{ControlInput, control};
 use crate::config::AgentConfig;
 use crate::crypto::ack::{sign_ack, verify_ack};
+use crate::crypto::error_frame::sign_error_frame;
 use crate::crypto::frame::{frame_content_hash, open_frame, seal_frame, session_channel_id};
 use crate::crypto::key_package::{
     KeyPackageEnvelope, KeyPackageMaterial, SUITE_NAME, key_package_envelope_transcript,
@@ -24,7 +25,7 @@ use crate::journal::{
 use crate::process::AgentProcess;
 use crate::protocol::awpv1::{
     AckFrame, ChannelCursor, CloseTunnelRequest, CloseTunnelResult, CloseTunnelStatus,
-    ControlFrame, ControlType, Direction as WireDirection, EncryptedFrame,
+    ControlFrame, ControlType, Direction as WireDirection, EncryptedFrame, ErrorCode, ErrorFrame,
     FrameType as WireFrameType, OpenTunnelRequest, OpenTunnelResult, OpenTunnelStatus, ResumeState,
     SessionKeyPackage, SessionKeyPackageAck, WirePacket, wire_packet,
 };
@@ -48,6 +49,8 @@ struct LocalSession {
     active: bool,
     hc_frame_sequence: u64,
     aba_frame_sequence: u64,
+    uncertain: bool,
+    uncertain_message_id: Option<[u8; 16]>,
 }
 
 pub(super) struct ControlContext<'a> {
@@ -129,6 +132,9 @@ impl ControlState {
                     channel_id,
                     now_ms,
                 )?);
+            }
+            if let Some(message_id) = session.uncertain_message_id {
+                packets.push(signed_uncertain_error(message_id, identity)?);
             }
             packets.extend(
                 self.journal
@@ -330,6 +336,8 @@ impl ControlState {
                 active: false,
                 hc_frame_sequence: 0,
                 aba_frame_sequence: 0,
+                uncertain: false,
+                uncertain_message_id: None,
             },
         );
         Ok(responses)
@@ -568,6 +576,9 @@ impl ControlState {
             .hc_frame_sequence
             .checked_add(1)
             .ok_or(GatewayError::ProtocolStage("encrypted frame sequence"))?;
+        if session.uncertain && frame.sequence == next_sequence {
+            return Err(GatewayError::ProtocolStage("session dispatch is uncertain"));
+        }
         if frame.sequence > next_sequence {
             return Err(GatewayError::ProtocolStage("encrypted frame sequence gap"));
         }
@@ -652,9 +663,14 @@ impl ControlState {
         journal.start_dispatch(aad.message_id, now_ms)?;
         let responses = match session.agent.prompt(&plaintext, &lower_hex(&session_id)) {
             Ok(responses) => responses,
-            Err(error) => {
-                let _ = journal.mark_uncertain(aad.message_id, now_ms);
-                return Err(GatewayError::from(error));
+            Err(_) => {
+                journal.mark_uncertain(aad.message_id, now_ms)?;
+                session.uncertain = true;
+                session.uncertain_message_id = Some(aad.message_id);
+                return Ok(vec![
+                    acknowledgment,
+                    signed_uncertain_error(aad.message_id, identity)?,
+                ]);
             }
         };
         let mut packets = Vec::with_capacity(responses.len() + 1);
@@ -829,6 +845,29 @@ fn signed_frame_ack(
         wire_minor: 0,
         packet_id: random_array::<16>().to_vec(),
         body: Some(wire_packet::Body::Ack(acknowledgment)),
+    }
+    .encode_to_vec())
+}
+
+fn signed_uncertain_error(
+    related_message_id: [u8; 16],
+    identity: &EndpointIdentity,
+) -> Result<Vec<u8>, GatewayError> {
+    let mut frame = ErrorFrame {
+        error_id: random_array::<16>().to_vec(),
+        related_message_id: related_message_id.to_vec(),
+        code: ErrorCode::LocalDispatchUncertain as i32,
+        retryable: false,
+        retry_after_ms: 0,
+        safe_message: "Local agent dispatch result is uncertain".to_owned(),
+        signature: Vec::new(),
+    };
+    sign_error_frame(&mut frame, identity.signing_key())?;
+    Ok(WirePacket {
+        wire_major: 1,
+        wire_minor: 0,
+        packet_id: random_array::<16>().to_vec(),
+        body: Some(wire_packet::Body::Error(frame)),
     }
     .encode_to_vec())
 }

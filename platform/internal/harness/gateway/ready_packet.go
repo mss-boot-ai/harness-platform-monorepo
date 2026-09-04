@@ -46,6 +46,17 @@ func (server *Server) handleReadyPacket(
 		}
 		return nil
 	}
+	if packet.GetError() != nil {
+		receiverID, err := server.processEndpointError(ctx, endpoint, packet, now)
+		if err != nil {
+			return err
+		}
+		if err := server.connections.send(receiverID, encoded); err != nil &&
+			!errors.Is(err, errConnectionOffline) && !errors.Is(err, errConnectionBackpressure) {
+			return err
+		}
+		return nil
+	}
 	control := packet.GetControl()
 	if packet.GetWireMajor() != 1 || packet.GetWireMinor() != 0 || len(packet.GetPacketId()) != 16 ||
 		control == nil || !readyControlAllowed(endpoint.Type, control.GetType()) {
