@@ -11,7 +11,9 @@ import (
 	"github.com/glebarez/sqlite"
 	"github.com/mss-boot-ai/harness-platform-monorepo/platform/internal/harness/store"
 	"github.com/mss-boot-io/mss-boot-admin/admin/business"
+	"github.com/mss-boot-io/mss-boot-admin/admin/models"
 	"github.com/mss-boot-io/mss-boot-admin/mss-boot/pkg/migration"
+	migrationmodels "github.com/mss-boot-io/mss-boot-admin/mss-boot/pkg/migration/models"
 	"github.com/mss-boot-io/mss-boot-admin/mss-boot/pkg/security"
 	"gorm.io/gorm"
 	"gorm.io/gorm/logger"
@@ -54,6 +56,18 @@ func TestProtectedHealthRouteUsesCurrentPrincipalAndSchema(t *testing.T) {
 	if err := store.CreateAllSchema(db); err != nil {
 		t.Fatalf("CreateAllSchema: %v", err)
 	}
+	if err := db.AutoMigrate(
+		new(models.Role),
+		new(models.Menu),
+		new(models.CasbinRule),
+		new(models.ConfigRevision),
+		new(migrationmodels.Migration),
+	); err != nil {
+		t.Fatalf("create Admin authorization schema: %v", err)
+	}
+	if err := applyHarnessAuthorizationMigration(db, HarnessAuthorizationMigrationID.String()); err != nil {
+		t.Fatalf("applyHarnessAuthorizationMigration: %v", err)
+	}
 
 	router := gin.New()
 	if err := registerRoutes(router.Group("/api"), business.Runtime{
@@ -77,7 +91,7 @@ func TestProtectedHealthRouteUsesCurrentPrincipalAndSchema(t *testing.T) {
 	if body.Status != "ready" || body.UserID != "owner" || body.TenantID != "tenant" {
 		t.Fatalf("unexpected response: %#v", body)
 	}
-	if len(body.SchemaMigrations) != 2 || body.SchemaMigrations[1] != store.M1PersistenceMigrationID.String() {
+	if len(body.SchemaMigrations) != 3 || body.SchemaMigrations[2] != HarnessAuthorizationMigrationID.String() {
 		t.Fatalf("unexpected schema migrations: %#v", body.SchemaMigrations)
 	}
 }
@@ -114,7 +128,7 @@ func (testPrincipal) GetUsername() string                      { return "owner" 
 func (testPrincipal) GetRefreshTokenDisable() bool             { return false }
 func (testPrincipal) SetRefreshTokenDisable(bool)              {}
 func (testPrincipal) CheckToken(context.Context, string) error { return nil }
-func (testPrincipal) Root() bool                               { return false }
+func (testPrincipal) Root() bool                               { return true }
 func (testPrincipal) Verify(context.Context) (bool, security.Verifier, error) {
 	return true, testPrincipal{}, nil
 }

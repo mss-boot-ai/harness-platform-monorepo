@@ -25,7 +25,7 @@ func (Module) Register(registry *business.Registry) error {
 	}
 	return registry.Register(business.Registration{
 		Descriptor: descriptor(),
-		Migrations: store.RegisterAllMigrations,
+		Migrations: registerHarnessMigrations,
 		Readiness:  readiness,
 		Routes:     registerRoutes,
 	})
@@ -39,26 +39,10 @@ func descriptor() business.Descriptor {
 		Version:     "0.1.0",
 		Model:       new(domain.Endpoint),
 		Permissions: []business.Permission{
-			{
-				Code:        "harness:read",
-				DisplayName: "Read Harness state",
-				Description: "View owned endpoints, enrollments, sessions, and delivery status.",
-			},
-			{
-				Code:        "harness:operate",
-				DisplayName: "Operate Harness sessions",
-				Description: "Create and close owned ACP sessions.",
-			},
-			{
-				Code:        "harness:approve",
-				DisplayName: "Approve Harness enrollments",
-				Description: "Approve or deny endpoint enrollment requests.",
-			},
-			{
-				Code:        "harness:revoke",
-				DisplayName: "Revoke Harness endpoints",
-				Description: "Suspend or permanently revoke endpoint credentials.",
-			},
+			{Code: PermissionRead, DisplayName: "Read Harness state", Description: "View owned endpoints, enrollments, sessions, and delivery status."},
+			{Code: PermissionOperate, DisplayName: "Operate Harness sessions", Description: "Create and close owned ACP sessions."},
+			{Code: PermissionApprove, DisplayName: "Approve Harness enrollments", Description: "Approve or deny endpoint enrollment requests."},
+			{Code: PermissionRevoke, DisplayName: "Revoke Harness endpoints", Description: "Suspend or permanently revoke endpoint credentials."},
 		},
 		Menu: business.Menu{
 			Path:          "/harness",
@@ -71,10 +55,19 @@ func descriptor() business.Descriptor {
 }
 
 func readiness(ctx context.Context, db *gorm.DB) error {
-	if err := business.RequireAppliedMigrations(ctx, db, store.SchemaMigrationID, store.M1PersistenceMigrationID); err != nil {
+	if err := business.RequireAppliedMigrations(
+		ctx,
+		db,
+		store.SchemaMigrationID,
+		store.M1PersistenceMigrationID,
+		HarnessAuthorizationMigrationID,
+	); err != nil {
 		return err
 	}
-	return store.VerifyAllSchema(db)
+	if err := store.VerifyAllSchema(db); err != nil {
+		return err
+	}
+	return verifyHarnessAuthorizationReadiness(db)
 }
 
 type healthResponse struct {
@@ -97,28 +90,25 @@ func registerRoutes(protectedAPI *gin.RouterGroup, runtime business.Runtime) err
 	}
 
 	group := protectedAPI.Group("/harness/v1")
+	group.Use(newRequestAuthorizer(runtime).Middleware())
 	group.GET("/health", func(c *gin.Context) {
 		principal := runtime.Principal(c)
-		if principal == nil || principal.GetUserID() == "" {
-			c.JSON(401, gin.H{
-				"code":    "HARNESS_UNAUTHENTICATED",
-				"message": "authenticated principal is required",
-			})
+		if nilVerifier(principal) || principal.GetUserID() == "" {
+			c.JSON(401, gin.H{"code": "HARNESS_UNAUTHENTICATED", "message": "authenticated principal is required"})
 			return
 		}
 		db, ok := runtime.RequestDatabase(c.Request.Context())
 		if !ok || db == nil {
-			c.JSON(503, gin.H{
-				"code":    "HARNESS_DATABASE_UNAVAILABLE",
-				"message": "Harness persistence is unavailable",
-			})
+			c.JSON(503, gin.H{"code": "HARNESS_DATABASE_UNAVAILABLE", "message": "Harness persistence is unavailable"})
 			return
 		}
-		if err := store.VerifyAllSchema(db.WithContext(c.Request.Context())); err != nil {
-			c.JSON(503, gin.H{
-				"code":    "HARNESS_NOT_READY",
-				"message": "Harness schema is not ready",
-			})
+		readyDB := db.WithContext(c.Request.Context())
+		if err := store.VerifyAllSchema(readyDB); err != nil {
+			c.JSON(503, gin.H{"code": "HARNESS_NOT_READY", "message": "Harness schema is not ready"})
+			return
+		}
+		if err := verifyHarnessAuthorizationReadiness(readyDB); err != nil {
+			c.JSON(503, gin.H{"code": "HARNESS_AUTHORIZATION_UNAVAILABLE", "message": "Harness authorization is unavailable"})
 			return
 		}
 		c.JSON(200, healthResponse{
@@ -129,6 +119,7 @@ func registerRoutes(protectedAPI *gin.RouterGroup, runtime business.Runtime) err
 			SchemaMigrations: []string{
 				store.SchemaMigrationID.String(),
 				store.M1PersistenceMigrationID.String(),
+				HarnessAuthorizationMigrationID.String(),
 			},
 		})
 	})
