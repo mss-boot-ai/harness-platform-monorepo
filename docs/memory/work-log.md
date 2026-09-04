@@ -6,6 +6,38 @@
 
 ---
 
+## 2026-09-05 06:25 +08:00 — 本地 MVP：外部 ACP、可靠密文、恢复、关闭与 UNCERTAIN
+
+从 `7a63c982c7aa929e0f7a159eb983895f9e854ff8` 延伸到
+`47828db032865f98032e37264ab5d67d2298bcc4`，实现并真实验证外部 Stable v1 ACP Test
+Agent、进程组监管、Suite 0001 Key Package/Frame、HC Inbox、ABA 有界 Journal、双向
+签名 ACK、原密文 Resume、HC/ABA 网络恢复、Endpoint DPoP Session Close、Agent 回收、
+活动 Credential 复核和签名 `LOCAL_DISPATCH_UNCERTAIN`。
+
+内置浏览器实际完成 Happy Path、HC 离线后两帧重放、Gateway 停机后的 ABA 同进程恢复、
+关闭回收和 Test Agent 崩溃故障注入。恢复过程发现并修复 SQLite 并发 ACK
+`SQLITE_BUSY`、新连接 Control Sequence 未归零、首次 reconnect 5xx 导致 ABA 退出和迟到
+ACK 导致空内存 Session 退出。所有修复均形成新提交，无 amend/rebase/force-push。
+
+`deploy/run-local-mvp.sh` 已从端口全空状态验证启动、健康、Ctrl-C 全进程组清理和再次启动；
+当前本地拓扑运行在 `http://localhost:8001/`。最终全仓 Go/Rust/TS/Protocol/Docs 门禁、
+Race Detector、`mss doctor --strict`、`mss verify --all` 和 v1.3.7 no-op Upgrade Plan 均通过。
+首次 `mss doctor` 因宿主 Node 22 与项目 Node 24 约束不符失败，切换已校验 Node 24.20.0
+后重跑成功，失败未隐藏。
+
+额外 production dependency audit 中 HC 为零已知漏洞；Platform Admin Web 因固定上游
+v1.3.7 的 Umi/DVA 依赖返回 1 critical / 7 high。最终 Bundle 未包含被报告的旧
+`immer`/`node-fetch`，但 Thin Host 冻结合同也不允许本仓覆盖上游锁，因此该供应链项作为
+明确的上游升级门禁保留，PR 不据此宣称生产就绪。宿主缺少 `cargo-audit`/`govulncheck`，
+同样未记录为通过。
+
+详细 SHA、CI、场景、Opaque Canary 和生产限制见
+[`../roadmap/verification/2026-09-05-mvp-final.md`](../roadmap/verification/2026-09-05-mvp-final.md)。
+本结论只覆盖本地单实例、单 HC Prompt MVP；不等于生产 KMS/TLS/跨实例/容量证明，PR
+#1 按仓库契约不自动合并。
+
+---
+
 ## 2026-09-05 03:25 +08:00 — Session Control 与 ABA 本地策略闭环
 
 实现并验证 READY 活动连接目录、Generation Fencing、Heartbeat Ping/LastSeen、HC DPoP 在线 ABA Discovery、Session/Audit/Idempotency 原子创建、Platform-signed OpenTunnelRequest、ABA 本地 Runtime/Workspace 策略、ABA-signed OpenTunnelResult 和 H5 Session UI。主要提交从 `f2a8cb8580831f3caefb48879ee6d5dbf32ab40e` 到 `3561f04024743c9c76fe48160c8dceb98f814b9a`；最终 push/PR CI `33910804383`/`33910809172` 全部成功。

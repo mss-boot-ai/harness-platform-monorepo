@@ -84,7 +84,7 @@ feat(platform): persist harness identity and relay state
 
 ## 5. M2：Endpoint 身份、DPoP 与 Gateway
 
-**当前状态**：In progress；JWK/ES256/DPoP、HC H5 注册、ABA Enrollment、HC/ABA Refresh、共享 Replay/Nonce、原生/浏览器隔离 Ticket、持久 Connection Generation、Trust Pin、两端签名 WSS Challenge、单实例活动连接 Fencing/Heartbeat Ping 与常驻 ABA 控制循环已完成，证据见 [`verification/2026-09-05-hc-registration.md`](verification/2026-09-05-hc-registration.md)、[`verification/2026-09-05-gateway-handshake.md`](verification/2026-09-05-gateway-handshake.md)、[`verification/2026-09-05-aba-enrollment-connector.md`](verification/2026-09-05-aba-enrollment-connector.md) 和 [`verification/2026-09-05-session-control.md`](verification/2026-09-05-session-control.md)。生产 Signer、AWP Heartbeat Control、重连退避和跨实例连接目录/Kick 尚未完成。
+**当前状态**：Verified（本地单实例）；JWK/ES256/DPoP、HC H5 注册、ABA Enrollment、双端 Refresh/Ticket、Trust Pin、签名 READY、Fencing/Ping、活动 Credential 复核与 ABA Full-Jitter 重连已验证。生产 KMS Signer、跨实例连接目录/Kick 与 AWP Heartbeat Control 仍是生产化工作，详见 [`verification/2026-09-05-mvp-final.md`](verification/2026-09-05-mvp-final.md)。
 
 ### 2.1 JWK/Signature
 
@@ -106,7 +106,7 @@ Go/Rust/TS 实现 RFC 7638、ES256 P1363 low-S 和固定向量。
 
 ## 6. M3：Session、HPKE 与 Opaque Relay
 
-**当前状态**：In progress；HC DPoP Session Create、Session/Audit/Idempotency 原子事务、Platform/ABA 双向签名 OpenTunnel、ABA 本地 Runtime/Workspace 策略与真实 H5 `WAITING_KEY` 已验证，证据见 [`verification/2026-09-05-session-control.md`](verification/2026-09-05-session-control.md)。ACP Process、HPKE/KDF/AEAD、Key Package、Opaque Relay 与 Prompt/Response 尚未完成。
+**当前状态**：Verified（本地单 HC Prompt MVP）；外部 ACP Process、Suite 0001 HPKE/KDF/AEAD、Key Package、Opaque Relay、Prompt/Response、CloseTunnel 和 UNCERTAIN 已验证。Permission UI、Generation 2 Rekey 与多 Participant 保留为后续范围。
 
 ### 3.1 Runtime/Workspace
 
@@ -130,6 +130,8 @@ Platform 只验证外层和签名，保存/路由原始密文；ABA/HC 解密并
 
 ## 7. M4：可靠性与吊销
 
+**当前状态**：Verified（本地单实例）；双向持久 ACK、原 Frame Resume、HC Inbox、ABA Journal、网络恢复、执行不确定与活动 Credential 复核已验证。整个 ABA 进程重启的 Session Key 恢复、跨实例 Kick 和生产容量/长稳仍未验证。
+
 ### 4.1 Frame/ACK
 
 幂等写、冲突、最高连续 ACK、Missing Ranges、原 Frame Replay、Retention。
@@ -147,6 +149,8 @@ Sequence 使用前持久化、Inbound/Outbound、Dispatch 状态、容量和清�
 HC/ABA Token/Ticket/连接失效、Session Close/Rekey Required、Audit 和通知。
 
 ## 8. M5：产品体验与部署
+
+**当前状态**：Verified（本地启动方式）；Admin/H5、四进程 Launcher、健康检查和清理已验证。生产 Compose/Kubernetes、KMS/OS Keyring 与 TLS 发布配置未验证。
 
 - Admin Overview/Enrollment/Endpoint/Session/Delivery；
 - HC Endpoint、连接、Prompt、Permission、Gap、UNCERTAIN；
