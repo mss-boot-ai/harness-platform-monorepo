@@ -40,6 +40,8 @@ struct StoredIdentity {
     kem_d: String,
     #[serde(default)]
     credentials: Option<EndpointCredentials>,
+    #[serde(default)]
+    trust: Option<TrustPin>,
 }
 
 #[derive(Serialize, Deserialize, Zeroize, ZeroizeOnDrop)]
@@ -50,6 +52,16 @@ pub struct EndpointCredentials {
     pub access_expires_at: String,
     pub refresh_token: String,
     pub refresh_expires_at: String,
+}
+
+#[derive(Serialize, Deserialize, Zeroize, ZeroizeOnDrop)]
+struct TrustPin {
+    root_jkt: String,
+    revision: u64,
+    online_curve: String,
+    online_key_type: String,
+    online_x: String,
+    online_y: String,
 }
 
 #[derive(Debug, Error)]
@@ -70,6 +82,10 @@ pub enum KeyStoreError {
     Permissions,
     #[error("ABA identity key is invalid")]
     Key,
+    #[error("ABA Gateway trust pin is invalid")]
+    Trust,
+    #[error("ABA endpoint credentials are unavailable")]
+    CredentialsUnavailable,
 }
 
 pub struct DevFileKeyStore {
@@ -114,6 +130,7 @@ impl DevFileKeyStore {
             signing_d: signing_d.to_string(),
             kem_d: kem_d.to_string(),
             credentials: None,
+            trust: None,
         };
         let encoded =
             Zeroizing::new(serde_json::to_vec(&state).map_err(|_| KeyStoreError::Invalid)?);
@@ -136,19 +153,7 @@ impl DevFileKeyStore {
 
     pub fn load(&self) -> Result<EndpointIdentity, KeyStoreError> {
         validate_private_file(&self.path)?;
-        let mut file = fs::File::open(&self.path)?;
-        let mut encoded = Zeroizing::new(Vec::new());
-        Read::by_ref(&mut file)
-            .take(MAX_STATE_BYTES + 1)
-            .read_to_end(&mut encoded)?;
-        if encoded.is_empty() || encoded.len() as u64 > MAX_STATE_BYTES {
-            return Err(KeyStoreError::Invalid);
-        }
-        let state: StoredIdentity =
-            serde_json::from_slice(&encoded).map_err(|_| KeyStoreError::Invalid)?;
-        if state.version != STATE_VERSION || state.signing_d == state.kem_d {
-            return Err(KeyStoreError::Invalid);
-        }
+        let state = read_stored_identity(&self.path)?;
         let signing = decode_scalar(&state.signing_d)?;
         let kem = decode_scalar(&state.kem_d)?;
         Ok(EndpointIdentity {
@@ -159,22 +164,57 @@ impl DevFileKeyStore {
 
     pub fn save_credentials(&self, credentials: EndpointCredentials) -> Result<(), KeyStoreError> {
         validate_private_file(&self.path)?;
+        validate_credentials(&credentials)?;
         let mut state = read_stored_identity(&self.path)?;
         state.credentials = Some(credentials);
-        let encoded =
-            Zeroizing::new(serde_json::to_vec(&state).map_err(|_| KeyStoreError::Invalid)?);
-        let parent = self.path.parent().ok_or(KeyStoreError::UnsafePath)?;
-        let mut temporary = tempfile::NamedTempFile::new_in(parent)?;
-        #[cfg(unix)]
-        temporary
-            .as_file()
-            .set_permissions(fs::Permissions::from_mode(0o600))?;
-        temporary.write_all(&encoded)?;
-        temporary.as_file().sync_all()?;
-        temporary
-            .persist(&self.path)
-            .map_err(|error| KeyStoreError::Io(error.error))?;
-        restrict_file(&self.path)
+        write_stored_identity(&self.path, &state)
+    }
+
+    pub fn load_credentials(&self) -> Result<EndpointCredentials, KeyStoreError> {
+        validate_private_file(&self.path)?;
+        let mut state = read_stored_identity(&self.path)?;
+        let credentials = state
+            .credentials
+            .take()
+            .ok_or(KeyStoreError::CredentialsUnavailable)?;
+        validate_credentials(&credentials)?;
+        Ok(credentials)
+    }
+
+    pub fn pin_gateway_trust(
+        &self,
+        root_jkt: &str,
+        revision: u64,
+        online: &P256PublicJwk,
+    ) -> Result<(), KeyStoreError> {
+        validate_private_file(&self.path)?;
+        if decode_base64_fixed(root_jkt, 32).is_err()
+            || revision == 0
+            || online.verifying_key().is_err()
+        {
+            return Err(KeyStoreError::Trust);
+        }
+        let mut state = read_stored_identity(&self.path)?;
+        if let Some(current) = state.trust.as_ref()
+            && (current.root_jkt != root_jkt
+                || revision < current.revision
+                || (revision == current.revision
+                    && (current.online_curve != online.curve
+                        || current.online_key_type != online.key_type
+                        || current.online_x != online.x
+                        || current.online_y != online.y)))
+        {
+            return Err(KeyStoreError::Trust);
+        }
+        state.trust = Some(TrustPin {
+            root_jkt: root_jkt.to_owned(),
+            revision,
+            online_curve: online.curve.clone(),
+            online_key_type: online.key_type.clone(),
+            online_x: online.x.clone(),
+            online_y: online.y.clone(),
+        });
+        write_stored_identity(&self.path, &state)
     }
 }
 
@@ -187,7 +227,58 @@ fn read_stored_identity(path: &Path) -> Result<StoredIdentity, KeyStoreError> {
     if encoded.is_empty() || encoded.len() as u64 > MAX_STATE_BYTES {
         return Err(KeyStoreError::Invalid);
     }
-    serde_json::from_slice(&encoded).map_err(|_| KeyStoreError::Invalid)
+    let state: StoredIdentity =
+        serde_json::from_slice(&encoded).map_err(|_| KeyStoreError::Invalid)?;
+    if state.version != STATE_VERSION || state.signing_d == state.kem_d {
+        return Err(KeyStoreError::Invalid);
+    }
+    Ok(state)
+}
+
+fn write_stored_identity(path: &Path, state: &StoredIdentity) -> Result<(), KeyStoreError> {
+    let encoded = Zeroizing::new(serde_json::to_vec(state).map_err(|_| KeyStoreError::Invalid)?);
+    let parent = path.parent().ok_or(KeyStoreError::UnsafePath)?;
+    let mut temporary = tempfile::NamedTempFile::new_in(parent)?;
+    #[cfg(unix)]
+    temporary
+        .as_file()
+        .set_permissions(fs::Permissions::from_mode(0o600))?;
+    temporary.write_all(&encoded)?;
+    temporary.as_file().sync_all()?;
+    temporary
+        .persist(path)
+        .map_err(|error| KeyStoreError::Io(error.error))?;
+    restrict_file(path)
+}
+
+fn validate_credentials(credentials: &EndpointCredentials) -> Result<(), KeyStoreError> {
+    if !is_hex_id(&credentials.endpoint_id)
+        || !is_hex_id(&credentials.credential_id)
+        || decode_base64_fixed(&credentials.access_token, 32).is_err()
+        || decode_base64_fixed(&credentials.refresh_token, 32).is_err()
+        || credentials.access_expires_at.is_empty()
+        || credentials.refresh_expires_at.is_empty()
+    {
+        return Err(KeyStoreError::Invalid);
+    }
+    Ok(())
+}
+
+fn is_hex_id(value: &str) -> bool {
+    value.len() == 32
+        && value
+            .bytes()
+            .all(|byte| byte.is_ascii_digit() || matches!(byte, b'a'..=b'f'))
+}
+
+fn decode_base64_fixed(value: &str, length: usize) -> Result<Vec<u8>, KeyStoreError> {
+    let decoded = URL_SAFE_NO_PAD
+        .decode(value)
+        .map_err(|_| KeyStoreError::Invalid)?;
+    if decoded.len() != length {
+        return Err(KeyStoreError::Invalid);
+    }
+    Ok(decoded)
 }
 
 impl EndpointIdentity {
@@ -365,6 +456,45 @@ mod tests {
         std::os::unix::fs::symlink(&path, &link)?;
         let linked = DevFileKeyStore::new(&link, &platform, true)?;
         assert!(matches!(linked.load(), Err(KeyStoreError::UnsafePath)));
+        Ok(())
+    }
+
+    #[test]
+    fn persists_rotated_credentials_and_rejects_trust_rollback()
+    -> Result<(), Box<dyn std::error::Error>> {
+        let directory = tempfile::tempdir()?;
+        let path = directory.path().join("private").join("identity.json");
+        let platform = Url::parse("http://localhost:8082")?;
+        let store = DevFileKeyStore::new(&path, &platform, true)?;
+        store.initialize()?;
+        assert!(matches!(
+            store.load_credentials(),
+            Err(KeyStoreError::CredentialsUnavailable)
+        ));
+        store.save_credentials(EndpointCredentials {
+            endpoint_id: "01010101010101010101010101010101".to_owned(),
+            credential_id: "02020202020202020202020202020202".to_owned(),
+            access_token: URL_SAFE_NO_PAD.encode([3_u8; 32]),
+            access_expires_at: "2030-01-01T00:00:00Z".to_owned(),
+            refresh_token: URL_SAFE_NO_PAD.encode([4_u8; 32]),
+            refresh_expires_at: "2030-01-02T00:00:00Z".to_owned(),
+        })?;
+        let loaded = store.load_credentials()?;
+        assert_eq!(loaded.endpoint_id, "01010101010101010101010101010101");
+        assert_eq!(loaded.credential_id, "02020202020202020202020202020202");
+
+        let online = store.load()?.signing_public_jwk()?;
+        let root = URL_SAFE_NO_PAD.encode([9_u8; 32]);
+        store.pin_gateway_trust(&root, 3, &online)?;
+        store.pin_gateway_trust(&root, 4, &online)?;
+        assert!(matches!(
+            store.pin_gateway_trust(&root, 3, &online),
+            Err(KeyStoreError::Trust)
+        ));
+        assert!(matches!(
+            store.pin_gateway_trust(&URL_SAFE_NO_PAD.encode([8_u8; 32]), 5, &online),
+            Err(KeyStoreError::Trust)
+        ));
         Ok(())
     }
 }

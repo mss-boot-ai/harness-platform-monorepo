@@ -2,6 +2,7 @@ use std::path::PathBuf;
 use std::process::ExitCode;
 
 use aba::config::AgentConfig;
+use aba::gateway::GatewayClient;
 use aba::identity::DevFileKeyStore;
 use aba::identity::enrollment::EnrollmentClient;
 use aba::version::{PRODUCT_NAME, build_info};
@@ -39,6 +40,15 @@ enum Command {
         insecure_dev_keystore: bool,
         #[arg(long, default_value_t = 600)]
         timeout_seconds: u64,
+    },
+    /// Refresh credentials and complete one authenticated AWP connection handshake.
+    Connect {
+        #[arg(long, value_name = "PATH")]
+        store: PathBuf,
+        #[arg(long, value_name = "URL")]
+        platform: Url,
+        #[arg(long)]
+        insecure_dev_keystore: bool,
     },
 }
 
@@ -169,6 +179,21 @@ fn execute(cli: Cli) -> Result<(), Box<dyn std::error::Error>> {
                 },
             )?;
             println!("enrollment complete: endpoint {endpoint_id}");
+        }
+        Command::Connect {
+            store,
+            platform,
+            insecure_dev_keystore,
+        } => {
+            let store = DevFileKeyStore::new(store, &platform, insecure_dev_keystore)?;
+            let identity = store.load()?;
+            let ready = GatewayClient::new(platform)?.connect(&identity, &store)?;
+            println!(
+                "gateway ready: endpoint {} generation {}",
+                ready.endpoint_id, ready.connection_generation
+            );
+            println!("trust-root-jkt: {}", ready.root_jkt);
+            ready.close()?;
         }
     }
     Ok(())

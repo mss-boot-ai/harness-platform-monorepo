@@ -1,0 +1,100 @@
+use super::GatewayError;
+
+const PROTOCOL: &str = "mss.awp.v1";
+
+pub(super) struct ServerChallengeInput<'a> {
+    pub connection_id: &'a [u8],
+    pub connection_generation: u64,
+    pub server_nonce: &'a [u8],
+    pub server_time_ms: i64,
+    pub manifest_revision: u64,
+    pub credential_revision: u64,
+    pub endpoint_id: &'a [u8],
+}
+
+pub(super) fn server_challenge(input: ServerChallengeInput<'_>) -> Result<Vec<u8>, GatewayError> {
+    if input.connection_id.len() != 16
+        || input.connection_generation == 0
+        || input.server_nonce.len() != 32
+        || input.endpoint_id.len() != 16
+    {
+        return Err(GatewayError::Protocol);
+    }
+    let mut output = b"mss-awp-server-challenge-v1".to_vec();
+    output.extend_from_slice(input.connection_id);
+    output.extend_from_slice(&input.connection_generation.to_be_bytes());
+    output.extend_from_slice(input.server_nonce);
+    output.extend_from_slice(&input.server_time_ms.to_be_bytes());
+    output.extend_from_slice(&input.manifest_revision.to_be_bytes());
+    output.extend_from_slice(&input.credential_revision.to_be_bytes());
+    output.extend_from_slice(input.endpoint_id);
+    Ok(output)
+}
+
+pub(super) struct ClientChallengeInput<'a> {
+    pub connection_id: &'a [u8],
+    pub connection_generation: u64,
+    pub server_nonce: &'a [u8],
+    pub client_nonce: &'a [u8],
+    pub endpoint_id: &'a [u8],
+    pub credential_id: &'a [u8],
+    pub manifest_revision: u64,
+    pub credential_revision: u64,
+}
+
+pub(super) fn client_challenge(input: ClientChallengeInput<'_>) -> Result<Vec<u8>, GatewayError> {
+    if input.connection_id.len() != 16
+        || input.connection_generation == 0
+        || input.server_nonce.len() != 32
+        || input.client_nonce.len() != 32
+        || input.endpoint_id.len() != 16
+        || input.credential_id.len() != 16
+    {
+        return Err(GatewayError::Protocol);
+    }
+    let mut output = b"mss-awp-client-challenge-v1".to_vec();
+    output.extend_from_slice(input.connection_id);
+    output.extend_from_slice(&input.connection_generation.to_be_bytes());
+    output.extend_from_slice(input.server_nonce);
+    output.extend_from_slice(input.client_nonce);
+    output.extend_from_slice(input.endpoint_id);
+    output.extend_from_slice(input.credential_id);
+    output.extend_from_slice(PROTOCOL.as_bytes());
+    output.extend_from_slice(&input.manifest_revision.to_be_bytes());
+    output.extend_from_slice(&input.credential_revision.to_be_bytes());
+    Ok(output)
+}
+
+pub(super) struct ConnectionReadyInput<'a> {
+    pub connection_id: &'a [u8],
+    pub connection_generation: u64,
+    pub fencing_token: &'a [u8],
+    pub ready_at_ms: i64,
+    pub max_packet_bytes: u32,
+    pub max_inflight_frames: u32,
+    pub heartbeat_interval_ms: u32,
+    pub endpoint_id: &'a [u8],
+}
+
+pub(super) fn connection_ready(input: ConnectionReadyInput<'_>) -> Result<Vec<u8>, GatewayError> {
+    if input.connection_id.len() != 16
+        || input.connection_generation == 0
+        || input.fencing_token.len() != 32
+        || input.max_packet_bytes == 0
+        || input.max_inflight_frames == 0
+        || input.heartbeat_interval_ms == 0
+        || input.endpoint_id.len() != 16
+    {
+        return Err(GatewayError::Protocol);
+    }
+    let mut output = b"mss-awp-connection-ready-v1".to_vec();
+    output.extend_from_slice(input.connection_id);
+    output.extend_from_slice(&input.connection_generation.to_be_bytes());
+    output.extend_from_slice(input.fencing_token);
+    output.extend_from_slice(&input.ready_at_ms.to_be_bytes());
+    output.extend_from_slice(&input.max_packet_bytes.to_be_bytes());
+    output.extend_from_slice(&input.max_inflight_frames.to_be_bytes());
+    output.extend_from_slice(&input.heartbeat_interval_ms.to_be_bytes());
+    output.extend_from_slice(input.endpoint_id);
+    Ok(output)
+}
