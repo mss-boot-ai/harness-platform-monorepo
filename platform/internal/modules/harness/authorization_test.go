@@ -109,6 +109,8 @@ func TestHarnessAuthorizationRouteMatrixIsExact(t *testing.T) {
 		http.MethodPost + " " + canonicalAdminAPIBasePath + "/harness/v1/enrollments/:id/approve": PermissionApprove,
 		http.MethodPost + " " + canonicalAdminAPIBasePath + "/harness/v1/enrollments/:id/deny":    PermissionApprove,
 		http.MethodGet + " " + canonicalAdminAPIBasePath + "/harness/v1/endpoints":                PermissionRead,
+		http.MethodPost + " " + canonicalAdminAPIBasePath + "/harness/v1/hc/challenges":           PermissionOperate,
+		http.MethodPost + " " + canonicalAdminAPIBasePath + "/harness/v1/hc/endpoints":            PermissionOperate,
 		http.MethodPost + " " + canonicalAdminAPIBasePath + "/harness/v1/endpoints/:id/suspend":   PermissionRevoke,
 		http.MethodPost + " " + canonicalAdminAPIBasePath + "/harness/v1/endpoints/:id/resume":    PermissionRevoke,
 		http.MethodPost + " " + canonicalAdminAPIBasePath + "/harness/v1/endpoints/:id/revoke":    PermissionRevoke,
