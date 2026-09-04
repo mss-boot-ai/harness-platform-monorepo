@@ -31,15 +31,16 @@ type memoryConnectionDirectory struct {
 }
 
 type activeConnection struct {
-	endpointID      domain.ID
-	generation      uint64
-	connectionID    [16]byte
-	socket          *websocket.Conn
-	outbound        chan []byte
-	done            chan struct{}
-	queuedBytes     atomic.Int64
-	controlSequence atomic.Uint64
-	closeOnce       sync.Once
+	endpointID             domain.ID
+	generation             uint64
+	connectionID           [16]byte
+	socket                 *websocket.Conn
+	outbound               chan []byte
+	done                   chan struct{}
+	queuedBytes            atomic.Int64
+	controlSequence        atomic.Uint64
+	inboundControlSequence atomic.Uint64
+	closeOnce              sync.Once
 }
 
 func newMemoryConnectionDirectory() *memoryConnectionDirectory {
@@ -178,6 +179,18 @@ func (connection *activeConnection) runWriter() {
 			}
 		case <-connection.done:
 			return
+		}
+	}
+}
+
+func (connection *activeConnection) acceptInboundControlSequence(sequence uint64) bool {
+	for {
+		current := connection.inboundControlSequence.Load()
+		if sequence != current+1 {
+			return false
+		}
+		if connection.inboundControlSequence.CompareAndSwap(current, sequence) {
+			return true
 		}
 	}
 }

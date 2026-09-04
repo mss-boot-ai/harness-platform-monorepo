@@ -78,3 +78,19 @@ func TestConnectionDirectoryAllocatesMonotonicControlSequence(t *testing.T) {
 		t.Fatalf("control sequences=%v", sequences)
 	}
 }
+
+func TestConnectionRejectsInboundControlReplayAndGap(t *testing.T) {
+	connection := newActiveConnection(domain.ID{3}, 1, [16]byte{1}, nil)
+	if !connection.acceptInboundControlSequence(1) {
+		t.Fatal("first inbound control sequence was rejected")
+	}
+	if connection.acceptInboundControlSequence(1) {
+		t.Fatal("inbound control replay was accepted")
+	}
+	if connection.acceptInboundControlSequence(3) {
+		t.Fatal("inbound control gap was accepted")
+	}
+	if !connection.acceptInboundControlSequence(2) {
+		t.Fatal("next inbound control sequence was rejected after gap")
+	}
+}

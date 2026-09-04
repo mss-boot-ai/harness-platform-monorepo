@@ -115,11 +115,10 @@ func (server *Server) websocket(writer http.ResponseWriter, request *http.Reques
 			active.close(websocket.CloseUnsupportedData, "binary AWP packet required")
 			return
 		}
-		// Business packet routing is enabled by the relay checkpoint. Before
-		// then, a READY connection remains authenticated but fails closed on
-		// every unimplemented packet instead of silently acknowledging it.
-		active.close(websocket.ClosePolicyViolation, "AWP relay not enabled")
-		return
+		if err := server.handleReadyPacket(request.Context(), active, endpoint, message, server.now().UTC()); err != nil {
+			active.close(websocket.ClosePolicyViolation, "AWP packet rejected")
+			return
+		}
 	}
 }
 

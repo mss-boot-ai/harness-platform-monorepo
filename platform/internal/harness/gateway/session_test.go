@@ -129,6 +129,52 @@ func TestHCSessionCreateIsIdempotentAndDeliversSignedOpenTunnel(t *testing.T) {
 		t.Fatalf("OpenTunnel payload=%#v error=%v", open, err)
 	}
 
+	resultPayload, err := proto.MarshalOptions{Deterministic: true}.Marshal(&awpv1.OpenTunnelResult{
+		SessionId: createdSessionID[:], Status: awpv1.OpenTunnelStatus_OPEN_TUNNEL_STATUS_ACCEPTED,
+		AcceptedAuthorizationRevision: 1, NegotiatedCapabilityHints: []string{"prompt", "session"},
+	})
+	if err != nil {
+		t.Fatalf("encode OpenTunnelResult: %v", err)
+	}
+	resultMessageID := bytes.Repeat([]byte{84}, 16)
+	resultTranscript, err := controlTranscript(
+		resultMessageID, abaEndpoint.ID[:], hcEndpointID[:], 1, now.UnixMilli(),
+		uint32(awpv1.ControlType_CONTROL_TYPE_OPEN_TUNNEL_RESULT), resultPayload,
+	)
+	if err != nil {
+		t.Fatalf("OpenTunnelResult transcript: %v", err)
+	}
+	resultSignature, err := awpcrypto.SignP1363LowS(abaSigningKey, resultTranscript)
+	if err != nil {
+		t.Fatalf("sign OpenTunnelResult: %v", err)
+	}
+	resultPacket := &awpv1.WirePacket{
+		WireMajor: 1, PacketId: bytes.Repeat([]byte{85}, 16),
+		Body: &awpv1.WirePacket_Control{Control: &awpv1.ControlFrame{
+			MessageId: resultMessageID, SenderEndpointId: abaEndpoint.ID[:], ReceiverEndpointId: hcEndpointID[:],
+			ControlSequence: 1, CreatedAtMs: now.UnixMilli(), Type: awpv1.ControlType_CONTROL_TYPE_OPEN_TUNNEL_RESULT,
+			Payload: resultPayload, Signature: resultSignature,
+		}},
+	}
+	encodedResult, err := proto.MarshalOptions{Deterministic: true}.Marshal(resultPacket)
+	if err != nil {
+		t.Fatalf("encode OpenTunnelResult packet: %v", err)
+	}
+	if err := abaConnection.WriteMessage(websocket.BinaryMessage, encodedResult); err != nil {
+		t.Fatalf("write OpenTunnelResult: %v", err)
+	}
+	var stored domain.Session
+	for attempt := 0; attempt < 20; attempt++ {
+		stored, err = persistence.GetSession(t.Context(), createdSessionID)
+		if err == nil && stored.Status == domain.SessionStatusWaitingKey {
+			break
+		}
+		time.Sleep(5 * time.Millisecond)
+	}
+	if err != nil || stored.Status != domain.SessionStatusWaitingKey {
+		t.Fatalf("session after accepted OpenTunnel=%#v error=%v", stored, err)
+	}
+
 	replayed := perform("00000000-0000-4000-8000-000000000402")
 	if replayed.Code != http.StatusCreated || replayed.Header().Get("Idempotency-Replayed") != "true" ||
 		!bytes.Equal(replayed.Body.Bytes(), created.Body.Bytes()) {

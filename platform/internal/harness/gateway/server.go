@@ -44,6 +44,7 @@ type Persistence interface {
 	NextConnectionGeneration(context.Context, domain.ID, time.Time) (uint64, error)
 	MarkEndpointSeen(context.Context, domain.ID, time.Time) error
 	CreateEndpointSession(context.Context, domain.Session, domain.IdempotencyRecord, domain.SecurityAuditEvent, int, []byte) (domain.Session, []byte, bool, error)
+	GetSession(context.Context, domain.ID) (domain.Session, error)
 	UpdateSession(context.Context, domain.ID, func(*domain.Session) error) (domain.Session, error)
 	UseDPoPReplay(context.Context, string, string, time.Time, time.Time, int64) error
 }
