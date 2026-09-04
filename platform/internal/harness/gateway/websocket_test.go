@@ -136,7 +136,7 @@ func TestWebSocketConsumesTicketAndCompletesSignedChallenge(t *testing.T) {
 	if second != nil {
 		_ = second.Close()
 	}
-	if err == nil || secondResponse == nil || secondResponse.StatusCode != http.StatusConflict {
+	if err == nil || secondResponse == nil || secondResponse.StatusCode != http.StatusUnauthorized {
 		t.Fatalf("ticket replay error=%v response=%v", err, secondResponse)
 	}
 }
