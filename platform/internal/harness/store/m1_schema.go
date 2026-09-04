@@ -161,17 +161,17 @@ func CreateM1Schema(db *gorm.DB) error {
 			}
 		}
 	}
-	if err := VerifyM1Schema(db); err != nil {
-		return err
-	}
-	return VerifyM2IdentitySchema(db)
+	return VerifyM1Schema(db)
 }
 
 func VerifyAllSchema(db *gorm.DB) error {
 	if err := VerifySchema(db); err != nil {
 		return err
 	}
-	return VerifyM1Schema(db)
+	if err := VerifyM1Schema(db); err != nil {
+		return err
+	}
+	return VerifyM2IdentitySchema(db)
 }
 
 func VerifyM1Schema(db *gorm.DB) error {
