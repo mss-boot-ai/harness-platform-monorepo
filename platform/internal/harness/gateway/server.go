@@ -27,6 +27,9 @@ const (
 )
 
 type Persistence interface {
+	CreateEnrollment(context.Context, domain.Enrollment) error
+	GetEnrollmentByDeviceCode(context.Context, domain.ID, [32]byte, time.Time) (domain.Enrollment, error)
+	ConsumeABAEnrollment(context.Context, domain.ID, [32]byte, domain.Endpoint, domain.EndpointCredential, domain.RefreshCredential, domain.SecurityAuditEvent, time.Time) error
 	AuthenticateAccessToken(context.Context, [32]byte, time.Time) (domain.Endpoint, domain.EndpointCredential, error)
 	CreateTicket(context.Context, domain.WSTicket, time.Duration) error
 	InspectTicket(context.Context, [32]byte, time.Time) (domain.WSTicket, error)
@@ -50,6 +53,7 @@ type Config struct {
 	AccessTTL        time.Duration
 	RefreshTTL       time.Duration
 	Trust            *TrustBundle
+	VerificationURI  string
 }
 
 type Server struct {
@@ -80,6 +84,9 @@ func NewHandler(config Config, persistence Persistence, random io.Reader, now fu
 	}
 	config.AllowedOrigin = allowedOrigin
 	config.ExternalOrigin = externalOrigin
+	if strings.TrimSpace(config.VerificationURI) == "" {
+		config.VerificationURI = config.AllowedOrigin + "/harness/enrollments"
+	}
 	if config.NonceTTL <= 0 || config.NonceTTL > 5*time.Minute {
 		config.NonceTTL = defaultNonceTTL
 	}
@@ -109,6 +116,9 @@ func NewHandler(config Config, persistence Persistence, random io.Reader, now fu
 	mux.HandleFunc("GET /gateway/v1/health", server.health)
 	mux.HandleFunc("GET /gateway/v1/trust-manifest", server.trustManifest)
 	mux.HandleFunc("GET /gateway/v1/ws", server.websocket)
+	mux.HandleFunc("POST /gateway/v1/enrollments", server.startEnrollment)
+	mux.HandleFunc("GET /gateway/v1/enrollments/{id}", server.pollEnrollment)
+	mux.HandleFunc("POST /gateway/v1/enrollments/{id}/consume", server.consumeEnrollment)
 	mux.HandleFunc("POST /gateway/v1/ws/tickets", server.issueTicket)
 	mux.HandleFunc("OPTIONS /gateway/v1/ws/tickets", server.preflight)
 	mux.HandleFunc("POST /gateway/v1/tokens/refresh", server.refreshToken)
