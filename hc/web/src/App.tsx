@@ -220,7 +220,11 @@ export function App() {
                 onRegistered={setRegistration}
               />
               {registration === null ? null : (
-                <GatewaySetup identity={identity} registration={registration} onReady={setGatewayReady} />
+                <GatewaySetup
+                  identity={identity}
+                  onRegistration={setRegistration}
+                  onReady={setGatewayReady}
+                />
               )}
               {registration !== null && gatewayReady ? (
                 <SessionSetup identity={identity} registration={registration} />

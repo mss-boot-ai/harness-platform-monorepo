@@ -9,18 +9,19 @@ import {
   HcApiError,
   fetchTrustManifest,
   issueWebSocketTicket,
+  refreshEndpointSession,
   type RegistrationSession,
   type WebSocketTicket,
 } from './api';
 
 export function GatewaySetup({
   identity,
+  onRegistration,
   onReady,
-  registration,
 }: {
   readonly identity: EndpointIdentity;
+  readonly onRegistration: (registration: RegistrationSession) => void;
   readonly onReady: (ready: boolean) => void;
-  readonly registration: RegistrationSession;
 }) {
   const [ticket, setTicket] = useState<WebSocketTicket | null>(null);
   const [connection, setConnection] = useState<ReadyGatewayConnection | null>(null);
@@ -36,7 +37,9 @@ export function GatewaySetup({
     onReady(false);
     try {
       socketRef.current?.close(1000, 'HC reconnecting');
-      const issued = await issueWebSocketTicket(identity, registration);
+      const activeRegistration = await refreshEndpointSession(identity);
+      onRegistration(activeRegistration);
+      const issued = await issueWebSocketTicket(identity, activeRegistration);
       setTicket(issued);
       const trust = await fetchTrustManifest();
       if (globalThis.indexedDB === undefined) {
@@ -44,8 +47,8 @@ export function GatewaySetup({
       }
       await new IndexedDbSecureStore(globalThis.indexedDB).pinTrustRoot(trust.rootJkt, trust.revision);
       const ready = await connectGateway(identity, {
-        credentialId: registration.credentialId,
-        endpointId: registration.endpointId,
+        credentialId: activeRegistration.credentialId,
+        endpointId: activeRegistration.endpointId,
         ticket: issued.ticket,
         websocketUrl: issued.websocketUrl,
       }, trust);
