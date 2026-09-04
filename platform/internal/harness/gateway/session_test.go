@@ -409,6 +409,10 @@ func TestHCSessionCreateIsIdempotentAndDeliversSignedOpenTunnel(t *testing.T) {
 	if err := abaConnection.WriteMessage(websocket.BinaryMessage, abaACK); err != nil {
 		t.Fatalf("write ABA ACK: %v", err)
 	}
+	forwardedType, forwardedABAACK, err := hcConnection.ReadMessage()
+	if err != nil || forwardedType != websocket.BinaryMessage || !bytes.Equal(forwardedABAACK, abaACK) {
+		t.Fatalf("read forwarded ABA ACK type=%d error=%v", forwardedType, err)
+	}
 	abaFrame := testEncryptedFramePacket(
 		t, createdSessionID, channelID, abaEndpoint.ID, hcEndpointID, gatewayID(8),
 		awpv1.Direction_DIRECTION_ABA_TO_HC, abaToHCKey, []byte{7, 7, 7, 7}, abaSigningKey,
@@ -427,6 +431,10 @@ func TestHCSessionCreateIsIdempotentAndDeliversSignedOpenTunnel(t *testing.T) {
 	)
 	if err := hcConnection.WriteMessage(websocket.BinaryMessage, hcACK); err != nil {
 		t.Fatalf("write HC ACK: %v", err)
+	}
+	forwardedType, forwardedHCACK, err := abaConnection.ReadMessage()
+	if err != nil || forwardedType != websocket.BinaryMessage || !bytes.Equal(forwardedHCACK, hcACK) {
+		t.Fatalf("read forwarded HC ACK type=%d error=%v", forwardedType, err)
 	}
 	for attempt := 0; attempt < 20; attempt++ {
 		delivery, err := persistence.Delivery(

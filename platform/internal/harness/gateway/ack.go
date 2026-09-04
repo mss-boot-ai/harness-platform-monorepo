@@ -19,38 +19,38 @@ func (server *Server) processAckFrame(
 	endpoint domain.Endpoint,
 	packet *awpv1.WirePacket,
 	now time.Time,
-) error {
+) (domain.ID, error) {
 	ack := packet.GetAck()
 	if packet.GetWireMajor() != 1 || packet.GetWireMinor() != 0 || len(packet.GetPacketId()) != 16 || ack == nil {
-		return errors.New("ACK packet envelope is invalid")
+		return domain.ID{}, errors.New("ACK packet envelope is invalid")
 	}
 	if len(ack.GetAckId()) != 16 || len(ack.GetChannelId()) != 16 || len(ack.GetSessionId()) != 16 ||
 		len(ack.GetEndpointId()) != 16 || len(ack.GetSignature()) != 64 ||
 		!bytes.Equal(ack.GetEndpointId(), endpoint.ID[:]) || ack.GetKeyGeneration() == 0 ||
 		(ack.GetHighestContiguousSequence() == 0 && len(ack.GetReceivedRanges()) == 0) {
-		return errors.New("ACK fields are invalid")
+		return domain.ID{}, errors.New("ACK fields are invalid")
 	}
 	if _, err := idFromWire(ack.GetAckId()); err != nil {
-		return err
+		return domain.ID{}, err
 	}
 	channelID, err := idFromWire(ack.GetChannelId())
 	if err != nil {
-		return err
+		return domain.ID{}, err
 	}
 	sessionID, err := idFromWire(ack.GetSessionId())
 	if err != nil {
-		return err
+		return domain.ID{}, err
 	}
 	session, err := server.persistence.GetSession(ctx, sessionID)
 	if err != nil {
-		return err
+		return domain.ID{}, err
 	}
 	if session.Status != domain.SessionStatusActive || ack.GetKeyGeneration() != session.CurrentKeyGeneration {
-		return errors.New("ACK session is invalid")
+		return domain.ID{}, errors.New("ACK session is invalid")
 	}
 	expectedChannel, err := sessionChannelID(session.ID, session.ABAEndpointID, session.HCEndpointID)
 	if err != nil || channelID != expectedChannel {
-		return errors.New("ACK channel is invalid")
+		return domain.ID{}, errors.New("ACK channel is invalid")
 	}
 	var senderID, receiverID domain.ID
 	direction := domain.Direction(ack.GetAcknowledgedDirection())
@@ -60,30 +60,30 @@ func (server *Server) processAckFrame(
 	case domain.DirectionABAToHC:
 		senderID, receiverID = session.ABAEndpointID, session.HCEndpointID
 	default:
-		return errors.New("ACK direction is invalid")
+		return domain.ID{}, errors.New("ACK direction is invalid")
 	}
 	if receiverID != endpoint.ID {
-		return errors.New("ACK sender is not the acknowledged receiver")
+		return domain.ID{}, errors.New("ACK sender is not the acknowledged receiver")
 	}
 	ranges, err := ackRanges(ack.GetHighestContiguousSequence(), ack.GetReceivedRanges())
 	if err != nil {
-		return err
+		return domain.ID{}, err
 	}
 	createdAt := time.UnixMilli(ack.GetCreatedAtMs()).UTC()
 	if createdAt.Before(now.Add(-5*time.Minute)) || createdAt.After(now.Add(5*time.Minute)) {
-		return errors.New("ACK time is invalid")
+		return domain.ID{}, errors.New("ACK time is invalid")
 	}
 	transcript, err := ackTranscript(ack)
 	if err != nil {
-		return err
+		return domain.ID{}, err
 	}
 	signingJWK, err := awpcrypto.ParseP256PublicJWK(endpoint.SigningPublicJWK)
 	if err != nil {
-		return err
+		return domain.ID{}, err
 	}
 	publicKey, err := signingJWK.PublicKey()
 	if err != nil || !awpcrypto.VerifyP1363LowS(publicKey, transcript, ack.GetSignature()) {
-		return errors.New("ACK signature is invalid")
+		return domain.ID{}, errors.New("ACK signature is invalid")
 	}
 	_, err = server.persistence.AdvanceAck(ctx, domain.AckCursor{
 		SessionID: session.ID, KeyGeneration: ack.GetKeyGeneration(), Direction: direction,
@@ -91,7 +91,7 @@ func (server *Server) processAckFrame(
 		HighestContiguousSequence: ack.GetHighestContiguousSequence(), ReceivedRanges: ranges,
 		UpdatedAt: now,
 	})
-	return err
+	return senderID, err
 }
 
 func ackRanges(highest uint64, input []*awpv1.SequenceRange) ([]domain.SequenceRange, error) {
