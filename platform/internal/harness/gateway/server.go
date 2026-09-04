@@ -46,6 +46,7 @@ type Persistence interface {
 	CreateEndpointSession(context.Context, domain.Session, domain.IdempotencyRecord, domain.SecurityAuditEvent, int, []byte) (domain.Session, []byte, bool, error)
 	GetSession(context.Context, domain.ID) (domain.Session, error)
 	UpdateSession(context.Context, domain.ID, func(*domain.Session) error) (domain.Session, error)
+	ListEndpoints(context.Context, string, string, int) ([]domain.Endpoint, error)
 	UseDPoPReplay(context.Context, string, string, time.Time, time.Time, int64) error
 }
 
@@ -143,6 +144,8 @@ func NewHandler(config Config, persistence Persistence, random io.Reader, now fu
 	mux.HandleFunc("OPTIONS /gateway/v1/tokens/refresh", server.preflight)
 	mux.HandleFunc("POST /gateway/v1/sessions", server.createSession)
 	mux.HandleFunc("OPTIONS /gateway/v1/sessions", server.preflight)
+	mux.HandleFunc("GET /gateway/v1/endpoints/abas", server.listABAEndpoints)
+	mux.HandleFunc("OPTIONS /gateway/v1/endpoints/abas", server.preflight)
 	return server.cors(mux), nil
 }
 
@@ -444,7 +447,7 @@ func (server *Server) cors(next http.Handler) http.Handler {
 			writer.Header().Set("Access-Control-Allow-Origin", server.config.AllowedOrigin)
 			writer.Header().Set("Access-Control-Allow-Credentials", "true")
 			writer.Header().Set("Access-Control-Allow-Headers", "Authorization, Content-Type, DPoP, Idempotency-Key")
-			writer.Header().Set("Access-Control-Allow-Methods", "POST, OPTIONS")
+			writer.Header().Set("Access-Control-Allow-Methods", "GET, POST, OPTIONS")
 			writer.Header().Set("Access-Control-Expose-Headers", "DPoP-Nonce")
 			writer.Header().Add("Vary", "Origin")
 		}

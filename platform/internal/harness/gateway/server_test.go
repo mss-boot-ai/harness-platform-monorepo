@@ -425,10 +425,24 @@ func signDPoPForPath(
 	jti string,
 	path string,
 ) string {
+	return signDPoPForMethodPath(t, key, publicJWK, accessToken, nonce, now, jti, "POST", path)
+}
+
+func signDPoPForMethodPath(
+	t *testing.T,
+	key *ecdsa.PrivateKey,
+	publicJWK awpcrypto.P256PublicJWK,
+	accessToken string,
+	nonce string,
+	now time.Time,
+	jti string,
+	method string,
+	path string,
+) string {
 	t.Helper()
 	header, _ := json.Marshal(map[string]any{"alg": "ES256", "jwk": publicJWK, "typ": "dpop+jwt"})
 	claims, _ := json.Marshal(map[string]any{
-		"ath": awpcrypto.AccessTokenHash(accessToken), "htm": "POST",
+		"ath": awpcrypto.AccessTokenHash(accessToken), "htm": method,
 		"htu": "http://127.0.0.1:8082" + path, "iat": now.Unix(), "jti": jti, "nonce": nonce,
 	})
 	signingInput := base64.RawURLEncoding.EncodeToString(header) + "." + base64.RawURLEncoding.EncodeToString(claims)

@@ -39,6 +39,32 @@ type endpointSessionResponse struct {
 	CreatedAt             time.Time            `json:"createdAt"`
 }
 
+func (server *Server) listABAEndpoints(writer http.ResponseWriter, request *http.Request) {
+	endpoint, _, ok := server.authenticateHCRequest(writer, request)
+	if !ok {
+		return
+	}
+	values, err := server.persistence.ListEndpoints(
+		request.Context(), endpoint.OwnerUserID, endpoint.TenantID, 200,
+	)
+	if err != nil {
+		writeDomainError(writer, err)
+		return
+	}
+	items := make([]map[string]any, 0, len(values))
+	for _, value := range values {
+		if value.Type != domain.EndpointTypeABA || value.Status != domain.EndpointStatusActive ||
+			!server.connections.online(value.ID) {
+			continue
+		}
+		items = append(items, map[string]any{
+			"id": value.ID.String(), "name": value.Name, "type": value.Type,
+			"status": value.Status, "lastSeenAt": value.LastSeenAt,
+		})
+	}
+	writeJSON(writer, http.StatusOK, map[string]any{"items": items})
+}
+
 func (server *Server) createSession(writer http.ResponseWriter, request *http.Request) {
 	endpoint, _, ok := server.authenticateHCRequest(writer, request)
 	if !ok {

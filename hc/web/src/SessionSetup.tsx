@@ -29,7 +29,7 @@ export function SessionSetup({
 
   useEffect(() => {
     let active = true;
-    void listABAEndpoints()
+    void listABAEndpoints(identity, registration)
       .then((values) => {
         if (active) {
           setEndpoints(values);
@@ -44,7 +44,7 @@ export function SessionSetup({
     return () => {
       active = false;
     };
-  }, []);
+  }, [identity, registration]);
 
   const create = async () => {
     if (selectedABA === '') {

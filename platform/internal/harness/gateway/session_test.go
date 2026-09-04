@@ -61,6 +61,23 @@ func TestHCSessionCreateIsIdempotentAndDeliversSignedOpenTunnel(t *testing.T) {
 	completeClientChallenge(t, abaConnection, abaEndpoint, abaCredential, abaSigningKey)
 	time.Sleep(10 * time.Millisecond)
 
+	listChallenge := httptest.NewRecorder()
+	handler.ServeHTTP(listChallenge, gatewayABAListRequest(hcAccessToken, ""))
+	listNonce := listChallenge.Header().Get("DPoP-Nonce")
+	if listChallenge.Code != http.StatusUnauthorized || listNonce == "" {
+		t.Fatalf("ABA list nonce status=%d headers=%v body=%s", listChallenge.Code, listChallenge.Header(), listChallenge.Body.String())
+	}
+	listProof := signDPoPForMethodPath(
+		t, hcSigningKey, hcPublicJWK, hcAccessToken, listNonce, now,
+		"00000000-0000-4000-8000-000000000400", "GET", "/gateway/v1/endpoints/abas",
+	)
+	listed := httptest.NewRecorder()
+	handler.ServeHTTP(listed, gatewayABAListRequest(hcAccessToken, listProof))
+	if listed.Code != http.StatusOK || !strings.Contains(listed.Body.String(), abaEndpoint.ID.String()) ||
+		strings.Contains(listed.Body.String(), hcEndpointID.String()) {
+		t.Fatalf("online ABA list status=%d body=%s", listed.Code, listed.Body.String())
+	}
+
 	requestBody, _ := json.Marshal(map[string]any{
 		"abaEndpointId": abaEndpoint.ID.String(), "runtimeProfileId": "test-agent",
 		"workspaceId": "fixture", "requestedCapabilities": []string{"session", "prompt"},
@@ -192,6 +209,16 @@ func gatewaySessionRequest(accessToken, idempotencyKey string, body []byte, proo
 	request.Header.Set("Authorization", "DPoP "+accessToken)
 	request.Header.Set("Idempotency-Key", idempotencyKey)
 	request.Header.Set("Content-Type", "application/json")
+	if proof != "" {
+		request.Header.Set("DPoP", proof)
+	}
+	return request
+}
+
+func gatewayABAListRequest(accessToken, proof string) *http.Request {
+	request := httptest.NewRequest(http.MethodGet, "/gateway/v1/endpoints/abas", nil)
+	request.Header.Set("Origin", "http://127.0.0.1:8001")
+	request.Header.Set("Authorization", "DPoP "+accessToken)
 	if proof != "" {
 		request.Header.Set("DPoP", proof)
 	}

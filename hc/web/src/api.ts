@@ -174,11 +174,30 @@ export async function fetchTrustManifest(): Promise<VerifiedTrustManifest> {
   return verifyTrustManifest(await response.json());
 }
 
-export async function listABAEndpoints(): Promise<readonly ABAEndpointSummary[]> {
-  const response = await requestJson<unknown>(`${adminBase}/harness/v1/endpoints?limit=200`, {
-    method: 'GET',
+export async function listABAEndpoints(
+  identity: EndpointIdentity,
+  registration: RegistrationSession,
+): Promise<readonly ABAEndpointSummary[]> {
+  const path = '/gateway/v1/endpoints/abas';
+  const challengeResponse = await gatewayAuthorizedRequest(path, registration.accessToken, 'GET');
+  const nonce = challengeResponse.headers.get('DPoP-Nonce');
+  if (challengeResponse.status !== 401 || nonce === null || nonce === '') {
+    throw await gatewayFailure(challengeResponse);
+  }
+  const proof = await createDpopProof({
+    accessToken: registration.accessToken,
+    htm: 'GET',
+    htu: new URL(path, window.location.origin).toString(),
+    nonce,
+    privateKey: identity.signing.privateKey,
+    publicJwk: identity.signing.publicJwk,
   });
-  const value = objectValue(response, 'endpoint list');
+  const response = await gatewayAuthorizedRequest(path, registration.accessToken, 'GET', proof.proof);
+  if (!response.ok) {
+    throw await gatewayFailure(response);
+  }
+  const responseValue = await response.json() as unknown;
+  const value = objectValue(responseValue, 'endpoint list');
   if (!Array.isArray(value.items)) {
     throw new HcApiError('Endpoint list is invalid', 'HC_INVALID_RESPONSE', 500);
   }
@@ -393,6 +412,19 @@ function gatewayRequest(path: string, accessToken: string, proof?: string): Prom
     headers.set('DPoP', proof);
   }
   return fetch(path, { credentials: 'include', headers, method: 'POST' });
+}
+
+function gatewayAuthorizedRequest(
+  path: string,
+  accessToken: string,
+  method: 'GET' | 'POST',
+  proof?: string,
+): Promise<Response> {
+  const headers = new Headers({ Accept: 'application/json', Authorization: `DPoP ${accessToken}` });
+  if (proof !== undefined) {
+    headers.set('DPoP', proof);
+  }
+  return fetch(path, { credentials: 'include', headers, method });
 }
 
 function gatewaySessionRequest(
