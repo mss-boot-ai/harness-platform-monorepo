@@ -32,6 +32,9 @@ func (server *Server) handleReadyPacket(
 	if err := proto.Unmarshal(encoded, packet); err != nil {
 		return errors.New("ready packet is not valid AWP protobuf")
 	}
+	if packet.GetEncrypted() != nil {
+		return server.processEncryptedFrame(ctx, endpoint, packet, encoded, now)
+	}
 	control := packet.GetControl()
 	if packet.GetWireMajor() != 1 || packet.GetWireMinor() != 0 || len(packet.GetPacketId()) != 16 ||
 		control == nil || !readyControlAllowed(endpoint.Type, control.GetType()) {

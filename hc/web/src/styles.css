@@ -84,6 +84,12 @@ button:disabled { cursor: not-allowed; opacity: .48; }
 .session-form input, .session-form select { width: 100%; min-height: 47px; color: #17251f; background: #f8faf7; border: 1px solid #cbd5ce; border-radius: 11px; padding: 0 13px; font: inherit; }
 .session-form input:focus, .session-form select:focus { border-color: #39775f; box-shadow: 0 0 0 3px rgba(57,119,95,.12); outline: none; }
 .session-result { color: #25684c; background: #eef9f2; border: 1px solid #a8cfba; border-radius: 12px; margin: 18px 0 0; padding: 12px 14px; font-size: 13px; font-weight: 700; }
+.prompt-panel { border-top: 1px solid #dce3dd; display: grid; gap: 12px; margin-top: 20px; padding-top: 20px; }
+.prompt-panel label { color: #5d6963; display: grid; font-size: 12px; font-weight: 700; gap: 7px; }
+.prompt-panel textarea { background: #f8faf7; border: 1px solid #cbd5ce; border-radius: 11px; color: #17251f; font: inherit; min-height: 96px; padding: 12px 13px; resize: vertical; }
+.prompt-panel textarea:focus { border-color: #39775f; box-shadow: 0 0 0 3px rgba(57,119,95,.12); outline: none; }
+.message-list { background: #10231d; border-radius: 13px; color: #e8eee9; display: grid; gap: 8px; padding: 14px 16px; }
+.message-list p { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 12px; line-height: 1.55; margin: 0; overflow-wrap: anywhere; }
 
 @media (max-width: 850px) {
   .app-shell { padding: 0 22px 48px; }

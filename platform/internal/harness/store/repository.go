@@ -697,6 +697,14 @@ const (
 	PutFrameDuplicate PutFrameOutcome = "DUPLICATE"
 )
 
+func (store *Store) PutEndpointFrame(
+	ctx context.Context,
+	frame domain.EncryptedFrame,
+) (bool, error) {
+	outcome, err := store.PutFrame(ctx, frame, 1<<20)
+	return outcome == PutFrameDuplicate, err
+}
+
 func (store *Store) PutFrame(
 	ctx context.Context,
 	frame domain.EncryptedFrame,

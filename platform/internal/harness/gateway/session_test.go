@@ -3,7 +3,11 @@ package gateway
 import (
 	"bytes"
 	"context"
+	"crypto/aes"
+	"crypto/cipher"
 	"crypto/ecdh"
+	"crypto/ecdsa"
+	"crypto/hkdf"
 	"crypto/hpke"
 	"crypto/sha256"
 	"encoding/base64"
@@ -369,6 +373,53 @@ func TestHCSessionCreateIsIdempotentAndDeliversSignedOpenTunnel(t *testing.T) {
 	if err != nil || forwardedType != websocket.BinaryMessage || !bytes.Equal(forwardedACK, encodedACK) {
 		t.Fatalf("read forwarded SessionKeyPackageAck type=%d error=%v", forwardedType, err)
 	}
+	prk, err := hkdf.Extract(sha256.New, bytes.Repeat([]byte{4}, 32), bytes.Repeat([]byte{5}, 32))
+	if err != nil {
+		t.Fatalf("extract Session PRK: %v", err)
+	}
+	directionPrefix := "mss-awp/v1/session/" + createdSessionID.String() + "/generation/1/endpoint/" + hcEndpointID.String()
+	hcToABAKey, err := hkdf.Expand(sha256.New, prk, directionPrefix+"/hc-to-aba", 32)
+	if err != nil {
+		t.Fatalf("derive HC to ABA key: %v", err)
+	}
+	abaToHCKey, err := hkdf.Expand(sha256.New, prk, directionPrefix+"/aba-to-hc", 32)
+	if err != nil {
+		t.Fatalf("derive ABA to HC key: %v", err)
+	}
+	channelID, err := sessionChannelID(createdSessionID, abaEndpoint.ID, hcEndpointID)
+	if err != nil {
+		t.Fatalf("sessionChannelID: %v", err)
+	}
+	hcFrame := testEncryptedFramePacket(
+		t, createdSessionID, channelID, hcEndpointID, abaEndpoint.ID, gatewayID(8),
+		awpv1.Direction_DIRECTION_HC_TO_ABA, hcToABAKey, []byte{6, 6, 6, 6}, hcSigningKey,
+		1, []byte(`{"jsonrpc":"2.0","id":1,"method":"session/prompt","params":{"sessionId":"`+createdSessionID.String()+`","prompt":[{"type":"text","text":"canary"}]}}`), now,
+	)
+	if err := hcConnection.WriteMessage(websocket.BinaryMessage, hcFrame); err != nil {
+		t.Fatalf("write HC encrypted frame: %v", err)
+	}
+	forwardedType, forwardedHCFrame, err := abaConnection.ReadMessage()
+	if err != nil || forwardedType != websocket.BinaryMessage || !bytes.Equal(forwardedHCFrame, hcFrame) {
+		t.Fatalf("read forwarded HC frame type=%d error=%v", forwardedType, err)
+	}
+	abaFrame := testEncryptedFramePacket(
+		t, createdSessionID, channelID, abaEndpoint.ID, hcEndpointID, gatewayID(8),
+		awpv1.Direction_DIRECTION_ABA_TO_HC, abaToHCKey, []byte{7, 7, 7, 7}, abaSigningKey,
+		1, []byte(`{"jsonrpc":"2.0","id":1,"result":{"stopReason":"end_turn"}}`), now,
+	)
+	if err := abaConnection.WriteMessage(websocket.BinaryMessage, abaFrame); err != nil {
+		t.Fatalf("write ABA encrypted frame: %v", err)
+	}
+	forwardedType, forwardedABAFrame, err := hcConnection.ReadMessage()
+	if err != nil || forwardedType != websocket.BinaryMessage || !bytes.Equal(forwardedABAFrame, abaFrame) {
+		t.Fatalf("read forwarded ABA frame type=%d error=%v", forwardedType, err)
+	}
+	delivery, err := persistence.Delivery(
+		t.Context(), createdSessionID, abaEndpoint.OwnerUserID, abaEndpoint.TenantID, 10,
+	)
+	if err != nil || len(delivery.Frames) != 2 {
+		t.Fatalf("encrypted delivery frames=%#v error=%v", delivery.Frames, err)
+	}
 
 	replayed := perform("00000000-0000-4000-8000-000000000402")
 	if replayed.Code != http.StatusCreated || replayed.Header().Get("Idempotency-Replayed") != "true" ||
@@ -379,6 +430,61 @@ func TestHCSessionCreateIsIdempotentAndDeliversSignedOpenTunnel(t *testing.T) {
 	if _, _, err := abaConnection.ReadMessage(); err == nil {
 		t.Fatal("idempotent session replay delivered a duplicate OpenTunnel control")
 	}
+}
+
+func testEncryptedFramePacket(
+	t *testing.T,
+	sessionID, channelID, senderID, receiverID, keyID domain.ID,
+	direction awpv1.Direction,
+	key []byte,
+	noncePrefix []byte,
+	signingKey *ecdsa.PrivateKey,
+	sequence uint64,
+	plaintext []byte,
+	now time.Time,
+) []byte {
+	t.Helper()
+	idOffset := byte(100)
+	if direction == awpv1.Direction_DIRECTION_ABA_TO_HC {
+		idOffset = 120
+	}
+	messageID := gatewayID(idOffset + byte(sequence))
+	packetID := gatewayID(idOffset + 10 + byte(sequence))
+	frame := &awpv1.EncryptedFrame{
+		CryptoSuiteId: 1, FrameType: awpv1.FrameType_FRAME_TYPE_ACP_TRANSPORT_FRAME,
+		MessageId: messageID[:], ChannelId: channelID[:], SessionId: sessionID[:],
+		SenderEndpointId: senderID[:], ReceiverEndpointId: receiverID[:], Direction: direction,
+		Sequence: sequence, KeyGeneration: 1, KeyId: keyID[:], CreatedAtMs: now.UnixMilli(),
+		Ciphertext: make([]byte, len(plaintext)+16),
+	}
+	aad, err := frameAAD(frame)
+	if err != nil {
+		t.Fatalf("frameAAD: %v", err)
+	}
+	block, err := aes.NewCipher(key)
+	if err != nil {
+		t.Fatalf("AES key: %v", err)
+	}
+	gcm, err := cipher.NewGCM(block)
+	if err != nil {
+		t.Fatalf("AES-GCM: %v", err)
+	}
+	nonce := make([]byte, 12)
+	copy(nonce, noncePrefix)
+	binary.BigEndian.PutUint64(nonce[4:], sequence)
+	frame.Ciphertext = gcm.Seal(nil, nonce, plaintext, aad)
+	frame.Signature, err = awpcrypto.SignP1363LowS(signingKey, frameSignatureInput(aad, frame.Ciphertext))
+	if err != nil {
+		t.Fatalf("sign encrypted frame: %v", err)
+	}
+	encoded, err := proto.MarshalOptions{Deterministic: true}.Marshal(&awpv1.WirePacket{
+		WireMajor: 1, PacketId: packetID[:],
+		Body: &awpv1.WirePacket_Encrypted{Encrypted: frame},
+	})
+	if err != nil {
+		t.Fatalf("encode encrypted frame: %v", err)
+	}
+	return encoded
 }
 
 func testKeyPackagePlaintext(sessionID domain.ID, now time.Time) []byte {

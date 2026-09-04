@@ -10,6 +10,7 @@ use prost::Message as _;
 use super::GatewayError;
 use super::transcript::{ControlInput, control};
 use crate::config::AgentConfig;
+use crate::crypto::frame::{open_frame, seal_frame, session_channel_id};
 use crate::crypto::key_package::{
     KeyPackageEnvelope, KeyPackageMaterial, SUITE_NAME, key_package_envelope_transcript,
     p256_public_jwk_from_sec1, seal_key_package,
@@ -17,8 +18,14 @@ use crate::crypto::key_package::{
 use crate::crypto::{sign_p1363_low_s, verify_p1363_low_s};
 use crate::identity::EndpointIdentity;
 use crate::protocol::awpv1::{
-    ControlFrame, ControlType, OpenTunnelRequest, OpenTunnelResult, OpenTunnelStatus,
+    ControlFrame, ControlType, Direction as WireDirection, EncryptedFrame,
+    FrameType as WireFrameType, OpenTunnelRequest, OpenTunnelResult, OpenTunnelStatus,
     SessionKeyPackage, SessionKeyPackageAck, WirePacket, wire_packet,
+};
+use crate::wire::{CryptoSuite, Direction, FrameAadV1, FrameType};
+use agent_client_protocol::schema::v1::{
+    ContentBlock, ContentChunk, PromptRequest, PromptResponse, SessionNotification, SessionUpdate,
+    StopReason, TextContent,
 };
 
 const CONTROL_TIME_SKEW_MS: i64 = 60_000;
@@ -35,6 +42,8 @@ struct LocalSession {
     hc_signing_key: VerifyingKey,
     key_package_id: [u8; 16],
     active: bool,
+    hc_frame_sequence: u64,
+    aba_frame_sequence: u64,
 }
 
 pub(super) struct ControlContext<'a> {
@@ -80,6 +89,9 @@ impl ControlState {
         }
         let control_frame = match packet.body {
             Some(wire_packet::Body::Control(value)) => value,
+            Some(wire_packet::Body::Encrypted(value)) => {
+                return self.handle_encrypted_frame(value, endpoint_id, identity, now);
+            }
             _ => return Err(GatewayError::Protocol),
         };
         if control_frame.r#type == ControlType::SessionKeyPackageAck as i32 {
@@ -232,6 +244,8 @@ impl ControlState {
                 hc_signing_key: hc_signing_jwk.verifying_key()?,
                 key_package_id,
                 active: false,
+                hc_frame_sequence: 0,
+                aba_frame_sequence: 0,
             },
         );
         Ok(responses)
@@ -352,6 +366,228 @@ impl ControlState {
             .active = true;
         Ok(Vec::new())
     }
+
+    fn handle_encrypted_frame(
+        &mut self,
+        frame: EncryptedFrame,
+        endpoint_id: &[u8; 16],
+        identity: &EndpointIdentity,
+        now: SystemTime,
+    ) -> Result<Vec<Vec<u8>>, GatewayError> {
+        let session_id: [u8; 16] = frame
+            .session_id
+            .as_slice()
+            .try_into()
+            .map_err(|_| GatewayError::Protocol)?;
+        let session = self
+            .sessions
+            .get_mut(&session_id)
+            .ok_or(GatewayError::Protocol)?;
+        let channel_id = session_channel_id(
+            &session_id,
+            endpoint_id,
+            &session.material.recipient_hc_endpoint_id,
+        )?;
+        if !session.active
+            || frame.crypto_suite_id != 1
+            || frame.frame_type != WireFrameType::AcpTransportFrame as i32
+            || frame.flags != 0
+            || frame.message_id.len() != 16
+            || frame.channel_id != channel_id
+            || frame.sender_endpoint_id != session.material.recipient_hc_endpoint_id
+            || frame.receiver_endpoint_id != endpoint_id
+            || frame.direction != WireDirection::HcToAba as i32
+            || frame.sequence != session.hc_frame_sequence + 1
+            || frame.key_generation != session.material.generation
+            || frame.key_id != session.material.key_id
+            || frame.ciphertext.len() < 16
+            || frame.ciphertext.len() > 1 << 20
+            || frame.signature.len() != 64
+        {
+            return Err(GatewayError::Protocol);
+        }
+        let now_ms = unix_millis(now)?;
+        if frame.created_at_ms < now_ms - 300_000 || frame.created_at_ms > now_ms + 300_000 {
+            return Err(GatewayError::Protocol);
+        }
+        let aad = FrameAadV1 {
+            crypto_suite: CryptoSuite::Suite0001,
+            frame_type: FrameType::AcpTransportFrame,
+            flags: frame.flags,
+            message_id: frame
+                .message_id
+                .as_slice()
+                .try_into()
+                .map_err(|_| GatewayError::Protocol)?,
+            channel_id,
+            session_id,
+            sender_endpoint_id: session.material.recipient_hc_endpoint_id,
+            receiver_endpoint_id: *endpoint_id,
+            direction: Direction::HcToAba,
+            sequence: frame.sequence,
+            key_generation: frame.key_generation,
+            key_id: session.material.key_id,
+            created_at_ms: frame.created_at_ms,
+            ciphertext_length: u32::try_from(frame.ciphertext.len())
+                .map_err(|_| GatewayError::Protocol)?,
+        };
+        let keys = crate::crypto::key_package::derive_session_direction_keys(&session.material)?;
+        let plaintext = open_frame(
+            &keys.hc_to_aba,
+            &session.material.hc_to_aba_nonce_prefix,
+            &session.hc_signing_key,
+            &aad,
+            &frame.ciphertext,
+            &frame.signature,
+        )?;
+        let responses = deterministic_prompt_responses(&plaintext, &lower_hex(&session_id))?;
+        session.hc_frame_sequence = frame.sequence;
+        let mut packets = Vec::with_capacity(responses.len());
+        for response in responses {
+            packets.push(seal_aba_frame(
+                session,
+                endpoint_id,
+                identity,
+                channel_id,
+                &response,
+                now_ms,
+            )?);
+        }
+        Ok(packets)
+    }
+}
+
+fn seal_aba_frame(
+    session: &mut LocalSession,
+    endpoint_id: &[u8; 16],
+    identity: &EndpointIdentity,
+    channel_id: [u8; 16],
+    plaintext: &[u8],
+    now_ms: i64,
+) -> Result<Vec<u8>, GatewayError> {
+    session.aba_frame_sequence = session
+        .aba_frame_sequence
+        .checked_add(1)
+        .ok_or(GatewayError::Protocol)?;
+    let message_id = random_array::<16>();
+    let aad = FrameAadV1 {
+        crypto_suite: CryptoSuite::Suite0001,
+        frame_type: FrameType::AcpTransportFrame,
+        flags: 0,
+        message_id,
+        channel_id,
+        session_id: session.material.session_id,
+        sender_endpoint_id: *endpoint_id,
+        receiver_endpoint_id: session.material.recipient_hc_endpoint_id,
+        direction: Direction::AbaToHc,
+        sequence: session.aba_frame_sequence,
+        key_generation: session.material.generation,
+        key_id: session.material.key_id,
+        created_at_ms: now_ms,
+        ciphertext_length: 0,
+    };
+    let keys = crate::crypto::key_package::derive_session_direction_keys(&session.material)?;
+    let protected = seal_frame(
+        &keys.aba_to_hc,
+        &session.material.aba_to_hc_nonce_prefix,
+        identity.signing_key(),
+        aad,
+        plaintext,
+    )?;
+    Ok(WirePacket {
+        wire_major: 1,
+        wire_minor: 0,
+        packet_id: random_array::<16>().to_vec(),
+        body: Some(wire_packet::Body::Encrypted(EncryptedFrame {
+            crypto_suite_id: 1,
+            frame_type: WireFrameType::AcpTransportFrame as i32,
+            flags: 0,
+            message_id: message_id.to_vec(),
+            channel_id: channel_id.to_vec(),
+            session_id: session.material.session_id.to_vec(),
+            sender_endpoint_id: endpoint_id.to_vec(),
+            receiver_endpoint_id: session.material.recipient_hc_endpoint_id.to_vec(),
+            direction: WireDirection::AbaToHc as i32,
+            sequence: session.aba_frame_sequence,
+            key_generation: session.material.generation,
+            key_id: session.material.key_id.to_vec(),
+            created_at_ms: now_ms,
+            ciphertext: protected.ciphertext,
+            signature: protected.signature.to_vec(),
+        })),
+    }
+    .encode_to_vec())
+}
+
+fn deterministic_prompt_responses(
+    plaintext: &[u8],
+    expected_session_id: &str,
+) -> Result<Vec<Vec<u8>>, GatewayError> {
+    if plaintext.is_empty() || plaintext.len() > 64 * 1024 {
+        return Err(GatewayError::Protocol);
+    }
+    let request: serde_json::Value =
+        serde_json::from_slice(plaintext).map_err(|_| GatewayError::Protocol)?;
+    if request.get("jsonrpc").and_then(serde_json::Value::as_str) != Some("2.0")
+        || request.get("method").and_then(serde_json::Value::as_str) != Some("session/prompt")
+    {
+        return Err(GatewayError::Protocol);
+    }
+    let request_id = request
+        .get("id")
+        .filter(|value| !value.is_null())
+        .cloned()
+        .ok_or(GatewayError::Protocol)?;
+    let prompt: PromptRequest = serde_json::from_value(
+        request
+            .get("params")
+            .cloned()
+            .ok_or(GatewayError::Protocol)?,
+    )
+    .map_err(|_| GatewayError::Protocol)?;
+    if prompt.session_id.0.as_ref() != expected_session_id {
+        return Err(GatewayError::Protocol);
+    }
+    let prompt_text = prompt
+        .prompt
+        .iter()
+        .filter_map(|block| match block {
+            ContentBlock::Text(text) => Some(text.text.as_str()),
+            _ => None,
+        })
+        .collect::<Vec<_>>()
+        .join("\n");
+    if prompt_text.is_empty() || prompt_text.len() > 16 * 1024 {
+        return Err(GatewayError::Protocol);
+    }
+    let notification = SessionNotification::new(
+        prompt.session_id,
+        SessionUpdate::AgentMessageChunk(ContentChunk::new(ContentBlock::Text(TextContent::new(
+            format!("Harness deterministic agent received: {prompt_text}"),
+        )))),
+    );
+    let update = serde_json::to_vec(&serde_json::json!({
+        "jsonrpc": "2.0",
+        "method": "session/update",
+        "params": notification,
+    }))
+    .map_err(|_| GatewayError::Protocol)?;
+    let response = serde_json::to_vec(&serde_json::json!({
+        "jsonrpc": "2.0",
+        "id": request_id,
+        "result": PromptResponse::new(StopReason::EndTurn),
+    }))
+    .map_err(|_| GatewayError::Protocol)?;
+    Ok(vec![update, response])
+}
+
+fn lower_hex(value: &[u8]) -> String {
+    let mut output = String::with_capacity(value.len() * 2);
+    for byte in value {
+        use std::fmt::Write as _;
+        let _ = write!(output, "{byte:02x}");
+    }
+    output
 }
 
 fn validate_open_request(request: &OpenTunnelRequest, now_ms: i64) -> Result<(), GatewayError> {
@@ -741,6 +977,33 @@ mod tests {
         assert_eq!(result.stable_error_code, "RUNTIME_NOT_ALLOWED");
         assert_eq!(result.accepted_authorization_revision, 0);
         assert!(result.negotiated_capability_hints.is_empty());
+        Ok(())
+    }
+
+    #[test]
+    fn emits_stable_acp_prompt_update_and_response() -> Result<(), Box<dyn std::error::Error>> {
+        let session_id = "01010101010101010101010101010101";
+        let prompt = PromptRequest::new(
+            session_id,
+            vec![ContentBlock::Text(TextContent::new("hello"))],
+        );
+        let request = serde_json::to_vec(&serde_json::json!({
+            "jsonrpc": "2.0",
+            "id": "request-1",
+            "method": "session/prompt",
+            "params": prompt,
+        }))?;
+        let responses = deterministic_prompt_responses(&request, session_id)?;
+        assert_eq!(responses.len(), 2);
+        let update: serde_json::Value = serde_json::from_slice(&responses[0])?;
+        let completed: serde_json::Value = serde_json::from_slice(&responses[1])?;
+        assert_eq!(update["method"], "session/update");
+        assert_eq!(
+            update["params"]["update"]["sessionUpdate"],
+            "agent_message_chunk"
+        );
+        assert_eq!(completed["id"], "request-1");
+        assert_eq!(completed["result"]["stopReason"], "end_turn");
         Ok(())
     }
 

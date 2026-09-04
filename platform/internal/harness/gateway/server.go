@@ -49,6 +49,7 @@ type Persistence interface {
 	ListEndpoints(context.Context, string, string, int) ([]domain.Endpoint, error)
 	PutEndpointSessionKeyPackage(context.Context, string, string, domain.SessionKeyPackage) (domain.SessionKeyPackage, bool, error)
 	AcknowledgeAndActivateSessionKeyPackage(context.Context, domain.ID, domain.ID, string, string, time.Time) (domain.Session, error)
+	PutEndpointFrame(context.Context, domain.EncryptedFrame) (bool, error)
 	UseDPoPReplay(context.Context, string, string, time.Time, time.Time, int64) error
 }
 

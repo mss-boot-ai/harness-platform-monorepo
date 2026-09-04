@@ -5,6 +5,7 @@ export * from './dpop';
 export * from './identity';
 export * from './hpke';
 export * from './session-key-package';
+export * from './frame';
 export * from './registration';
 export * from './secure-store';
 export * from './generated/mss/awp/v1/wire_pb';

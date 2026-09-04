@@ -1,5 +1,7 @@
 import {
   createSessionKeyPackageAckPacket,
+  createHCToABAFramePacket,
+  openABAToHCFramePacket,
   openSessionKeyPackagePacket,
   type EndpointIdentity,
   type OpenedSessionKeyPackage,
@@ -35,11 +37,15 @@ export function SessionSetup({
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [keyReady, setKeyReady] = useState(false);
+  const [prompt, setPrompt] = useState('请回复这条 Harness 加密测试消息。');
+  const [messages, setMessages] = useState<readonly string[]>([]);
   const pendingPackets = useRef<Uint8Array[]>([]);
   const processing = useRef<Promise<void>>(Promise.resolve());
   const openedPackage = useRef<OpenedSessionKeyPackage | null>(null);
   const lastPackageSequence = useRef(0n);
   const outboundControlSequence = useRef(0n);
+  const outboundFrameSequence = useRef(0n);
+  const inboundFrameSequence = useRef(0n);
 
   useEffect(() => {
     const processPacket = async (encoded: Uint8Array) => {
@@ -58,35 +64,58 @@ export function SessionSetup({
         identity,
         sessionId: session.sessionId,
       });
-      if (opened === null) {
+      if (opened !== null) {
+        if (opened.controlSequence <= lastPackageSequence.current) {
+          throw new Error('SessionKeyPackage control sequence replayed');
+        }
+        zeroOpenedPackage(openedPackage.current);
+        openedPackage.current = opened;
+        lastPackageSequence.current = opened.controlSequence;
+        setKeyReady(true);
+        outboundControlSequence.current += 1n;
+        const acknowledgment = await createSessionKeyPackageAckPacket(identity, {
+          abaEndpointId: aba.id,
+          controlSequence: outboundControlSequence.current,
+          hcEndpointId: registration.endpointId,
+          keyPackageId: opened.keyPackageId,
+          sessionId: session.sessionId,
+        });
+        if (connection.socket.readyState !== WebSocket.OPEN) {
+          throw new Error('Gateway connection closed before key acknowledgment');
+        }
+        connection.socket.send(new Uint8Array(acknowledgment).buffer);
+        for (let attempt = 0; attempt < POLL_ATTEMPTS; attempt += 1) {
+          const current = await getEndpointSession(session.sessionId);
+          setSession(current);
+          if (current.status === 'ACTIVE' || current.status === 'FAILED') {
+            break;
+          }
+          await new Promise((resolve) => setTimeout(resolve, 250));
+        }
         return;
       }
-      if (opened.controlSequence <= lastPackageSequence.current) {
-        throw new Error('SessionKeyPackage control sequence replayed');
+      if (openedPackage.current === null) {
+        return;
       }
-      zeroOpenedPackage(openedPackage.current);
-      openedPackage.current = opened;
-      lastPackageSequence.current = opened.controlSequence;
-      setKeyReady(true);
-      outboundControlSequence.current += 1n;
-      const acknowledgment = await createSessionKeyPackageAckPacket(identity, {
-        abaEndpointId: aba.id,
-        controlSequence: outboundControlSequence.current,
-        hcEndpointId: registration.endpointId,
-        keyPackageId: opened.keyPackageId,
-        sessionId: session.sessionId,
-      });
-      if (connection.socket.readyState !== WebSocket.OPEN) {
-        throw new Error('Gateway connection closed before key acknowledgment');
-      }
-      connection.socket.send(new Uint8Array(acknowledgment).buffer);
-      for (let attempt = 0; attempt < POLL_ATTEMPTS; attempt += 1) {
-        const current = await getEndpointSession(session.sessionId);
-        setSession(current);
-        if (current.status === 'ACTIVE' || current.status === 'FAILED') {
-          break;
+      const frame = await openABAToHCFramePacket(
+        aba.signingPublicJwk,
+        openedPackage.current,
+        { abaEndpointId: aba.id, hcEndpointId: registration.endpointId, sessionId: session.sessionId },
+        encoded,
+      );
+      if (frame !== null) {
+        if (frame.sequence !== inboundFrameSequence.current + 1n) {
+          throw new Error('ABA frame sequence is not contiguous');
         }
-        await new Promise((resolve) => setTimeout(resolve, 250));
+        inboundFrameSequence.current = frame.sequence;
+        const value = JSON.parse(new TextDecoder().decode(frame.plaintext)) as Record<string, unknown>;
+        const update = value.params as { update?: { content?: { text?: unknown } } } | undefined;
+        const text = update?.update?.content?.text;
+        if (typeof text === 'string') {
+          setMessages((current) => [...current, `ABA: ${text}`]);
+        } else if (value.result !== undefined) {
+          setMessages((current) => [...current, 'ABA: turn completed']);
+        }
       }
     };
     const schedule = (encoded: Uint8Array) => {
@@ -146,6 +175,9 @@ export function SessionSetup({
     zeroOpenedPackage(openedPackage.current);
     openedPackage.current = null;
     lastPackageSequence.current = 0n;
+    outboundFrameSequence.current = 0n;
+    inboundFrameSequence.current = 0n;
+    setMessages([]);
     try {
       let current = await createEndpointSession(identity, registration, {
         abaEndpointId: selectedABA,
@@ -161,6 +193,43 @@ export function SessionSetup({
       }
     } catch (cause) {
       setError(cause instanceof HcApiError ? `${cause.message}（${cause.code}）` : 'Session 创建失败。');
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const sendPrompt = async () => {
+    if (session === null || openedPackage.current === null || prompt.trim() === '') {
+      return;
+    }
+    const aba = endpoints.find((endpoint) => endpoint.id === session.abaEndpointId);
+    if (aba === undefined || connection.socket.readyState !== WebSocket.OPEN) {
+      setError('ABA 或 Gateway 连接不可用。');
+      return;
+    }
+    setBusy(true);
+    setError(null);
+    try {
+      outboundFrameSequence.current += 1n;
+      const text = prompt.trim();
+      const request = textEncoder.encode(JSON.stringify({
+        id: crypto.randomUUID(),
+        jsonrpc: '2.0',
+        method: 'session/prompt',
+        params: { prompt: [{ text, type: 'text' }], sessionId: session.sessionId },
+      }));
+      const packet = await createHCToABAFramePacket(
+        identity,
+        openedPackage.current,
+        { abaEndpointId: aba.id, hcEndpointId: registration.endpointId, sessionId: session.sessionId },
+        request,
+        outboundFrameSequence.current,
+      );
+      connection.socket.send(new Uint8Array(packet).buffer);
+      setMessages((current) => [...current, `HC: ${text}`]);
+      setPrompt('');
+    } catch {
+      setError('加密 Prompt 发送失败。');
     } finally {
       setBusy(false);
     }
@@ -213,10 +282,28 @@ export function SessionSetup({
           {keyReady ? ' · HPKE KEY READY' : ''}
         </p>
       )}
+      {keyReady ? (
+        <div className="prompt-panel">
+          <label>
+            加密 ACP Prompt
+            <textarea value={prompt} onChange={(event) => setPrompt(event.target.value)} />
+          </label>
+          <button className="primary-button" type="button" disabled={busy || prompt.trim() === ''} onClick={() => void sendPrompt()}>
+            {busy ? '正在发送…' : '发送加密 Prompt'}
+          </button>
+          {messages.length === 0 ? null : (
+            <div className="message-list" aria-live="polite">
+              {messages.map((message, index) => <p key={`${index}-${message}`}>{message}</p>)}
+            </div>
+          )}
+        </div>
+      ) : null}
       {error === null ? null : <p className="error-banner" role="alert">{error}</p>}
     </section>
   );
 }
+
+const textEncoder = new TextEncoder();
 
 function zeroOpenedPackage(value: OpenedSessionKeyPackage | null): void {
   if (value === null) {

@@ -58,6 +58,17 @@ Ticket 原子单次消费。服务端选择 `mss.awp.v1` 作为响应子协议�
 - Sequence 从 1 开始；0 表示未分配/不适用。
 - 全零 16 字节 ID 只允许在协议明确标记为“不适用”的连接级消息中出现。
 
+MVP 单 Participant 的 `channel_id` 使用以下确定性值，双方不通过明文控制面另行协商：
+
+```text
+channel_id = first_16_bytes(SHA256(
+  utf8("mss-awp-channel-v1")
+  || session_id[16]
+  || aba_endpoint_id[16]
+  || hc_endpoint_id[16]
+))
+```
+
 ## 4. 顶层 Packet
 
 Schema 以 Protobuf 3 定义，逻辑结构：
@@ -412,6 +423,8 @@ offset size field
 > 注意：最初设计草案曾口头称固定 128 字节；本文的逐字段计算是权威值 148 字节。代码和测试向量必须使用 148。
 
 AAD 不包含 Signature 和 Ciphertext 本身，但包含 Ciphertext Length。
+
+Platform 的不可变 Frame `content_hash` 固定为 `SHA256(canonical_aad_v1 || ciphertext || signature)`，只用于存储幂等/冲突比较，不替代 Endpoint Signature。
 
 ## 9. AEAD 与签名
 
