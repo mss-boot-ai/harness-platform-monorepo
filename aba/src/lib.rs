@@ -14,7 +14,7 @@ pub mod wire;
 
 #[cfg(test)]
 mod protocol_tests {
-    use base64::{Engine as _, engine::general_purpose::STANDARD};
+    use base64::{Engine as _, engine::general_purpose::STANDARD_NO_PAD};
     use prost::Message as _;
     use serde::Deserialize;
 
@@ -37,7 +37,11 @@ mod protocol_tests {
             "../../protocol/testdata/v1/wire-server-challenge.json"
         ))?;
         assert!(vector.fixture_use.starts_with("TEST ONLY"));
-        let packet = WirePacket::decode(STANDARD.decode(vector.wire_packet_base64)?.as_slice())?;
+        let packet = WirePacket::decode(
+            STANDARD_NO_PAD
+                .decode(vector.wire_packet_base64)?
+                .as_slice(),
+        )?;
         assert_eq!(packet.wire_major, vector.wire_major);
         let challenge = match packet.body {
             Some(wire_packet::Body::ServerChallenge(value)) => value,
