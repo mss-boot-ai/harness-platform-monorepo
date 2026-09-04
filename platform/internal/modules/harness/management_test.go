@@ -10,6 +10,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -22,6 +23,8 @@ import (
 	"gorm.io/gorm"
 	"gorm.io/gorm/logger"
 )
+
+var managementRequestSequence atomic.Uint64
 
 func managementRouter(t *testing.T, principal security.Verifier) (*gin.Engine, *store.Store) {
 	t.Helper()
@@ -36,9 +39,10 @@ func managementRouter(t *testing.T, principal security.Verifier) (*gin.Engine, *
 	if err != nil {
 		t.Fatalf("sql DB: %v", err)
 	}
+	sqlDB.SetMaxOpenConns(1)
 	t.Cleanup(func() { _ = sqlDB.Close() })
-	if err := store.CreateSchema(db); err != nil {
-		t.Fatalf("CreateSchema: %v", err)
+	if err := store.CreateAllSchema(db); err != nil {
+		t.Fatalf("CreateAllSchema: %v", err)
 	}
 	persistence, err := store.New(db)
 	if err != nil {
@@ -97,8 +101,19 @@ func managementEndpoint(id, family, key byte, kind domain.EndpointType, now time
 
 func requestJSON(t *testing.T, router http.Handler, method, path, body string) *httptest.ResponseRecorder {
 	t.Helper()
+	key := ""
+	if method != http.MethodGet && method != http.MethodHead && method != http.MethodOptions {
+		key = fmt.Sprintf("test-idempotency-%016x", managementRequestSequence.Add(1))
+	}
+	return requestJSONWithKey(router, method, path, body, key)
+}
+
+func requestJSONWithKey(router http.Handler, method, path, body, idempotencyKey string) *httptest.ResponseRecorder {
 	request := httptest.NewRequest(method, path, strings.NewReader(body))
 	request.Header.Set("Content-Type", "application/json")
+	if idempotencyKey != "" {
+		request.Header.Set("Idempotency-Key", idempotencyKey)
+	}
 	response := httptest.NewRecorder()
 	router.ServeHTTP(response, request)
 	return response
@@ -177,7 +192,7 @@ func TestManagementEndpointSessionAndDeliveryLifecycle(t *testing.T) {
 	if suspend.Code != http.StatusOK || !strings.Contains(suspend.Body.String(), string(domain.EndpointStatusSuspended)) {
 		t.Fatalf("suspend status = %d body=%s", suspend.Code, suspend.Body.String())
 	}
-	resume := requestJSON(t, router, http.MethodPost, "/api/harness/v1/endpoints/"+hc.ID.String()+"/resume", "")
+	resume := requestJSON(t, router, http.MethodPost, "/api/harness/v1/endpoints/"+hc.ID.String()+"/resume", "{}")
 	if resume.Code != http.StatusOK || !strings.Contains(resume.Body.String(), string(domain.EndpointStatusActive)) {
 		t.Fatalf("resume status = %d body=%s", resume.Code, resume.Body.String())
 	}
