@@ -60,7 +60,22 @@ worktree:      clean before this documentation change
 - `f2af0aded8949179488b25007e4686c3ca3affbc` 的 Run `33811823581` 仍失败；随后以 `816f2fc623267ce18c5799d4bb0431d50bef4c6a` 修复持久化行解码，Run `33812007872` 通过。
 - `6a222b004c247b1c69bc12cf419b3fd7606edc68` 的 Run `33812913067` 失败；随后以 `8c5f00f135acd914b7aa20702562c49f81affd9a` 改用公开 Store API 验证 tenant-scoped revoke，Run `33813060590` 通过。
 
-本次补日志前只读取并核对上述远端 CI 证据，没有在本地重新运行完整构建或测试。本工作日志自身的提交和 push 发生后，必须等待该新 SHA 的 CI 结果，不能沿用 `8c5f00f` 的成功结论。
+本次补日志前只读取并核对上述远端 CI 证据，没有在本地重新运行完整构建或测试。首次工作日志补录提交为 `d642916feb6eb9c96e1fb8130d1005609ea148ad`，已 push；对应 GitHub Actions Run `33830253046` 的五个 Job 全部完成并为 `success`。其中 HC 仍是缺少 Workspace 时的显式跳过，不提升其验证状态。
+
+### Draft PR 检查点
+
+```text
+PR:       #1
+URL:      https://github.com/mss-boot-ai/harness-platform-monorepo/pull/1
+base:     main
+head:     codex/bootstrap-harness-platform-foundation
+state:    OPEN / DRAFT
+merge:    not performed
+```
+
+PR 标题为 `feat(platform): checkpoint foundation and M1 backend`。正文明确区分已包含、已验证和未实现范围，并要求优先审查 Thin Host 边界、Migration/Store 事务、owner/tenant 授权、安全投影和后续分支边界。PR 的目的仅是建立可审查、可恢复检查点；用户没有授权合并，且当前实现不满足 MVP Definition of Done。
+
+本次记录 PR 元数据的跟进文档提交将在 push 后获得新的 SHA；该 SHA 必须使用新的 CI Run 验证，不能直接继承 `d642916feb6eb9c96e1fb8130d1005609ea148ad` 的结果。
 
 ### 当前问题与未完成项
 
@@ -83,9 +98,9 @@ worktree:      clean before this documentation change
 
 ### 下一安全检查点
 
-1. 提交并 push 本工作日志，等待新 SHA 的完整 CI。
-2. 创建面向 `main` 的 Draft PR，标题和正文明确这是 Foundation + Platform M1 后端检查点，不是 MVP 完成 PR；不自动合并。
-3. 在 PR 中优先审查 Thin Host 边界、Migration/Store 事务、owner/tenant 授权和管理 API 安全投影。
+1. 提交并 push 本次 PR 元数据更新，等待新 SHA 的完整 CI，并让 Draft PR 显示最新结果。
+2. 在 PR 中优先审查 Thin Host 边界、Migration/Store 事务、owner/tenant 授权和管理 API 安全投影；保持 Draft，不自动合并。
+3. 单独校正 `docs/memory/project-memory.md` 中已被 ADR-0004/MVP 文档取代的 vendored/Phase 0 状态。
 4. 后续用独立提交补齐 M1 Audit、Idempotency、Key Package 持久化与 Admin 页面，再决定合并检查点还是进入 M2。
 5. M2 从共享 JWK/ES256/DPoP Golden Vector 开始，不先搭建可绕过身份验证的 WSS 通道。
 
