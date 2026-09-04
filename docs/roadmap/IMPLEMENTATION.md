@@ -84,7 +84,7 @@ feat(platform): persist harness identity and relay state
 
 ## 5. M2：Endpoint 身份、DPoP 与 Gateway
 
-**当前状态**：In progress；JWK/ES256/DPoP、HC H5 注册、ABA Enrollment、HC/ABA Refresh、共享 Replay/Nonce、原生/浏览器隔离 Ticket、持久 Connection Generation、Trust Pin 与两端签名 WSS Challenge 已完成，证据见 [`verification/2026-09-05-hc-registration.md`](verification/2026-09-05-hc-registration.md)、[`verification/2026-09-05-gateway-handshake.md`](verification/2026-09-05-gateway-handshake.md) 和 [`verification/2026-09-05-aba-enrollment-connector.md`](verification/2026-09-05-aba-enrollment-connector.md)。生产 Signer、常驻 ABA 事件循环、Heartbeat、活动连接 Fencing/Kick 尚未完成。
+**当前状态**：In progress；JWK/ES256/DPoP、HC H5 注册、ABA Enrollment、HC/ABA Refresh、共享 Replay/Nonce、原生/浏览器隔离 Ticket、持久 Connection Generation、Trust Pin、两端签名 WSS Challenge、单实例活动连接 Fencing/Heartbeat Ping 与常驻 ABA 控制循环已完成，证据见 [`verification/2026-09-05-hc-registration.md`](verification/2026-09-05-hc-registration.md)、[`verification/2026-09-05-gateway-handshake.md`](verification/2026-09-05-gateway-handshake.md)、[`verification/2026-09-05-aba-enrollment-connector.md`](verification/2026-09-05-aba-enrollment-connector.md) 和 [`verification/2026-09-05-session-control.md`](verification/2026-09-05-session-control.md)。生产 Signer、AWP Heartbeat Control、重连退避和跨实例连接目录/Kick 尚未完成。
 
 ### 2.1 JWK/Signature
 
@@ -105,6 +105,8 @@ Go/Rust/TS 实现 RFC 7638、ES256 P1363 low-S 和固定向量。
 每个切片独立 commit/push 后验证。
 
 ## 6. M3：Session、HPKE 与 Opaque Relay
+
+**当前状态**：In progress；HC DPoP Session Create、Session/Audit/Idempotency 原子事务、Platform/ABA 双向签名 OpenTunnel、ABA 本地 Runtime/Workspace 策略与真实 H5 `WAITING_KEY` 已验证，证据见 [`verification/2026-09-05-session-control.md`](verification/2026-09-05-session-control.md)。ACP Process、HPKE/KDF/AEAD、Key Package、Opaque Relay 与 Prompt/Response 尚未完成。
 
 ### 3.1 Runtime/Workspace
 

@@ -6,6 +6,18 @@
 
 ---
 
+## 2026-09-05 03:25 +08:00 — Session Control 与 ABA 本地策略闭环
+
+实现并验证 READY 活动连接目录、Generation Fencing、Heartbeat Ping/LastSeen、HC DPoP 在线 ABA Discovery、Session/Audit/Idempotency 原子创建、Platform-signed OpenTunnelRequest、ABA 本地 Runtime/Workspace 策略、ABA-signed OpenTunnelResult 和 H5 Session UI。主要提交从 `f2a8cb8580831f3caefb48879ee6d5dbf32ab40e` 到 `3561f04024743c9c76fe48160c8dceb98f814b9a`；最终 push/PR CI `33910804383`/`33910809172` 全部成功。
+
+内置浏览器真实恢复已过期 Access、发现在线 ABA `3f32d562...`，创建 Session `6618463385...`；常驻 ABA 验证签名与本地 `test-agent`/`harness-platform` 白名单后返回 ACCEPTED，Gateway 验签并把状态推动到 `WAITING_KEY`。ABA/H5 generation 分别为 5/10。
+
+真实联调依次发现并修复：Admin Session 过期导致 ABA 列表不可用、重连复用过期 Access、同源 GET 缺少 Origin、并发 DPoP 操作覆盖 Nonce CAS。最终实现不放宽安全校验，而是把 Discovery 放入 HC DPoP 数据面、重连前 Refresh、使用 POST 保留 Origin，并串行化 nonce challenge/proof。
+
+详细命令、失败链和边界见 `docs/roadmap/verification/2026-09-05-session-control.md`。当前只是 `WAITING_KEY`；下一阶段实现 RFC 9180 HPKE、方向 KDF/AEAD、Key Package 和 ACP Test Agent，不能把本地策略接受描述为 ACP Session 已可用。
+
+---
+
 ## 2026-09-05 02:35 +08:00 — ABA Enrollment、认证 Connector 与 HC/ABA 双端 READY
 
 实现并验证 loopback-only ABA 开发 KeyStore、Device Enrollment、原生 Refresh、原生 Ticket Origin、Rust Protobuf Connector、Trust Manifest 验签/Root Pin 与签名 WSS Challenge/READY。主要提交从 `1c3c9b42d3dae97903ec61287fa17895ea350655` 到 `fa9fe7abb26ded4aee12b8690fe3cdde2407eb6d`；最终 push/PR CI `33906015241`/`33906021011` 的五个 Job 均成功。
