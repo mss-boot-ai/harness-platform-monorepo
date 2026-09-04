@@ -193,22 +193,35 @@ export function SessionSetup({
       return;
     }
     outboundControlSequence.current += 1n;
-    void createHCResumeStatePacket(
-      identity,
-      {
-        abaEndpointId: session.abaEndpointId,
-        hcEndpointId: registration.endpointId,
-        sessionId: session.sessionId,
-      },
-      outboundControlSequence.current,
-      inboundFrameSequence.current,
-      openedPackage.current.material.generation,
-    ).then((packet) => {
+    const binding = {
+      abaEndpointId: session.abaEndpointId,
+      hcEndpointId: registration.endpointId,
+      sessionId: session.sessionId,
+    };
+    const resume = async () => {
+      const packet = await createHCResumeStatePacket(
+        identity,
+        binding,
+        outboundControlSequence.current,
+        inboundFrameSequence.current,
+        openedPackage.current?.material.generation,
+      );
       if (connection.socket.readyState !== WebSocket.OPEN) {
         throw new Error('Gateway connection closed before ResumeState');
       }
       connection.socket.send(new Uint8Array(packet).buffer);
-    }).catch(() => setError('Session 重连恢复失败。'));
+      if (inboundFrameSequence.current > 0n && openedPackage.current !== null) {
+        const acknowledgment = await createHCAckFramePacket(
+          identity,
+          binding,
+          Direction.ABA_TO_HC,
+          inboundFrameSequence.current,
+          openedPackage.current.material.generation,
+        );
+        connection.socket.send(new Uint8Array(acknowledgment).buffer);
+      }
+    };
+    void resume().catch(() => setError('Session 重连恢复失败。'));
   }, [connection, identity, registration.endpointId, session]);
 
   useEffect(() => () => zeroOpenedPackage(openedPackage.current), []);

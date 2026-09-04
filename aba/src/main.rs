@@ -219,13 +219,8 @@ fn execute(cli: Cli) -> Result<(), Box<dyn std::error::Error>> {
             let journal = Journal::open(journal_path, config.limits.journal_max_bytes)?;
             let store = DevFileKeyStore::new(store, &config.platform.url, insecure_dev_keystore)?;
             let identity = store.load()?;
-            let ready =
-                GatewayClient::new(config.platform.url.clone())?.connect(&identity, &store)?;
-            println!(
-                "gateway ready: endpoint {} generation {}",
-                ready.endpoint_id, ready.connection_generation
-            );
-            ready.run(&identity, &config, journal)?;
+            GatewayClient::new(config.platform.url.clone())?
+                .run(&identity, &store, &config, journal)?;
         }
     }
     Ok(())

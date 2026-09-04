@@ -1,4 +1,5 @@
-use std::time::{Duration, SystemTime, UNIX_EPOCH};
+use std::thread;
+use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use base64::{Engine as _, engine::general_purpose::URL_SAFE_NO_PAD};
 use prost::Message as _;
@@ -98,6 +99,43 @@ impl GatewayClient {
         let trust = self.fetch_trust(store)?;
         let ticket = self.issue_ticket(identity, &credentials)?;
         self.open_websocket(identity, &credentials, &trust, ticket)
+    }
+
+    pub fn run(
+        &self,
+        identity: &EndpointIdentity,
+        store: &DevFileKeyStore,
+        config: &AgentConfig,
+        journal: Journal,
+    ) -> Result<(), GatewayError> {
+        let mut controls = ControlState::new(journal);
+        let mut retry_attempt = 0_u32;
+        loop {
+            let ready = match self.connect(identity, store) {
+                Ok(ready) => ready,
+                Err(error) if retryable_connect_error(&error) => {
+                    retry_attempt = retry_attempt.saturating_add(1);
+                    thread::sleep(reconnect_delay(retry_attempt));
+                    continue;
+                }
+                Err(error) => return Err(error),
+            };
+            println!(
+                "gateway ready: endpoint {} generation {}",
+                ready.endpoint_id, ready.connection_generation
+            );
+            let connected_at = Instant::now();
+            match ready.run_once(identity, config, &mut controls) {
+                Ok(()) | Err(GatewayError::WebSocket(_)) => {}
+                Err(error) => return Err(error),
+            }
+            if connected_at.elapsed() >= Duration::from_secs(30) {
+                retry_attempt = 0;
+            } else {
+                retry_attempt = retry_attempt.saturating_add(1);
+            }
+            thread::sleep(reconnect_delay(retry_attempt));
+        }
     }
 
     fn refresh(
@@ -372,14 +410,31 @@ impl GatewayClient {
     }
 }
 
+fn retryable_connect_error(error: &GatewayError) -> bool {
+    match error {
+        GatewayError::Http(_) | GatewayError::WebSocket(_) => true,
+        GatewayError::Rejected(status) => status.is_server_error(),
+        _ => false,
+    }
+}
+
+fn reconnect_delay(attempt: u32) -> Duration {
+    let maximum_ms = (1_u64 << attempt.min(5)).saturating_mul(1_000).min(30_000);
+    Duration::from_millis(OsRng.next_u64() % (maximum_ms + 1))
+}
+
 impl ReadyConnection {
-    pub fn run(
+    fn run_once(
         mut self,
         identity: &EndpointIdentity,
         config: &AgentConfig,
-        journal: Journal,
+        controls: &mut ControlState,
     ) -> Result<(), GatewayError> {
-        let mut controls = ControlState::new(journal);
+        for packet in
+            controls.begin_connection(&self.endpoint_id_bytes, identity, SystemTime::now())?
+        {
+            self.socket.send(Message::binary(packet))?;
+        }
         loop {
             let message = match self.socket.read() {
                 Ok(message) => message,

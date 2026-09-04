@@ -23,10 +23,10 @@ use crate::journal::{
 };
 use crate::process::AgentProcess;
 use crate::protocol::awpv1::{
-    AckFrame, CloseTunnelRequest, CloseTunnelResult, CloseTunnelStatus, ControlFrame, ControlType,
-    Direction as WireDirection, EncryptedFrame, FrameType as WireFrameType, OpenTunnelRequest,
-    OpenTunnelResult, OpenTunnelStatus, SessionKeyPackage, SessionKeyPackageAck, WirePacket,
-    wire_packet,
+    AckFrame, ChannelCursor, CloseTunnelRequest, CloseTunnelResult, CloseTunnelStatus,
+    ControlFrame, ControlType, Direction as WireDirection, EncryptedFrame,
+    FrameType as WireFrameType, OpenTunnelRequest, OpenTunnelResult, OpenTunnelStatus, ResumeState,
+    SessionKeyPackage, SessionKeyPackageAck, WirePacket, wire_packet,
 };
 use crate::wire::{CryptoSuite, Direction, FrameAadV1, FrameType};
 
@@ -74,6 +74,68 @@ impl ControlState {
             sessions: HashMap::new(),
             journal,
         }
+    }
+
+    pub fn begin_connection(
+        &mut self,
+        endpoint_id: &[u8; 16],
+        identity: &EndpointIdentity,
+        now: SystemTime,
+    ) -> Result<Vec<Vec<u8>>, GatewayError> {
+        self.platform_inbound_sequence = 0;
+        self.outbound_sequence = 0;
+        let mut cursors = Vec::with_capacity(self.sessions.len());
+        for session in self.sessions.values().filter(|session| session.active) {
+            cursors.push(ChannelCursor {
+                channel_id: session_channel_id(
+                    &session.material.session_id,
+                    endpoint_id,
+                    &session.material.recipient_hc_endpoint_id,
+                )?
+                .to_vec(),
+                direction: WireDirection::HcToAba as i32,
+                highest_contiguous_sequence: session.hc_frame_sequence,
+                received_ranges: Vec::new(),
+                key_generation: session.material.generation,
+            });
+        }
+        if cursors.len() > 256 {
+            return Err(GatewayError::ProtocolStage("ResumeState cursor limit"));
+        }
+        let now_ms = unix_millis(now)?;
+        let mut packets = Vec::new();
+        if !cursors.is_empty() {
+            let payload = ResumeState { cursors }.encode_to_vec();
+            packets.push(self.signed_control(
+                endpoint_id,
+                &[0; 16],
+                ControlType::ResumeState,
+                payload,
+                identity,
+                now_ms,
+            )?);
+        }
+        for session in self.sessions.values().filter(|session| session.active) {
+            let channel_id = session_channel_id(
+                &session.material.session_id,
+                endpoint_id,
+                &session.material.recipient_hc_endpoint_id,
+            )?;
+            if session.hc_frame_sequence > 0 {
+                packets.push(signed_frame_ack(
+                    session,
+                    endpoint_id,
+                    identity,
+                    channel_id,
+                    now_ms,
+                )?);
+            }
+            packets.extend(
+                self.journal
+                    .unacknowledged(session.material.session_id, Direction::AbaToHc as u8)?,
+            );
+        }
+        Ok(packets)
     }
 
     pub fn handle(
@@ -629,10 +691,9 @@ impl ControlState {
             .as_slice()
             .try_into()
             .map_err(|_| GatewayError::Protocol)?;
-        let session = self
-            .sessions
-            .get(&session_id)
-            .ok_or(GatewayError::ProtocolStage("ACK session"))?;
+        let Some(session) = self.sessions.get(&session_id) else {
+            return Ok(Vec::new());
+        };
         let channel_id = session_channel_id(
             &session_id,
             endpoint_id,
