@@ -84,7 +84,7 @@ feat(platform): persist harness identity and relay state
 
 ## 5. M2：Endpoint 身份、DPoP 与 Gateway
 
-**当前状态**：In progress；JWK/ES256/DPoP primitives 与 HC H5 Human-bound 注册已完成，证据见 [`verification/2026-09-05-hc-registration.md`](verification/2026-09-05-hc-registration.md)。Refresh rotation、共享 Replay/Nonce、Ticket/WSS 尚未完成。
+**当前状态**：In progress；JWK/ES256/DPoP、HC H5 注册、Refresh、共享 Replay/Nonce、Ticket 与签名 WSS Challenge 已完成，证据见 [`verification/2026-09-05-hc-registration.md`](verification/2026-09-05-hc-registration.md) 和 [`verification/2026-09-05-gateway-handshake.md`](verification/2026-09-05-gateway-handshake.md)。生产 Signer、持久 Fencing 与 ABA Connector 尚未完成。
 
 ### 2.1 JWK/Signature
 
