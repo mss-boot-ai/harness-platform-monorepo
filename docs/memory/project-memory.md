@@ -14,8 +14,8 @@ draft PR:        #1
 M1 continuation starting SHA:
                  98f8b3f76326b2dac2e2febe9bc527dbcb5199e0
 latest verified remote implementation SHA:
-                 766a55ceb1da979b67d279f57392514b33d5b95b
-latest paired CI: push 33899194977 / PR 33899198436
+                 904ab904c7e99e657a446582c1703fe650116dfc
+latest paired CI: push 33899933660 / PR 33899931627
 ```
 
 本项目用于构建一个可从 Web、微信小程序和后续原生客户端安全控制本地 ACP 编程 Agent 的平台。聊天中的完成声明不是证据；当前文件、远端提交、PR 和当前 SHA 的 CI 才是事实源。
@@ -132,13 +132,13 @@ Platform M1 已达到当前 Accepted M1 范围的实现与验证检查点；详�
 
 在此基础上，M2 已完成可独立验证的身份子切片：HC H5 workspace、本地不可导出 P-256 双密钥、IndexedDB `CryptoKey` 持久化、Suite 0001 三语言 JWK/ES256/DPoP 向量、nonce-bound DPoP primitives、ADR-0005 Human-bound 注册边界，以及真实 Browser Session → Challenge → Endpoint Registration。证据见 `docs/roadmap/verification/2026-09-05-hc-registration.md`。
 
-M2 Gateway 子切片也已形成真实 H5 链路：Refresh Family、共享 Replay/Nonce、DPoP Ticket、生成的 Go/TS Proto Binding、Root-signed Trust Manifest，以及 WSS ServerChallenge/ChallengeResponse/ConnectionReady。证据见 `docs/roadmap/verification/2026-09-05-gateway-handshake.md`。Gateway READY 后 Relay 仍失败关闭，因此不能描述为 ACP Session E2E。
+M2 Gateway 子切片也已形成真实 H5 链路：Refresh Family、共享 Replay/Nonce、DPoP Ticket、生成的 Go/TS Proto Binding、Root-signed Trust Manifest、持久 Connection Generation，以及 WSS ServerChallenge/ChallengeResponse/ConnectionReady。证据见 `docs/roadmap/verification/2026-09-05-gateway-handshake.md`。Gateway READY 后 Relay 仍失败关闭，因此不能描述为 ACP Session E2E。
 
 ## 9. 当前目标与缺口
 
 下一阶段按 M2/M3 安全依赖推进，同时优先建立可在浏览器调试的 HC H5 workspace。HC H5 可以先实现共享类型、安全存储能力探测、状态机与 UI，但在 M2 的 DPoP、Credential、Ticket/WSS API 就绪前不得伪造“已联通”。当前主要工作是：
 
-- 持久化 Root/Online Signer 与 Connection Generation/Fencing；
+- 持久化 Root/Online Signer，并实现活动连接 Fencing/Kick；
 - 实现 ABA Enrollment/Connector 并让 ABA 进入 READY；
 - 继续实现 ABA Enrollment/Connector、Session、HPKE/Relay 和确定性 ACP Test Agent；
 - 形成 HC H5 → Platform → ABA → ACP Agent 的真实本地 E2E，再进入可靠性、吊销和部署收口。
