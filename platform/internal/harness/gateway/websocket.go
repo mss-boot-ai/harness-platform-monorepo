@@ -71,7 +71,8 @@ func (server *Server) websocket(writer http.ResponseWriter, request *http.Reques
 	defer connection.Close()
 	connection.SetReadLimit(maxWirePacketBytes)
 	_ = connection.SetReadDeadline(time.Now().Add(challengeTimeout))
-	if err := server.performChallenge(connection, endpoint, credential, now); err != nil {
+	var authenticated authenticatedConnection
+	if err := server.performChallenge(connection, endpoint, credential, now, &authenticated); err != nil {
 		_ = connection.WriteControl(
 			websocket.CloseMessage,
 			websocket.FormatCloseMessage(websocket.ClosePolicyViolation, "AWP challenge failed"),
@@ -79,6 +80,28 @@ func (server *Server) websocket(writer http.ResponseWriter, request *http.Reques
 		)
 		return
 	}
+	if err := server.persistence.MarkEndpointSeen(request.Context(), endpoint.ID, server.now().UTC()); err != nil {
+		_ = connection.WriteControl(
+			websocket.CloseMessage,
+			websocket.FormatCloseMessage(websocket.ClosePolicyViolation, "endpoint presence rejected"),
+			time.Now().Add(time.Second),
+		)
+		return
+	}
+	active := newActiveConnection(
+		endpoint.ID, authenticated.generation, authenticated.connectionID, connection,
+	)
+	replaced, accepted := server.connections.activate(active)
+	if !accepted {
+		active.close(websocket.ClosePolicyViolation, "stale connection generation")
+		return
+	}
+	if replaced != nil {
+		replaced.close(websocket.CloseGoingAway, "connection replaced by newer generation")
+	}
+	defer server.connections.remove(active)
+	defer active.close(websocket.CloseNormalClosure, "connection closed")
+	go active.runWriter()
 	_ = connection.SetReadDeadline(time.Now().Add(2 * time.Duration(heartbeatIntervalMS) * time.Millisecond))
 	connection.SetPongHandler(func(string) error {
 		return connection.SetReadDeadline(time.Now().Add(2 * time.Duration(heartbeatIntervalMS) * time.Millisecond))
@@ -89,21 +112,13 @@ func (server *Server) websocket(writer http.ResponseWriter, request *http.Reques
 			return
 		}
 		if messageType != websocket.BinaryMessage || len(message) == 0 || len(message) > maxWirePacketBytes {
-			_ = connection.WriteControl(
-				websocket.CloseMessage,
-				websocket.FormatCloseMessage(websocket.CloseUnsupportedData, "binary AWP packet required"),
-				time.Now().Add(time.Second),
-			)
+			active.close(websocket.CloseUnsupportedData, "binary AWP packet required")
 			return
 		}
 		// Business packet routing is enabled by the relay checkpoint. Before
 		// then, a READY connection remains authenticated but fails closed on
 		// every unimplemented packet instead of silently acknowledging it.
-		_ = connection.WriteControl(
-			websocket.CloseMessage,
-			websocket.FormatCloseMessage(websocket.ClosePolicyViolation, "AWP relay not enabled"),
-			time.Now().Add(time.Second),
-		)
+		active.close(websocket.ClosePolicyViolation, "AWP relay not enabled")
 		return
 	}
 }
@@ -120,12 +135,21 @@ func (server *Server) validTicketRequest(ticket domain.WSTicket, request *http.R
 	}
 }
 
+type authenticatedConnection struct {
+	connectionID [16]byte
+	generation   uint64
+}
+
 func (server *Server) performChallenge(
 	connection *websocket.Conn,
 	endpoint domain.Endpoint,
 	credential domain.EndpointCredential,
 	now time.Time,
+	authenticated *authenticatedConnection,
 ) error {
+	if authenticated == nil {
+		return errors.New("authenticated connection output is required")
+	}
 	connectionID, err := server.randomBytes(16)
 	if err != nil {
 		return err
@@ -221,14 +245,19 @@ func (server *Server) performChallenge(
 	if err != nil {
 		return err
 	}
-	return writeWirePacket(connection, &awpv1.WirePacket{
+	if err := writeWirePacket(connection, &awpv1.WirePacket{
 		WireMajor: 1, WireMinor: 0, PacketId: readyPacketID,
 		Body: &awpv1.WirePacket_ConnectionReady{ConnectionReady: &awpv1.ConnectionReady{
 			ConnectionId: connectionID, ConnectionGeneration: generation, FencingToken: fencingToken,
 			ReadyAtMs: readyAtMS, MaxPacketBytes: maxWirePacketBytes, MaxInflightFrames: maxInflightFrames,
 			HeartbeatIntervalMs: heartbeatIntervalMS, ServerSignature: readySignature,
 		}},
-	})
+	}); err != nil {
+		return err
+	}
+	copy(authenticated.connectionID[:], connectionID)
+	authenticated.generation = generation
+	return nil
 }
 
 func (server *Server) randomBytes(length int) ([]byte, error) {

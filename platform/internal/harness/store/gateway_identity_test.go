@@ -119,3 +119,29 @@ func TestConnectionGenerationRemainsMonotonicAcrossStoreInstances(t *testing.T) 
 		t.Fatalf("connection generations = %d, %d, %d", first, second, third)
 	}
 }
+
+func TestMarkEndpointSeenUpdatesOnlyActiveEndpoint(t *testing.T) {
+	persistence := newTestStore(t)
+	now := time.Unix(1_800_000_000, 0).UTC()
+	value := endpoint(121, 122, 123, domain.EndpointTypeABA, "owner", now)
+	value.TenantID = "tenant"
+	if err := persistence.CreateEndpoint(t.Context(), value); err != nil {
+		t.Fatalf("CreateEndpoint: %v", err)
+	}
+	seenAt := now.Add(time.Minute)
+	if err := persistence.MarkEndpointSeen(t.Context(), value.ID, seenAt); err != nil {
+		t.Fatalf("MarkEndpointSeen: %v", err)
+	}
+	values, err := persistence.ListEndpoints(t.Context(), "owner", "tenant", 10)
+	if err != nil || len(values) != 1 || values[0].LastSeenAt == nil || !values[0].LastSeenAt.Equal(seenAt) {
+		t.Fatalf("presence values=%#v error=%v", values, err)
+	}
+	if _, err := persistence.UpdateEndpointForOwner(t.Context(), value.ID, "owner", "tenant", func(endpoint *domain.Endpoint) error {
+		return endpoint.Revoke(seenAt.Add(time.Second))
+	}); err != nil {
+		t.Fatalf("revoke endpoint: %v", err)
+	}
+	if err := persistence.MarkEndpointSeen(t.Context(), value.ID, seenAt.Add(2*time.Second)); !domain.HasCode(err, domain.CodeNotFound) {
+		t.Fatalf("revoked endpoint presence error=%v, want not found", err)
+	}
+}

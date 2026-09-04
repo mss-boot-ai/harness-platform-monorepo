@@ -159,6 +159,28 @@ func (store *Store) NextConnectionGeneration(
 	return row.Generation, nil
 }
 
+func (store *Store) MarkEndpointSeen(ctx context.Context, endpointID domain.ID, now time.Time) error {
+	if err := requireStore(store, ctx); err != nil {
+		return err
+	}
+	if endpointID.IsZero() || now.IsZero() {
+		return domain.NewProblem(domain.CodeInvalidArgument, "endpoint presence input is invalid", nil)
+	}
+	result := store.db.WithContext(ctx).Model(new(endpointRow)).Where(
+		"id = ? AND status = ? AND revoked_at IS NULL",
+		endpointID.String(), string(domain.EndpointStatusActive),
+	).Updates(map[string]any{
+		"last_seen_at": now, "updated_at": now, "row_version": gorm.Expr("row_version + 1"),
+	})
+	if result.Error != nil {
+		return classifyPersistence(result.Error, "mark endpoint presence")
+	}
+	if result.RowsAffected != 1 {
+		return domain.NewProblem(domain.CodeNotFound, "active endpoint was not found", nil)
+	}
+	return nil
+}
+
 func (store *Store) UseDPoPReplay(
 	ctx context.Context,
 	jkt string,

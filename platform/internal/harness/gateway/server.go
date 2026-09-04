@@ -42,6 +42,7 @@ type Persistence interface {
 	InspectRefreshCredential(context.Context, [32]byte, time.Time) (domain.Endpoint, domain.RefreshCredential, error)
 	RotateRefreshCredential(context.Context, [32]byte, string, domain.EndpointCredential, domain.RefreshCredential, domain.SecurityAuditEvent, time.Time) error
 	NextConnectionGeneration(context.Context, domain.ID, time.Time) (uint64, error)
+	MarkEndpointSeen(context.Context, domain.ID, time.Time) error
 	UseDPoPReplay(context.Context, string, string, time.Time, time.Time, int64) error
 }
 
@@ -64,6 +65,7 @@ type Server struct {
 	random      io.Reader
 	now         func() time.Time
 	trust       *TrustBundle
+	connections connectionDirectory
 }
 
 func NewHandler(config Config, persistence Persistence, random io.Reader, now func() time.Time) (http.Handler, error) {
@@ -121,7 +123,10 @@ func NewHandler(config Config, persistence Persistence, random io.Reader, now fu
 	if _, err := config.Trust.Manifest(); err != nil {
 		return nil, err
 	}
-	server := &Server{config: config, persistence: persistence, random: random, now: now, trust: config.Trust}
+	server := &Server{
+		config: config, persistence: persistence, random: random, now: now,
+		trust: config.Trust, connections: newMemoryConnectionDirectory(),
+	}
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET /gateway/v1/health", server.health)
 	mux.HandleFunc("GET /gateway/v1/trust-manifest", server.trustManifest)
