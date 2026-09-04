@@ -24,4 +24,13 @@ describe('IndexedDbSecureStore', () => {
       supported: true,
     });
   });
+
+  it('pins the first Gateway root and rejects replacement or revision rollback', async () => {
+    const store = new IndexedDbSecureStore(new IDBFactory(), `hc-trust-${crypto.randomUUID()}`);
+    const root = 'A'.repeat(43);
+    await store.pinTrustRoot(root, 1n);
+    await store.pinTrustRoot(root, 2n);
+    await expect(store.pinTrustRoot(root, 1n)).rejects.toThrow('rolled back');
+    await expect(store.pinTrustRoot('B'.repeat(43), 3n)).rejects.toThrow('changed unexpectedly');
+  });
 });

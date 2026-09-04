@@ -4,8 +4,10 @@ import {
   type EndpointIdentity,
 } from './identity';
 
-const DATABASE_VERSION = 1;
+const DATABASE_VERSION = 2;
 const IDENTITY_STORE = 'endpoint-identities';
+const TRUST_PIN_STORE = 'trust-pins';
+const GATEWAY_ROOT_PIN = 'gateway-root';
 
 export interface SecureStoreProbe {
   readonly assurance: 'web-software' | 'unsupported';
@@ -52,6 +54,9 @@ export class IndexedDbSecureStore {
         () => {
           if (!request.result.objectStoreNames.contains(IDENTITY_STORE)) {
             request.result.createObjectStore(IDENTITY_STORE, { keyPath: 'installationId' });
+          }
+          if (!request.result.objectStoreNames.contains(TRUST_PIN_STORE)) {
+            request.result.createObjectStore(TRUST_PIN_STORE, { keyPath: 'id' });
           }
         },
         { once: true },
@@ -128,6 +133,41 @@ export class IndexedDbSecureStore {
         detail: '当前浏览器不能安全持久化不可导出密钥；不会降级为明文保存。',
         supported: false,
       };
+    }
+  }
+
+  public async pinTrustRoot(rootJkt: string, revision: bigint): Promise<void> {
+    if (!/^[A-Za-z0-9_-]{43}$/u.test(rootJkt) || revision <= 0n) {
+      throw new Error('Gateway trust pin is invalid');
+    }
+    const database = await this.open();
+    const transaction = database.transaction(TRUST_PIN_STORE, 'readwrite');
+    try {
+      const objectStore = transaction.objectStore(TRUST_PIN_STORE);
+      const current = await requestResult(
+        objectStore.get(GATEWAY_ROOT_PIN) as IDBRequest<
+          { id: string; revision: string; rootJkt: string } | undefined
+        >,
+      );
+      if (current !== undefined) {
+        if (current.rootJkt !== rootJkt) {
+          throw new Error('Gateway root key changed unexpectedly');
+        }
+        if (BigInt(current.revision) > revision) {
+          throw new Error('Gateway trust manifest revision rolled back');
+        }
+      }
+      objectStore.put({ id: GATEWAY_ROOT_PIN, revision: revision.toString(), rootJkt });
+      await transactionComplete(transaction);
+    } catch (error) {
+      try {
+        transaction.abort();
+      } catch {
+        // A completed transaction needs no rollback.
+      }
+      throw error;
+    } finally {
+      database.close();
     }
   }
 

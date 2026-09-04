@@ -1,4 +1,9 @@
-import { connectGateway, type EndpointIdentity, type ReadyGatewayConnection } from '@harness/hc-core';
+import {
+  connectGateway,
+  IndexedDbSecureStore,
+  type EndpointIdentity,
+  type ReadyGatewayConnection,
+} from '@harness/hc-core';
 import { useEffect, useRef, useState } from 'react';
 import {
   HcApiError,
@@ -34,6 +39,10 @@ export function GatewaySetup({
       const issued = await issueWebSocketTicket(identity, registration);
       setTicket(issued);
       const trust = await fetchTrustManifest();
+      if (globalThis.indexedDB === undefined) {
+        throw new Error('Gateway trust pin storage is unavailable');
+      }
+      await new IndexedDbSecureStore(globalThis.indexedDB).pinTrustRoot(trust.rootJkt, trust.revision);
       const ready = await connectGateway(identity, {
         credentialId: registration.credentialId,
         endpointId: registration.endpointId,

@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"crypto/rand"
 	"errors"
 	"log"
 	"net/http"
@@ -37,9 +38,18 @@ func run() error {
 	if err != nil {
 		return err
 	}
+	trust, err := gateway.LoadOrCreateTrustState(
+		environment("HARNESS_GATEWAY_TRUST_FILE", ".mss/run/gateway-trust.json"),
+		rand.Reader,
+		time.Now().UTC(),
+	)
+	if err != nil {
+		return err
+	}
 	handler, err := gateway.NewHandler(gateway.Config{
 		AllowedOrigin:  environment("HARNESS_GATEWAY_ALLOWED_ORIGIN", "http://127.0.0.1:8001"),
 		ExternalOrigin: environment("HARNESS_GATEWAY_EXTERNAL_ORIGIN", "http://127.0.0.1:8082"),
+		Trust:          trust,
 	}, persistence, nil, nil)
 	if err != nil {
 		return err
