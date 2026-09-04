@@ -30,6 +30,8 @@ func (store *Store) Overview(ctx context.Context, owner, tenant string) (Overvie
 	if err := requireOwnerStore(store, ctx, owner); err != nil {
 		return Overview{}, err
 	}
+	owner = strings.TrimSpace(owner)
+	tenant = strings.TrimSpace(tenant)
 	var out Overview
 	counts := []struct {
 		model any
@@ -48,14 +50,11 @@ func (store *Store) Overview(ctx context.Context, owner, tenant string) (Overvie
 		}
 	}
 	frameQuery := func(statuses []string, output *int64) error {
-		query := store.db.WithContext(ctx).Model(new(frameRow)).
+		return store.db.WithContext(ctx).Model(new(frameRow)).
 			Joins("JOIN harness_sessions ON harness_sessions.id = harness_frames.session_id").
-			Where("harness_sessions.owner_user_id = ?", owner).
-			Where("harness_frames.status IN ?", statuses)
-		if strings.TrimSpace(tenant) != "" {
-			query = query.Where("harness_sessions.tenant_id = ?", strings.TrimSpace(tenant))
-		}
-		return query.Count(output).Error
+			Where("harness_sessions.owner_user_id = ? AND harness_sessions.tenant_id = ?", owner, tenant).
+			Where("harness_frames.status IN ?", statuses).
+			Count(output).Error
 	}
 	if err := frameQuery([]string{string(domain.FrameStatusStored), string(domain.FrameStatusRouted)}, &out.Unacknowledged); err != nil {
 		return Overview{}, err
@@ -71,7 +70,7 @@ func (store *Store) ListEnrollments(ctx context.Context, owner, tenant string, l
 		return nil, err
 	}
 	var rows []enrollmentRow
-	if err := scoped(store.db.WithContext(ctx).Where("owner_user_id = ?", owner), tenant).
+	if err := scoped(store.db.WithContext(ctx).Where("owner_user_id = ?", strings.TrimSpace(owner)), tenant).
 		Order("created_at DESC").Limit(managementLimit(limit)).Find(&rows).Error; err != nil {
 		return nil, err
 	}
@@ -101,6 +100,8 @@ func (store *Store) decideEnrollment(ctx context.Context, id domain.ID, code [32
 	if id.IsZero() || zeroHash(code) || now.IsZero() {
 		return domain.Enrollment{}, domain.NewProblem(domain.CodeInvalidArgument, "enrollment decision is invalid", nil)
 	}
+	owner = strings.TrimSpace(owner)
+	tenant = strings.TrimSpace(tenant)
 	var updated domain.Enrollment
 	err := store.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
 		var row enrollmentRow
@@ -115,7 +116,7 @@ func (store *Store) decideEnrollment(ctx context.Context, id domain.ID, code [32
 		if value.OwnerUserID != "" && value.OwnerUserID != owner {
 			return domain.NewProblem(domain.CodeNotFound, "enrollment was not found", nil)
 		}
-		if value.TenantID != "" && tenant != "" && value.TenantID != tenant {
+		if value.TenantID != "" && value.TenantID != tenant {
 			return domain.NewProblem(domain.CodeNotFound, "enrollment was not found", nil)
 		}
 		previous := value.RowVersion
@@ -129,9 +130,12 @@ func (store *Store) decideEnrollment(ctx context.Context, id domain.ID, code [32
 		}
 		value.OwnerUserID = owner
 		if value.TenantID == "" {
-			value.TenantID = strings.TrimSpace(tenant)
+			value.TenantID = tenant
 		}
-		result := tx.Model(new(enrollmentRow)).Where("id = ? AND row_version = ? AND status = ?", row.ID, previous, string(domain.EnrollmentStatusPending)).Updates(map[string]any{
+		result := tx.Model(new(enrollmentRow)).Where(
+			"id = ? AND row_version = ? AND status = ? AND owner_user_id IN ? AND tenant_id IN ?",
+			row.ID, previous, string(domain.EnrollmentStatusPending), []string{"", owner}, []string{"", tenant},
+		).Updates(map[string]any{
 			"owner_user_id": value.OwnerUserID, "tenant_id": value.TenantID,
 			"status": string(value.Status), "approved_by": value.ApprovedBy,
 			"approved_at": value.ApprovedAt, "updated_at": value.UpdatedAt,
@@ -154,7 +158,7 @@ func (store *Store) ListEndpoints(ctx context.Context, owner, tenant string, lim
 		return nil, err
 	}
 	var rows []endpointRow
-	if err := scoped(store.db.WithContext(ctx).Where("owner_user_id = ?", owner), tenant).
+	if err := scoped(store.db.WithContext(ctx).Where("owner_user_id = ?", strings.TrimSpace(owner)), tenant).
 		Order("created_at DESC").Limit(managementLimit(limit)).Find(&rows).Error; err != nil {
 		return nil, err
 	}
@@ -176,24 +180,28 @@ func (store *Store) UpdateEndpointForOwner(ctx context.Context, id domain.ID, ow
 	if id.IsZero() || mutate == nil {
 		return domain.Endpoint{}, domain.NewProblem(domain.CodeInvalidArgument, "endpoint update is invalid", nil)
 	}
+	owner = strings.TrimSpace(owner)
+	tenant = strings.TrimSpace(tenant)
 	var updated domain.Endpoint
 	err := store.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
 		var row endpointRow
-		if err := tx.Clauses(clause.Locking{Strength: "UPDATE"}).First(&row, "id = ?", id.String()).Error; err != nil {
+		if err := tx.Clauses(clause.Locking{Strength: "UPDATE"}).First(&row,
+			"id = ? AND owner_user_id = ? AND tenant_id = ?", id.String(), owner, tenant,
+		).Error; err != nil {
 			return notFoundOr("lock endpoint", "endpoint was not found", err)
 		}
 		value, err := endpointFromRow(row)
 		if err != nil {
 			return err
 		}
-		if value.OwnerUserID != owner || (tenant != "" && value.TenantID != "" && value.TenantID != tenant) {
-			return domain.NewProblem(domain.CodeNotFound, "endpoint was not found", nil)
-		}
 		previous := value.RowVersion
 		if err := mutate(&value); err != nil {
 			return err
 		}
-		result := tx.Model(new(endpointRow)).Where("id = ? AND row_version = ?", row.ID, previous).Updates(map[string]any{
+		result := tx.Model(new(endpointRow)).Where(
+			"id = ? AND owner_user_id = ? AND tenant_id = ? AND row_version = ?",
+			row.ID, owner, tenant, previous,
+		).Updates(map[string]any{
 			"status": string(value.Status), "last_seen_at": value.LastSeenAt,
 			"revoked_at": value.RevokedAt, "updated_at": value.UpdatedAt,
 			"row_version": value.RowVersion,
@@ -215,7 +223,7 @@ func (store *Store) ListSessions(ctx context.Context, owner, tenant string, limi
 		return nil, err
 	}
 	var rows []sessionRow
-	if err := scoped(store.db.WithContext(ctx).Where("owner_user_id = ?", owner), tenant).
+	if err := scoped(store.db.WithContext(ctx).Where("owner_user_id = ?", strings.TrimSpace(owner)), tenant).
 		Order("created_at DESC").Limit(managementLimit(limit)).Find(&rows).Error; err != nil {
 		return nil, err
 	}
@@ -234,12 +242,45 @@ func (store *Store) CloseSessionForOwner(ctx context.Context, id domain.ID, owne
 	if err := requireOwnerStore(store, ctx, owner); err != nil {
 		return domain.Session{}, err
 	}
-	return store.UpdateSession(ctx, id, func(value *domain.Session) error {
-		if value.OwnerUserID != owner || (tenant != "" && value.TenantID != "" && value.TenantID != tenant) {
-			return domain.NewProblem(domain.CodeNotFound, "session was not found", nil)
+	if id.IsZero() || now.IsZero() {
+		return domain.Session{}, domain.NewProblem(domain.CodeInvalidArgument, "session close is invalid", nil)
+	}
+	owner = strings.TrimSpace(owner)
+	tenant = strings.TrimSpace(tenant)
+	var updated domain.Session
+	err := store.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
+		var row sessionRow
+		if err := tx.Clauses(clause.Locking{Strength: "UPDATE"}).First(&row,
+			"id = ? AND owner_user_id = ? AND tenant_id = ?", id.String(), owner, tenant,
+		).Error; err != nil {
+			return notFoundOr("lock session", "session was not found", err)
 		}
-		return value.Close(now)
+		value, err := sessionFromRow(row)
+		if err != nil {
+			return err
+		}
+		previous := value.RowVersion
+		if err := value.Close(now); err != nil {
+			return err
+		}
+		result := tx.Model(new(sessionRow)).Where(
+			"id = ? AND owner_user_id = ? AND tenant_id = ? AND row_version = ?",
+			row.ID, owner, tenant, previous,
+		).Updates(map[string]any{
+			"status": string(value.Status), "current_key_generation": value.CurrentKeyGeneration,
+			"last_activity_at": value.LastActivityAt, "closed_at": value.ClosedAt,
+			"updated_at": value.UpdatedAt, "row_version": value.RowVersion,
+		})
+		if result.Error != nil {
+			return classifyPersistence(result.Error, "close session")
+		}
+		if result.RowsAffected != 1 {
+			return domain.NewProblem(domain.CodeConflict, "session changed concurrently", nil)
+		}
+		updated = value
+		return nil
 	})
+	return updated, err
 }
 
 func (store *Store) Delivery(ctx context.Context, sessionID domain.ID, owner, tenant string, limit int) (DeliverySnapshot, error) {
@@ -249,8 +290,12 @@ func (store *Store) Delivery(ctx context.Context, sessionID domain.ID, owner, te
 	if sessionID.IsZero() {
 		return DeliverySnapshot{}, domain.NewProblem(domain.CodeInvalidArgument, "session ID is required", nil)
 	}
+	owner = strings.TrimSpace(owner)
+	tenant = strings.TrimSpace(tenant)
 	var row sessionRow
-	if err := scoped(store.db.WithContext(ctx).Where("id = ? AND owner_user_id = ?", sessionID.String(), owner), tenant).First(&row).Error; err != nil {
+	if err := store.db.WithContext(ctx).Where(
+		"id = ? AND owner_user_id = ? AND tenant_id = ?", sessionID.String(), owner, tenant,
+	).First(&row).Error; err != nil {
 		return DeliverySnapshot{}, notFoundOr("read delivery session", "session was not found", err)
 	}
 	session, err := sessionFromRow(row)
@@ -295,10 +340,7 @@ func requireOwnerStore(store *Store, ctx context.Context, owner string) error {
 }
 
 func scoped(query *gorm.DB, tenant string) *gorm.DB {
-	if tenant = strings.TrimSpace(tenant); tenant != "" {
-		return query.Where("tenant_id = ?", tenant)
-	}
-	return query
+	return query.Where("tenant_id = ?", strings.TrimSpace(tenant))
 }
 
 func managementLimit(limit int) int {
