@@ -7,6 +7,7 @@ import {
 import { useEffect, useMemo, useState } from 'react';
 import { PlatformSetup } from './PlatformSetup';
 import { GatewaySetup } from './GatewaySetup';
+import { SessionSetup } from './SessionSetup';
 import type { RegistrationSession } from './api';
 
 const PRIMARY_INSTALLATION_ID = 'primary-browser-installation';
@@ -221,6 +222,9 @@ export function App() {
               {registration === null ? null : (
                 <GatewaySetup identity={identity} registration={registration} onReady={setGatewayReady} />
               )}
+              {registration !== null && gatewayReady ? (
+                <SessionSetup identity={identity} registration={registration} />
+              ) : null}
             </>
           )}
 

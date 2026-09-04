@@ -32,6 +32,24 @@ export interface WebSocketTicket {
   readonly websocketUrl: string;
 }
 
+export interface ABAEndpointSummary {
+  readonly id: string;
+  readonly name: string;
+  readonly status: 'ACTIVE' | 'PENDING' | 'SUSPENDED' | 'REVOKED';
+  readonly type: 'ABA';
+}
+
+export interface EndpointSessionSummary {
+  readonly abaEndpointId: string;
+  readonly createdAt: string;
+  readonly hcEndpointId: string;
+  readonly requestedCapabilities: readonly string[];
+  readonly runtimeProfileId: string;
+  readonly sessionId: string;
+  readonly status: 'CREATING' | 'WAITING_KEY' | 'ACTIVE' | 'REKEY_REQUIRED' | 'DRAINING' | 'UNCERTAIN' | 'FAILED' | 'CLOSED' | 'ABA_REVOKED';
+  readonly workspaceId: string;
+}
+
 export class HcApiError extends Error {
   public constructor(
     message: string,
@@ -156,6 +174,82 @@ export async function fetchTrustManifest(): Promise<VerifiedTrustManifest> {
   return verifyTrustManifest(await response.json());
 }
 
+export async function listABAEndpoints(): Promise<readonly ABAEndpointSummary[]> {
+  const response = await requestJson<unknown>(`${adminBase}/harness/v1/endpoints?limit=200`, {
+    method: 'GET',
+  });
+  const value = objectValue(response, 'endpoint list');
+  if (!Array.isArray(value.items)) {
+    throw new HcApiError('Endpoint list is invalid', 'HC_INVALID_RESPONSE', 500);
+  }
+  return value.items
+    .map(parseEndpointSummary)
+    .filter((endpoint): endpoint is ABAEndpointSummary => endpoint !== null && endpoint.status === 'ACTIVE');
+}
+
+export async function createEndpointSession(
+  identity: EndpointIdentity,
+  registration: RegistrationSession,
+  input: {
+    readonly abaEndpointId: string;
+    readonly idempotencyKey: string;
+    readonly runtimeProfileId: string;
+    readonly workspaceId: string;
+  },
+): Promise<EndpointSessionSummary> {
+  const path = '/gateway/v1/sessions';
+  const body = JSON.stringify({
+    abaEndpointId: input.abaEndpointId,
+    requestedCapabilities: ['prompt', 'session'],
+    runtimeProfileId: input.runtimeProfileId,
+    workspaceId: input.workspaceId,
+  });
+  const challengeResponse = await gatewaySessionRequest(
+    path,
+    registration.accessToken,
+    input.idempotencyKey,
+    body,
+  );
+  const nonce = challengeResponse.headers.get('DPoP-Nonce');
+  if (challengeResponse.status !== 401 || nonce === null || nonce === '') {
+    throw await gatewayFailure(challengeResponse);
+  }
+  const proof = await createDpopProof({
+    accessToken: registration.accessToken,
+    htm: 'POST',
+    htu: new URL(path, window.location.origin).toString(),
+    nonce,
+    privateKey: identity.signing.privateKey,
+    publicJwk: identity.signing.publicJwk,
+  });
+  const response = await gatewaySessionRequest(
+    path,
+    registration.accessToken,
+    input.idempotencyKey,
+    body,
+    proof.proof,
+  );
+  if (!response.ok) {
+    throw await gatewayFailure(response);
+  }
+  return parseEndpointSession(await response.json());
+}
+
+export async function getEndpointSession(sessionId: string): Promise<EndpointSessionSummary> {
+  const response = await requestJson<unknown>(`${adminBase}/harness/v1/sessions?limit=200`, {
+    method: 'GET',
+  });
+  const value = objectValue(response, 'session list');
+  if (!Array.isArray(value.items)) {
+    throw new HcApiError('Session list is invalid', 'HC_INVALID_RESPONSE', 500);
+  }
+  const session = value.items.map(parseManagementSession).find((candidate) => candidate.sessionId === sessionId);
+  if (session === undefined) {
+    throw new HcApiError('Created session was not found', 'HC_SESSION_NOT_FOUND', 404);
+  }
+  return session;
+}
+
 async function requestJson<T>(path: string, init: RequestInit): Promise<T> {
   const headers = new Headers(init.headers);
   headers.set('Accept', 'application/json');
@@ -249,12 +343,75 @@ function parseWebSocketTicket(input: unknown): WebSocketTicket {
   return value as unknown as WebSocketTicket;
 }
 
+function parseEndpointSummary(input: unknown): ABAEndpointSummary | null {
+  const value = objectValue(input, 'endpoint summary');
+  if (
+    typeof value.id !== 'string' ||
+    !/^[0-9a-f]{32}$/u.test(value.id) ||
+    typeof value.name !== 'string' ||
+    !['ABA', 'HC_WEB', 'HC_REFERENCE'].includes(String(value.type)) ||
+    !['ACTIVE', 'PENDING', 'SUSPENDED', 'REVOKED'].includes(String(value.status))
+  ) {
+    throw new HcApiError('Endpoint summary is invalid', 'HC_INVALID_RESPONSE', 500);
+  }
+  if (value.type !== 'ABA') {
+    return null;
+  }
+  return value as unknown as ABAEndpointSummary;
+}
+
+function parseEndpointSession(input: unknown): EndpointSessionSummary {
+  const value = objectValue(input, 'endpoint session');
+  if (
+    typeof value.sessionId !== 'string' ||
+    !/^[0-9a-f]{32}$/u.test(value.sessionId) ||
+    typeof value.abaEndpointId !== 'string' ||
+    !/^[0-9a-f]{32}$/u.test(value.abaEndpointId) ||
+    typeof value.hcEndpointId !== 'string' ||
+    !/^[0-9a-f]{32}$/u.test(value.hcEndpointId) ||
+    typeof value.runtimeProfileId !== 'string' ||
+    typeof value.workspaceId !== 'string' ||
+    !Array.isArray(value.requestedCapabilities) ||
+    !value.requestedCapabilities.every((item) => typeof item === 'string') ||
+    !['CREATING', 'WAITING_KEY', 'ACTIVE', 'REKEY_REQUIRED', 'DRAINING', 'UNCERTAIN', 'FAILED', 'CLOSED', 'ABA_REVOKED'].includes(String(value.status)) ||
+    typeof value.createdAt !== 'string' ||
+    !Number.isFinite(Date.parse(value.createdAt))
+  ) {
+    throw new HcApiError('Endpoint session response is invalid', 'HC_INVALID_RESPONSE', 500);
+  }
+  return value as unknown as EndpointSessionSummary;
+}
+
+function parseManagementSession(input: unknown): EndpointSessionSummary {
+  const value = objectValue(input, 'management session');
+  return parseEndpointSession({ ...value, sessionId: value.id });
+}
+
 function gatewayRequest(path: string, accessToken: string, proof?: string): Promise<Response> {
   const headers = new Headers({ Accept: 'application/json', Authorization: `DPoP ${accessToken}` });
   if (proof !== undefined) {
     headers.set('DPoP', proof);
   }
   return fetch(path, { credentials: 'include', headers, method: 'POST' });
+}
+
+function gatewaySessionRequest(
+  path: string,
+  accessToken: string,
+  idempotencyKey: string,
+  body: string,
+  proof?: string,
+): Promise<Response> {
+  const headers = new Headers({
+    Accept: 'application/json',
+    Authorization: `DPoP ${accessToken}`,
+    'Content-Type': 'application/json',
+    'Idempotency-Key': idempotencyKey,
+  });
+  if (proof !== undefined) {
+    headers.set('DPoP', proof);
+  }
+  return fetch(path, { body, credentials: 'include', headers, method: 'POST' });
 }
 
 async function gatewayFailure(response: Response): Promise<HcApiError> {
