@@ -10,6 +10,7 @@ WebSocket subprotocol: mss.awp.v1
 ACP payload target:    stable ACP v1
 Schema:                 proto/mss/awp/v1/wire.proto
 Shared constants:       constants/awp-v1.json
+Identity/DPoP vector:   testdata/v1/suite-0001-jwk-es256-dpop.json
 Canonical AAD length:   148 bytes
 ```
 
@@ -31,6 +32,6 @@ make protocol-check
 ./scripts/check-protocol.sh
 ```
 
-The check requires `python3` and `protoc`. Generated bindings and golden vectors will be added in later foundation checkpoints; the absence of generated code must not be described as protocol interoperability.
+The check requires `python3` and `protoc`. The Suite 0001 identity/DPoP fixture is explicitly test-only and is independently consumed by Go, Rust, and TypeScript tests. Generated bindings and HPKE/AEAD vectors remain later checkpoints; the existing vector alone is not complete protocol interoperability.
 
 See `docs/architecture/PROTOCOL.md` before changing anything here.
