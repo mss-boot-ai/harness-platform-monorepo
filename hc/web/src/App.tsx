@@ -68,6 +68,7 @@ export function App() {
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [registration, setRegistration] = useState<RegistrationSession | null>(null);
+  const [gatewayReady, setGatewayReady] = useState(false);
 
   useEffect(() => {
     let active = true;
@@ -218,7 +219,7 @@ export function App() {
                 onRegistered={setRegistration}
               />
               {registration === null ? null : (
-                <GatewaySetup identity={identity} registration={registration} />
+                <GatewaySetup identity={identity} registration={registration} onReady={setGatewayReady} />
               )}
             </>
           )}
@@ -226,14 +227,16 @@ export function App() {
           <section className="next-card">
             <div>
               <p className="eyebrow">NEXT CHECKPOINT</p>
-              <h2>{registration === null ? '注册 Platform Endpoint' : '连接 Platform Gateway'}</h2>
+              <h2>{registration === null ? '注册 Platform Endpoint' : gatewayReady ? '创建 ACP Session' : '连接 Platform Gateway'}</h2>
               <p>
                 {registration === null
                   ? '先完成 Human Session 与本地 Endpoint Key 的双重绑定。'
-                  : '下一步使用内存中的 Access Token、DPoP 与一次性 WSS Ticket 建立安全连接。'}
+                  : gatewayReady
+                    ? '安全连接已就绪；下一阶段选择 ABA、Runtime 与 Workspace。'
+                    : '下一步使用内存中的 Access Token、DPoP 与一次性 WSS Ticket 建立安全连接。'}
               </p>
             </div>
-            <span className="status-pill pending">未接通</span>
+            <span className={`status-pill ${gatewayReady ? 'success' : 'pending'}`}>{gatewayReady ? 'READY' : '未接通'}</span>
           </section>
         </div>
 
@@ -249,8 +252,8 @@ export function App() {
               <span>{registration === null ? '2' : '✓'}</span>
               <div><strong>Platform 注册</strong><p>Human + Endpoint 身份</p></div>
             </li>
-            <li>
-              <span>3</span>
+            <li className={gatewayReady ? 'complete' : ''}>
+              <span>{gatewayReady ? '✓' : '3'}</span>
               <div><strong>安全连接</strong><p>DPoP + Ticket + Challenge</p></div>
             </li>
             <li>

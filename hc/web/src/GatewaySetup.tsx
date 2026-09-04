@@ -10,9 +10,11 @@ import {
 
 export function GatewaySetup({
   identity,
+  onReady,
   registration,
 }: {
   readonly identity: EndpointIdentity;
+  readonly onReady: (ready: boolean) => void;
   readonly registration: RegistrationSession;
 }) {
   const [ticket, setTicket] = useState<WebSocketTicket | null>(null);
@@ -26,6 +28,7 @@ export function GatewaySetup({
   const issue = async () => {
     setBusy(true);
     setError(null);
+    onReady(false);
     try {
       socketRef.current?.close(1000, 'HC reconnecting');
       const issued = await issueWebSocketTicket(identity, registration);
@@ -39,6 +42,7 @@ export function GatewaySetup({
       }, trust);
       socketRef.current = ready.socket;
       setConnection(ready);
+      onReady(true);
     } catch (cause) {
       if (cause instanceof HcApiError) {
         setError(`${cause.message}（${cause.code}）`);
