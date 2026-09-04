@@ -197,7 +197,7 @@ func (store *Store) AcknowledgeSessionKeyPackage(
 	return updated, err
 }
 
-func keyPackageToRow(value domain.SessionKeyPackkage) keyPackageRow {
+func keyPackageToRow(value domain.SessionKeyPackage) keyPackageRow {
 	return keyPackageRow{
 		ID:                    value.ID.String(),
 		SessionID:             value.SessionID.String(),
@@ -243,7 +243,7 @@ func keyPackageFromRow(row keyPackageRow) (domain.SessionKeyPackage, error) {
 		return domain.SessionKeyPackage{}, err
 	}
 	return domain.SessionKeyPackage{
-		ID:                   id,
+		ID:                    id,
 		SessionID:             sessionID,
 		Generation:            row.Generation,
 		IssuerABAEndpointID:   issuerID,
