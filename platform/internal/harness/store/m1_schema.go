@@ -3,7 +3,6 @@ package store
 import (
 	"errors"
 	"fmt"
-	"slices"
 	"time"
 
 	"github.com/mss-boot-io/mss-boot-admin/mss-boot/pkg/migration"
@@ -86,13 +85,7 @@ var requiredM1Indexes = []struct {
 	{new(idempotencyRow), "idx_harness_idempotency_expiry"},
 }
 
-type m1UniqueIndexContract struct {
-	model   any
-	name    string
-	columns []string
-}
-
-var criticalM1UniqueIndexes = []m1UniqueIndexContract{
+var criticalM1UniqueIndexes = []uniqueIndexContract{
 	{
 		model: new(keyPackageRow),
 		name:  "ux_harness_key_package_recipient",
@@ -146,7 +139,10 @@ func CreateAllSchema(db *gorm.DB) error {
 	if err := CreateM2GatewaySchema(db); err != nil {
 		return err
 	}
-	return CreateM2ConnectionSchema(db)
+	if err := CreateM2ConnectionSchema(db); err != nil {
+		return err
+	}
+	return CreateReliabilitySchema(db)
 }
 
 func CreateM1Schema(db *gorm.DB) error {
@@ -183,7 +179,10 @@ func VerifyAllSchema(db *gorm.DB) error {
 	if err := VerifyM2GatewaySchema(db); err != nil {
 		return err
 	}
-	return VerifyM2ConnectionSchema(db)
+	if err := VerifyM2ConnectionSchema(db); err != nil {
+		return err
+	}
+	return VerifyReliabilitySchema(db)
 }
 
 func VerifyM1Schema(db *gorm.DB) error {
@@ -201,36 +200,9 @@ func VerifyM1Schema(db *gorm.DB) error {
 		}
 	}
 	for _, contract := range criticalM1UniqueIndexes {
-		if err := verifyM1UniqueIndex(db, contract); err != nil {
+		if err := verifyUniqueIndexContract(db, contract); err != nil {
 			return err
 		}
 	}
 	return nil
-}
-
-func verifyM1UniqueIndex(db *gorm.DB, contract m1UniqueIndexContract) error {
-	indexes, err := db.Migrator().GetIndexes(contract.model)
-	if err != nil {
-		return fmt.Errorf("inspect Harness M1 index %s: %w", contract.name, err)
-	}
-	for _, index := range indexes {
-		if index.Name() != contract.name {
-			continue
-		}
-		unique, known := index.Unique()
-		if !known || !unique {
-			return fmt.Errorf("Harness M1 index %s must be unique", contract.name)
-		}
-		columns := index.Columns()
-		if !slices.Equal(columns, contract.columns) {
-			return fmt.Errorf(
-				"Harness M1 index %s columns = %v, want %v",
-				contract.name,
-				columns,
-				contract.columns,
-			)
-		}
-		return nil
-	}
-	return fmt.Errorf("Harness M1 index %s is unavailable", contract.name)
 }

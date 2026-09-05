@@ -63,6 +63,11 @@ var requiredM2IdentityIndexes = []struct {
 	{new(refreshCredentialRow), "idx_harness_refresh_expiry"},
 }
 
+var criticalM2IdentityUniqueIndexes = []uniqueIndexContract{
+	{model: new(hcRegistrationChallengeRow), name: "ux_harness_hc_challenge_hash", columns: []string{"challenge_hash"}},
+	{model: new(refreshCredentialRow), name: "ux_harness_refresh_token_hash", columns: []string{"token_hash"}},
+}
+
 func RegisterM2IdentityMigration(runner *migration.Migration) error {
 	if runner == nil {
 		return errors.New("harness M2 identity migration runner is required")
@@ -111,6 +116,11 @@ func VerifyM2IdentitySchema(db *gorm.DB) error {
 	for _, index := range requiredM2IdentityIndexes {
 		if !db.Migrator().HasIndex(index.model, index.name) {
 			return fmt.Errorf("Harness M2 identity index %s is unavailable", index.name)
+		}
+	}
+	for _, contract := range criticalM2IdentityUniqueIndexes {
+		if err := verifyUniqueIndexContract(db, contract); err != nil {
+			return err
 		}
 	}
 	return nil
