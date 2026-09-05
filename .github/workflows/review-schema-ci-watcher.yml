@@ -1,0 +1,52 @@
+name: Review Schema CI Watcher
+
+on:
+  push:
+    branches:
+      - codex/bootstrap-harness-platform-foundation
+    paths:
+      - .github/workflows/review-schema-ci-watcher.yml
+
+permissions:
+  actions: read
+  contents: write
+
+jobs:
+  verify:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - name: Wait for push and PR CI, then persist evidence
+        env:
+          GH_TOKEN: ${{ github.token }}
+          BRANCH: codex/bootstrap-harness-platform-foundation
+        run: |
+          set -euo pipefail
+          deadline=$((SECONDS + 1500))
+          state=waiting
+          while (( SECONDS < deadline )); do
+            runs=$(gh api "repos/${GITHUB_REPOSITORY}/actions/runs?head_sha=${GITHUB_SHA}&per_page=50")
+            selected=$(jq '[.workflow_runs[] | select(.name == "Harness Platform CI" and (.event == "push" or .event == "pull_request"))] | unique_by(.event)')
+            count=$(jq 'length' <<<"${selected}")
+            if [[ ${count} -ge 2 ]]; then
+              if jq -e 'all(.status == "completed" and .conclusion == "success")' <<<"${selected}" >/dev/null; then
+                state=success
+                break
+              fi
+              if jq -e 'any(.status == "completed" and .conclusion != "success")' <<<"${selected}" >/dev/null; then
+                echo "Harness Platform CI failed: ${selected}" >&2
+                exit 1
+              fi
+            fi
+            sleep 10
+          done
+          [[ ${state} == success ]]
+          mkdir -p .review-repair
+          jq -n --arg sha "${GITHUB_SHA}" --argjson runs "${selected}" '{checkpoint:"schema-contracts",sha:$sha,runs:[$runs[]|{id,event,status,conclusion,html_url}]}' > .review-repair/schema-ci.json
+          git config user.name 'harness-review-repair[bot]'
+          git config user.email 'harness-review-repair[bot]@users.noreply.github.com'
+          git add .review-repair/schema-ci.json
+          git commit -m 'chore(review): record schema checkpoint CI'
+          git push origin "HEAD:${BRANCH}"
