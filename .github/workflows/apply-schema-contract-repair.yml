@@ -1,0 +1,219 @@
+name: Apply Schema Contract Repair
+
+on:
+  push:
+    branches:
+      - codex/bootstrap-harness-platform-foundation
+
+permissions:
+  contents: write
+
+jobs:
+  apply:
+    if: github.event.head_commit.message == 'chore(ci): stage schema contract repair'
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout exact branch
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          fetch-depth: 0
+
+      - name: Guard reviewed parent
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$(git rev-parse HEAD^)" = "f843b4a515394332d7f9e3201de6899e58d8faff"
+
+      - name: Add exact unique-index contracts
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 <<'PY'
+          from pathlib import Path
+
+          repository = Path('platform/internal/harness/store/repository.go')
+          text = repository.read_text()
+          old = '''\tfor _, index := range requiredIndexes {
+          \t\tif !db.Migrator().HasIndex(index.model, index.name) {
+          \t\t\treturn fmt.Errorf("Harness index %s is unavailable", index.name)
+          \t\t}
+          \t}
+          \treturn nil
+          }
+
+          func (store *Store) CreateEnrollment'''
+          new = '''\tfor _, index := range requiredIndexes {
+          \t\tif !db.Migrator().HasIndex(index.model, index.name) {
+          \t\t\treturn fmt.Errorf("Harness index %s is unavailable", index.name)
+          \t\t}
+          \t}
+          \tif err := verifyBaseUniqueIndexContracts(db); err != nil {
+          \t\treturn err
+          \t}
+          \treturn nil
+          }
+
+          func (store *Store) CreateEnrollment'''
+          if text.count(old) != 1:
+              raise SystemExit('VerifySchema anchor changed; refusing to patch')
+          repository.write_text(text.replace(old, new))
+
+          Path('platform/internal/harness/store/base_schema_constraints.go').write_text(r'''package store
+
+import (
+    "fmt"
+    "slices"
+
+    "gorm.io/gorm"
+)
+
+type uniqueIndexContract struct {
+    model   any
+    name    string
+    columns []string
+}
+
+var baseUniqueIndexContracts = []uniqueIndexContract{
+    {new(endpointRow), "ux_harness_endpoint_owner_sign", []string{"owner_user_id", "signing_jkt"}},
+    {new(endpointRow), "ux_harness_endpoint_owner_kem", []string{"owner_user_id", "kem_jkt"}},
+    {new(frameRow), "ux_harness_frame_sequence", []string{"session_id", "key_generation", "sender_endpoint_id", "sequence"}},
+}
+
+func verifyBaseUniqueIndexContracts(db *gorm.DB) error {
+    if db == nil {
+        return fmt.Errorf("Harness unique-index contract database is unavailable")
+    }
+    for _, contract := range baseUniqueIndexContracts {
+        indexes, err := db.Migrator().GetIndexes(contract.model)
+        if err != nil {
+            return fmt.Errorf("inspect Harness index %s: %w", contract.name, err)
+        }
+        matched := false
+        for _, index := range indexes {
+            if index.Name() != contract.name {
+                continue
+            }
+            matched = true
+            unique, known := index.Unique()
+            if !known || !unique {
+                return fmt.Errorf("Harness index %s must be unique", contract.name)
+            }
+            if !slices.Equal(index.Columns(), contract.columns) {
+                return fmt.Errorf("Harness index %s columns are %v, want %v", contract.name, index.Columns(), contract.columns)
+            }
+            break
+        }
+        if !matched {
+            return fmt.Errorf("Harness index %s is unavailable", contract.name)
+        }
+    }
+    return nil
+}
+''')
+
+          Path('platform/internal/harness/store/base_schema_constraints_test.go').write_text(r'''package store
+
+import (
+    "fmt"
+    "strings"
+    "testing"
+)
+
+func TestVerifySchemaRejectsMalformedCriticalUniqueIndexes(t *testing.T) {
+    tests := []struct {
+        name       string
+        index      string
+        replacement string
+    }{
+        {
+            name: "frame index is not unique",
+            index: "ux_harness_frame_sequence",
+            replacement: "CREATE INDEX ux_harness_frame_sequence ON harness_frames(session_id, key_generation, sender_endpoint_id, sequence)",
+        },
+        {
+            name: "frame index is missing sequence",
+            index: "ux_harness_frame_sequence",
+            replacement: "CREATE UNIQUE INDEX ux_harness_frame_sequence ON harness_frames(session_id, key_generation, sender_endpoint_id)",
+        },
+        {
+            name: "frame index columns are reordered",
+            index: "ux_harness_frame_sequence",
+            replacement: "CREATE UNIQUE INDEX ux_harness_frame_sequence ON harness_frames(session_id, sender_endpoint_id, key_generation, sequence)",
+        },
+        {
+            name: "frame index contains the wrong column",
+            index: "ux_harness_frame_sequence",
+            replacement: "CREATE UNIQUE INDEX ux_harness_frame_sequence ON harness_frames(session_id, key_generation, receiver_endpoint_id, sequence)",
+        },
+        {
+            name: "signing thumbprint index is not unique",
+            index: "ux_harness_endpoint_owner_sign",
+            replacement: "CREATE INDEX ux_harness_endpoint_owner_sign ON harness_endpoints(owner_user_id, signing_jkt)",
+        },
+        {
+            name: "signing thumbprint index order is wrong",
+            index: "ux_harness_endpoint_owner_sign",
+            replacement: "CREATE UNIQUE INDEX ux_harness_endpoint_owner_sign ON harness_endpoints(signing_jkt, owner_user_id)",
+        },
+        {
+            name: "kem thumbprint index is missing owner",
+            index: "ux_harness_endpoint_owner_kem",
+            replacement: "CREATE UNIQUE INDEX ux_harness_endpoint_owner_kem ON harness_endpoints(kem_jkt)",
+        },
+    }
+
+    for _, test := range tests {
+        t.Run(test.name, func(t *testing.T) {
+            persistence := newTestStore(t)
+            if err := VerifySchema(persistence.db); err != nil {
+                t.Fatalf("initial VerifySchema: %v", err)
+            }
+            if err := persistence.db.Exec(fmt.Sprintf("DROP INDEX %s", test.index)).Error; err != nil {
+                t.Fatalf("drop %s: %v", test.index, err)
+            }
+            if err := persistence.db.Exec(test.replacement).Error; err != nil {
+                t.Fatalf("replace %s: %v", test.index, err)
+            }
+            err := VerifySchema(persistence.db)
+            if err == nil || !strings.Contains(err.Error(), test.index) {
+                t.Fatalf("VerifySchema error = %v, want malformed %s failure", err, test.index)
+            }
+        })
+    }
+}
+
+func TestVerifySchemaAcceptsCriticalUniqueIndexContracts(t *testing.T) {
+    persistence := newTestStore(t)
+    if err := VerifySchema(persistence.db); err != nil {
+        t.Fatalf("VerifySchema: %v", err)
+    }
+}
+''')
+          PY
+          gofmt -w \
+            platform/internal/harness/store/repository.go \
+            platform/internal/harness/store/base_schema_constraints.go \
+            platform/internal/harness/store/base_schema_constraints_test.go
+          git diff --check
+
+      - name: Verify store and Platform
+        shell: bash
+        run: |
+          set -euo pipefail
+          cd platform
+          go test -count=1 ./internal/harness/store
+          go test -race -count=1 ./internal/harness/store
+          go test -count=1 ./...
+          go vet ./...
+
+      - name: Commit and push checkpoint
+        shell: bash
+        run: |
+          set -euo pipefail
+          git config user.name "OpenAI Codex"
+          git config user.email "codex@openai.com"
+          git add platform/internal/harness/store/repository.go \
+                  platform/internal/harness/store/base_schema_constraints.go \
+                  platform/internal/harness/store/base_schema_constraints_test.go
+          git commit -m "fix(store): verify critical unique index contracts"
+          git push origin HEAD:codex/bootstrap-harness-platform-foundation
