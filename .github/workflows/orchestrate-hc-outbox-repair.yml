@@ -1,0 +1,702 @@
+name: Orchestrate HC Outbox Repair
+
+on:
+  push:
+    branches:
+      - codex/review-repair-orchestrator-20260905
+
+permissions:
+  contents: write
+  pull-requests: write
+
+jobs:
+  repair:
+    if: github.event.head_commit.message == 'chore(ci): orchestrate HC outbox repair'
+    runs-on: ubuntu-latest
+    env:
+      TARGET_BRANCH: codex/bootstrap-harness-platform-foundation
+      REPO: mss-boot-ai/harness-platform-monorepo
+      GH_TOKEN: ${{ github.token }}
+    steps:
+      - name: Wait for session-control recovery checkpoint
+        shell: bash
+        run: |
+          set -euo pipefail
+          wanted='fix(relay): recover pending session controls'
+          for attempt in $(seq 1 120); do
+            sha=$(git ls-remote "https://x-access-token:${GH_TOKEN}@github.com/${REPO}.git" "refs/heads/${TARGET_BRANCH}" | awk '{print $1}')
+            message=$(gh api "repos/${REPO}/commits/${sha}" --jq '.commit.message | split("\n")[0]')
+            if [[ "$message" == "$wanted" ]]; then
+              runs=$(gh api "repos/${REPO}/actions/runs?head_sha=${sha}&per_page=100")
+              push=$(jq -r '[.workflow_runs[] | select(.name == "Harness Platform CI" and .event == "push")][0].conclusion // ""' <<<"$runs")
+              pr=$(jq -r '[.workflow_runs[] | select(.name == "Harness Platform CI" and .event == "pull_request")][0].conclusion // ""' <<<"$runs")
+              if [[ "$push" == success && "$pr" == success ]]; then
+                echo "BASE_SHA=$sha" >> "$GITHUB_ENV"
+                exit 0
+              fi
+              if [[ "$push" =~ ^(failure|cancelled)$ || "$pr" =~ ^(failure|cancelled)$ ]]; then
+                echo "previous checkpoint CI failed: push=$push pr=$pr" >&2
+                exit 1
+              fi
+            fi
+            sleep 15
+          done
+          echo "previous checkpoint did not reach successful CI" >&2
+          exit 1
+
+      - name: Checkout target branch
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          ref: ${{ env.TARGET_BRANCH }}
+          fetch-depth: 0
+
+      - name: Guard exact base
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$(git rev-parse HEAD)" = "$BASE_SHA"
+
+      - name: Add persistent HC outbox and scoped control sequence
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 <<'PY'
+          from pathlib import Path
+
+          # Platform control sequence is scoped by receiver and monotonic. This
+          # separates Platform-local ResumeState from peer-directed controls.
+          path = Path('platform/internal/harness/gateway/connection_directory.go')
+          text = path.read_text()
+          old = '''\tcontrolSequence        atomic.Uint64
+          \tinboundControlSequence atomic.Uint64
+          \tcloseOnce              sync.Once
+'''
+          new = '''\tcontrolSequence         atomic.Uint64
+          \tinboundControlMu        sync.Mutex
+          \tinboundControlSequences map[[16]byte]uint64
+          \tcloseOnce               sync.Once
+'''
+          if text.count(old) != 1:
+              raise SystemExit('activeConnection sequence fields changed')
+          text = text.replace(old, new)
+          old = '''\t\toutbound: make(chan []byte, maxInflightFrames), done: make(chan struct{}),
+          \t}
+'''
+          new = '''\t\toutbound: make(chan []byte, maxInflightFrames), done: make(chan struct{}),
+          \t\tinboundControlSequences: make(map[[16]byte]uint64),
+          \t}
+'''
+          if text.count(old) != 1:
+              raise SystemExit('activeConnection constructor anchor changed')
+          text = text.replace(old, new)
+          start = text.index('func (connection *activeConnection) acceptInboundControlSequence(')
+          end = text.index('\nfunc (connection *activeConnection) close(', start)
+          replacement = r'''func (connection *activeConnection) acceptInboundControlSequence(receiver []byte, sequence uint64) bool {
+	if len(receiver) != 16 || sequence == 0 {
+		return false
+	}
+	var scope [16]byte
+	copy(scope[:], receiver)
+	connection.inboundControlMu.Lock()
+	defer connection.inboundControlMu.Unlock()
+	current, exists := connection.inboundControlSequences[scope]
+	if exists && sequence <= current {
+		return false
+	}
+	connection.inboundControlSequences[scope] = sequence
+	return true
+}
+'''
+          text = text[:start] + replacement + text[end:]
+          path.write_text(text)
+
+          ready = Path('platform/internal/harness/gateway/ready_packet.go')
+          text = ready.read_text()
+          old = '!connection.acceptInboundControlSequence(control.GetControlSequence())'
+          new = '!connection.acceptInboundControlSequence(control.GetReceiverEndpointId(), control.GetControlSequence())'
+          if text.count(old) != 1:
+              raise SystemExit('ready control sequence call changed')
+          ready.write_text(text.replace(old, new))
+
+          test = Path('platform/internal/harness/gateway/connection_directory_test.go')
+          text = test.read_text()
+          text = text.replace('connection.acceptInboundControlSequence(1)', 'connection.acceptInboundControlSequence(make([]byte, 16), 1)')
+          text = text.replace('connection.acceptInboundControlSequence(3)', 'connection.acceptInboundControlSequence(make([]byte, 16), 3)')
+          text = text.replace('connection.acceptInboundControlSequence(2)', 'connection.acceptInboundControlSequence(make([]byte, 16), 2)')
+          text += r'''
+
+func TestConnectionScopesInboundControlSequenceByReceiver(t *testing.T) {
+	connection := newActiveConnection(domain.ID{4}, 1, [16]byte{1}, nil)
+	platform := make([]byte, 16)
+	peer := make([]byte, 16)
+	peer[0] = 9
+	if !connection.acceptInboundControlSequence(platform, 7) {
+		t.Fatal("first Platform-local sequence was rejected")
+	}
+	if !connection.acceptInboundControlSequence(peer, 31) {
+		t.Fatal("first peer-directed sequence was rejected")
+	}
+	if connection.acceptInboundControlSequence(platform, 7) || connection.acceptInboundControlSequence(peer, 30) {
+		t.Fatal("control sequence replay or rollback was accepted")
+	}
+	if !connection.acceptInboundControlSequence(platform, 9) || !connection.acceptInboundControlSequence(peer, 40) {
+		t.Fatal("strictly newer scoped control sequence was rejected")
+	}
+}
+'''
+          test.write_text(text)
+
+          # ABA uses the same peer-control contract: strict monotonicity, no replay.
+          aba = Path('aba/src/gateway/control.rs')
+          text = aba.read_text()
+          old = '''        let sequence_is_contiguous = self
+            .hc_inbound_sequences
+            .get(&sender_id)
+            .map_or(control_frame.control_sequence > 0, |previous| {
+                previous.checked_add(1) == Some(control_frame.control_sequence)
+            });'''
+          new = '''        let sequence_is_monotonic = self
+            .hc_inbound_sequences
+            .get(&sender_id)
+            .map_or(control_frame.control_sequence > 0, |previous| {
+                control_frame.control_sequence > *previous
+            });'''
+          if text.count(old) != 1:
+              raise SystemExit('ABA HC sequence anchor changed')
+          text = text.replace(old, new).replace('|| !sequence_is_contiguous\n', '|| !sequence_is_monotonic\n', 1)
+          aba.write_text(text)
+
+          # IndexedDB stores encrypted outbound packets and scoped sequence cursors.
+          store = Path('hc/packages/core/src/secure-store.ts')
+          text = store.read_text()
+          text = text.replace('const DATABASE_VERSION = 3;', 'const DATABASE_VERSION = 5;', 1)
+          anchor = '''const SESSION_INBOX_STORE = 'session-inbox';
+          const GATEWAY_ROOT_PIN = 'gateway-root';
+          const MAX_INBOX_FRAMES = 4096;
+'''
+          replacement = '''const SESSION_INBOX_STORE = 'session-inbox';
+          const SESSION_OUTBOX_STORE = 'session-outbox';
+          const SEQUENCE_CURSOR_STORE = 'sequence-cursors';
+          const GATEWAY_ROOT_PIN = 'gateway-root';
+          const MAX_INBOX_FRAMES = 4096;
+          const MAX_OUTBOX_FRAMES = 1024;
+'''
+          if text.count(anchor) != 1:
+              raise SystemExit('secure store constants anchor changed')
+          text = text.replace(anchor, replacement)
+          anchor = '''interface StoredInboxFrame extends Omit<InboxFrame, 'sequence'> {
+            readonly id: string;
+            readonly sequence: string;
+          }
+'''
+          replacement = '''interface StoredInboxFrame extends Omit<InboxFrame, 'sequence'> {
+            readonly id: string;
+            readonly sequence: string;
+          }
+
+          export interface OutboxFrame {
+            readonly packet: Uint8Array;
+            readonly sequence: bigint;
+            readonly sessionId: string;
+          }
+
+          interface StoredOutboxFrame {
+            readonly id: string;
+            readonly packet: Uint8Array;
+            readonly sequence: string;
+            readonly sessionId: string;
+          }
+
+          interface StoredSequenceCursor {
+            readonly id: string;
+            readonly value: string;
+          }
+'''
+          if text.count(anchor) != 1:
+              raise SystemExit('secure store interfaces anchor changed')
+          text = text.replace(anchor, replacement)
+          anchor = '''          if (!request.result.objectStoreNames.contains(SESSION_INBOX_STORE)) {
+            const inbox = request.result.createObjectStore(SESSION_INBOX_STORE, { keyPath: 'id' });
+            inbox.createIndex('sessionId', 'sessionId', { unique: false });
+          }
+'''
+          replacement = '''          if (!request.result.objectStoreNames.contains(SESSION_INBOX_STORE)) {
+            const inbox = request.result.createObjectStore(SESSION_INBOX_STORE, { keyPath: 'id' });
+            inbox.createIndex('sessionId', 'sessionId', { unique: false });
+          }
+          if (!request.result.objectStoreNames.contains(SESSION_OUTBOX_STORE)) {
+            const outbox = request.result.createObjectStore(SESSION_OUTBOX_STORE, { keyPath: 'id' });
+            outbox.createIndex('sessionId', 'sessionId', { unique: false });
+          }
+          if (!request.result.objectStoreNames.contains(SEQUENCE_CURSOR_STORE)) {
+            request.result.createObjectStore(SEQUENCE_CURSOR_STORE, { keyPath: 'id' });
+          }
+'''
+          if text.count(anchor) != 1:
+              raise SystemExit('secure store upgrade anchor changed')
+          text = text.replace(anchor, replacement)
+
+          insertion = r'''
+
+  public async nextOutboundFrameSequence(sessionId: string): Promise<bigint> {
+    validateSessionId(sessionId);
+    const database = await this.open();
+    try {
+      const transaction = database.transaction(SEQUENCE_CURSOR_STORE, 'readonly');
+      const current = await requestResult(
+        transaction.objectStore(SEQUENCE_CURSOR_STORE).get(`frame:${sessionId}`) as IDBRequest<StoredSequenceCursor | undefined>,
+      );
+      await transactionComplete(transaction);
+      return BigInt(current?.value ?? '0') + 1n;
+    } finally {
+      database.close();
+    }
+  }
+
+  public async putOutboundFrame(frame: OutboxFrame): Promise<void> {
+    validateSessionId(frame.sessionId);
+    if (frame.sequence <= 0n || frame.packet.length === 0 || frame.packet.length > 1_048_576) {
+      throw new Error('HC outbox frame is invalid');
+    }
+    const database = await this.open();
+    const transaction = database.transaction([SESSION_OUTBOX_STORE, SEQUENCE_CURSOR_STORE], 'readwrite');
+    try {
+      const outbox = transaction.objectStore(SESSION_OUTBOX_STORE);
+      const cursorStore = transaction.objectStore(SEQUENCE_CURSOR_STORE);
+      const cursorId = `frame:${frame.sessionId}`;
+      const current = await requestResult(cursorStore.get(cursorId) as IDBRequest<StoredSequenceCursor | undefined>);
+      const expected = BigInt(current?.value ?? '0') + 1n;
+      if (frame.sequence !== expected) {
+        throw new Error('HC outbox sequence changed concurrently');
+      }
+      const count = await requestResult(outbox.count());
+      if (count >= MAX_OUTBOX_FRAMES) {
+        throw new Error('HC outbox capacity reached');
+      }
+      const id = outboxFrameId(frame.sessionId, frame.sequence);
+      outbox.add({
+        id,
+        packet: frame.packet.slice(),
+        sequence: frame.sequence.toString(),
+        sessionId: frame.sessionId,
+      } satisfies StoredOutboxFrame);
+      cursorStore.put({ id: cursorId, value: frame.sequence.toString() } satisfies StoredSequenceCursor);
+      await transactionComplete(transaction);
+    } catch (error) {
+      try {
+        transaction.abort();
+      } catch {
+        // A completed transaction needs no rollback.
+      }
+      throw error;
+    } finally {
+      database.close();
+    }
+  }
+
+  public async listOutboundFrames(sessionId: string): Promise<readonly OutboxFrame[]> {
+    validateSessionId(sessionId);
+    const database = await this.open();
+    try {
+      const transaction = database.transaction(SESSION_OUTBOX_STORE, 'readonly');
+      const values = await requestResult(
+        transaction.objectStore(SESSION_OUTBOX_STORE).index('sessionId').getAll(sessionId) as IDBRequest<StoredOutboxFrame[]>,
+      );
+      await transactionComplete(transaction);
+      return values
+        .map((value) => ({ packet: value.packet.slice(), sequence: BigInt(value.sequence), sessionId: value.sessionId }))
+        .sort((left, right) => left.sequence < right.sequence ? -1 : left.sequence > right.sequence ? 1 : 0);
+    } finally {
+      database.close();
+    }
+  }
+
+  public async acknowledgeOutboundFrames(
+    sessionId: string,
+    highestContiguousSequence: bigint,
+    ranges: readonly { readonly end: bigint; readonly start: bigint }[] = [],
+  ): Promise<void> {
+    validateSessionId(sessionId);
+    if (highestContiguousSequence < 0n || ranges.length > 32) {
+      throw new Error('HC outbox acknowledgment is invalid');
+    }
+    const database = await this.open();
+    const transaction = database.transaction(SESSION_OUTBOX_STORE, 'readwrite');
+    try {
+      const outbox = transaction.objectStore(SESSION_OUTBOX_STORE);
+      const values = await requestResult(outbox.index('sessionId').getAll(sessionId) as IDBRequest<StoredOutboxFrame[]>);
+      for (const value of values) {
+        const sequence = BigInt(value.sequence);
+        if (sequence <= highestContiguousSequence || ranges.some((range) => sequence >= range.start && sequence <= range.end)) {
+          outbox.delete(value.id);
+        }
+      }
+      await transactionComplete(transaction);
+    } finally {
+      database.close();
+    }
+  }
+
+  public async nextControlSequence(scope: string): Promise<bigint> {
+    if (!/^[a-z0-9:._-]{1,160}$/u.test(scope)) {
+      throw new Error('HC control sequence scope is invalid');
+    }
+    const database = await this.open();
+    const transaction = database.transaction(SEQUENCE_CURSOR_STORE, 'readwrite');
+    try {
+      const store = transaction.objectStore(SEQUENCE_CURSOR_STORE);
+      const id = `control:${scope}`;
+      const current = await requestResult(store.get(id) as IDBRequest<StoredSequenceCursor | undefined>);
+      const next = BigInt(current?.value ?? '0') + 1n;
+      store.put({ id, value: next.toString() } satisfies StoredSequenceCursor);
+      await transactionComplete(transaction);
+      return next;
+    } finally {
+      database.close();
+    }
+  }
+
+  public async deleteSessionOutbox(sessionId: string): Promise<void> {
+    validateSessionId(sessionId);
+    const database = await this.open();
+    const transaction = database.transaction([SESSION_OUTBOX_STORE, SEQUENCE_CURSOR_STORE], 'readwrite');
+    try {
+      const outbox = transaction.objectStore(SESSION_OUTBOX_STORE);
+      const keys = await requestResult(outbox.index('sessionId').getAllKeys(sessionId));
+      for (const key of keys) {
+        outbox.delete(key);
+      }
+      transaction.objectStore(SEQUENCE_CURSOR_STORE).delete(`frame:${sessionId}`);
+      await transactionComplete(transaction);
+    } finally {
+      database.close();
+    }
+  }
+'''
+          marker = '\n  private async put(identity: EndpointIdentity): Promise<void> {'
+          if text.count(marker) != 1:
+              raise SystemExit('secure store method insertion anchor changed')
+          text = text.replace(marker, insertion + marker)
+          helper_anchor = '''function inboxFrameId(sessionId: string, direction: 1 | 2, sequence: bigint): string {
+            return `${sessionId}:${direction}:${sequence.toString().padStart(20, '0')}`;
+          }
+'''
+          helper_new = '''function inboxFrameId(sessionId: string, direction: 1 | 2, sequence: bigint): string {
+            return `${sessionId}:${direction}:${sequence.toString().padStart(20, '0')}`;
+          }
+
+          function outboxFrameId(sessionId: string, sequence: bigint): string {
+            return `${sessionId}:${sequence.toString().padStart(20, '0')}`;
+          }
+
+          function validateSessionId(sessionId: string): void {
+            if (!/^[0-9a-f]{32}$/u.test(sessionId)) {
+              throw new Error('HC session ID is invalid');
+            }
+          }
+'''
+          if text.count(helper_anchor) != 1:
+              raise SystemExit('secure store helper anchor changed')
+          store.write_text(text.replace(helper_anchor, helper_new))
+
+          # Parse and verify ABA acknowledgments for HC->ABA outbox cleanup.
+          frame = Path('hc/packages/core/src/frame.ts')
+          text = frame.read_text()
+          marker = '\nexport async function openABAToHCFramePacket('
+          addition = r'''
+
+export interface VerifiedFrameAck {
+  readonly highestContiguousSequence: bigint;
+  readonly keyGeneration: bigint;
+  readonly receivedRanges: readonly { readonly end: bigint; readonly start: bigint }[];
+  readonly sessionId: string;
+}
+
+export async function openABAAckFramePacket(
+  abaSigningPublicJwk: P256PublicJwk,
+  binding: FrameBinding,
+  encoded: Uint8Array,
+): Promise<VerifiedFrameAck | null> {
+  const packet = fromBinary(WirePacketSchema, encoded);
+  if (packet.body.case !== 'ack') {
+    return null;
+  }
+  if (packet.wireMajor !== 1 || packet.wireMinor !== 0 || packet.packetId.length !== 16) {
+    throw new Error('ACK packet is invalid');
+  }
+  const frame = packet.body.value;
+  const sessionId = decodeHexId(binding.sessionId);
+  const abaEndpointId = decodeHexId(binding.abaEndpointId);
+  const hcEndpointId = decodeHexId(binding.hcEndpointId);
+  const channelId = await sessionChannelId(sessionId, abaEndpointId, hcEndpointId);
+  const ranges = frame.receivedRanges.map((value) => ({ start: value.start, end: value.end }));
+  if (
+    frame.ackId.length !== 16 || frame.ackId.every((byte) => byte === 0) ||
+    !equalBytes(frame.channelId, channelId) || !equalBytes(frame.sessionId, sessionId) ||
+    !equalBytes(frame.endpointId, abaEndpointId) ||
+    frame.acknowledgedDirection !== Direction.HC_TO_ABA ||
+    frame.highestContiguousSequence <= 0n || frame.keyGeneration <= 0n ||
+    frame.signature.length !== 64
+  ) {
+    throw new Error('ACK binding is invalid');
+  }
+  const transcript = buildAckTranscript({
+    ackId: frame.ackId,
+    acknowledgedDirection: frame.acknowledgedDirection,
+    channelId: frame.channelId,
+    createdAtMs: frame.createdAtMs,
+    endpointId: frame.endpointId,
+    highestContiguousSequence: frame.highestContiguousSequence,
+    keyGeneration: frame.keyGeneration,
+    receivedRanges: ranges,
+    sessionId: frame.sessionId,
+  });
+  const key = await importP256VerifyingKey(abaSigningPublicJwk);
+  if (!(await verifyP1363LowS(key, transcript, frame.signature))) {
+    throw new Error('ACK signature is invalid');
+  }
+  return {
+    highestContiguousSequence: frame.highestContiguousSequence,
+    keyGeneration: frame.keyGeneration,
+    receivedRanges: ranges,
+    sessionId: binding.sessionId,
+  };
+}
+'''
+          if text.count(marker) != 1:
+              raise SystemExit('frame ACK insertion anchor changed')
+          frame.write_text(text.replace(marker, addition + marker))
+
+          # Session UI persists before send, consumes signed ACK, and resends exact packets.
+          session = Path('hc/web/src/SessionSetup.tsx')
+          text = session.read_text()
+          text = text.replace('  openABAToHCFramePacket,\n', '  openABAAckFramePacket,\n  openABAToHCFramePacket,\n', 1)
+          text = text.replace('  const outboundControlSequence = useRef(0n);\n  const outboundFrameSequence = useRef(0n);\n', '', 1)
+          anchor = '''      const uncertain = await openABAUncertainErrorPacket(aba.signingPublicJwk, encoded);
+'''
+          replacement = '''      const acknowledgment = await openABAAckFramePacket(
+        aba.signingPublicJwk,
+        { abaEndpointId: aba.id, hcEndpointId: registration.endpointId, sessionId: session.sessionId },
+        encoded,
+      );
+      if (acknowledgment !== null) {
+        if (secureStore === null) {
+          throw new Error('HC outbox is unavailable');
+        }
+        await secureStore.acknowledgeOutboundFrames(
+          session.sessionId,
+          acknowledgment.highestContiguousSequence,
+          acknowledgment.receivedRanges,
+        );
+        return;
+      }
+      const uncertain = await openABAUncertainErrorPacket(aba.signingPublicJwk, encoded);
+'''
+          if text.count(anchor) != 1:
+              raise SystemExit('SessionSetup incoming ACK anchor changed')
+          text = text.replace(anchor, replacement)
+          old = '''        outboundControlSequence.current += 1n;
+        const acknowledgment = await createSessionKeyPackageAckPacket(identity, {
+          abaEndpointId: aba.id,
+          controlSequence: outboundControlSequence.current,
+'''
+          new = '''        if (secureStore === null) {
+          throw new Error('HC control sequence store is unavailable');
+        }
+        const controlSequence = await secureStore.nextControlSequence(`peer:${aba.id}`);
+        const acknowledgment = await createSessionKeyPackageAckPacket(identity, {
+          abaEndpointId: aba.id,
+          controlSequence,
+'''
+          if text.count(old) != 1:
+              raise SystemExit('SessionSetup key ACK sequence anchor changed')
+          text = text.replace(old, new)
+          text = text.replace('    outboundControlSequence.current = 0n;\n', '', 1)
+          old = '''    outboundControlSequence.current += 1n;
+    const binding = {
+'''
+          new = '''    const binding = {
+'''
+          if text.count(old) != 1:
+              raise SystemExit('SessionSetup resume sequence increment anchor changed')
+          text = text.replace(old, new)
+          old = '''      const packet = await createHCResumeStatePacket(
+        identity,
+        binding,
+        outboundControlSequence.current,
+'''
+          new = '''      if (secureStore === null) {
+        throw new Error('HC control sequence store is unavailable');
+      }
+      const platformSequence = await secureStore.nextControlSequence('platform');
+      const packet = await createHCResumeStatePacket(
+        identity,
+        binding,
+        platformSequence,
+'''
+          if text.count(old) != 1:
+              raise SystemExit('SessionSetup resume packet anchor changed')
+          text = text.replace(old, new)
+          anchor = '''      if (inboundFrameSequence.current > 0n && openedPackage.current !== null) {
+'''
+          resend = '''      const pending = await secureStore.listOutboundFrames(session.sessionId);
+      for (const frame of pending) {
+        if (connection.socket.readyState !== WebSocket.OPEN) {
+          throw new Error('Gateway connection closed during HC outbox replay');
+        }
+        connection.socket.send(new Uint8Array(frame.packet).buffer);
+      }
+      if (inboundFrameSequence.current > 0n && openedPackage.current !== null) {
+'''
+          if text.count(anchor) != 1:
+              raise SystemExit('SessionSetup reconnect outbox anchor changed')
+          text = text.replace(anchor, resend)
+          text = text.replace('    outboundFrameSequence.current = 0n;\n', '', 1)
+          old = '''      outboundFrameSequence.current += 1n;
+      const text = prompt.trim();
+      const request = textEncoder.encode(JSON.stringify({
+'''
+          new = '''      if (secureStore === null) {
+        throw new Error('HC outbox is unavailable');
+      }
+      const text = prompt.trim();
+      const request = textEncoder.encode(JSON.stringify({
+'''
+          if text.count(old) != 1:
+              raise SystemExit('SessionSetup send sequence anchor changed')
+          text = text.replace(old, new)
+          old = '''      const packet = await createHCToABAFramePacket(
+        identity,
+        openedPackage.current,
+        { abaEndpointId: aba.id, hcEndpointId: registration.endpointId, sessionId: session.sessionId },
+        request,
+        outboundFrameSequence.current,
+      );
+      connection.socket.send(new Uint8Array(packet).buffer);
+'''
+          new = '''      let packet: Uint8Array | null = null;
+      for (let attempt = 0; attempt < 4 && packet === null; attempt += 1) {
+        const sequence = await secureStore.nextOutboundFrameSequence(session.sessionId);
+        const candidate = await createHCToABAFramePacket(
+          identity,
+          openedPackage.current,
+          { abaEndpointId: aba.id, hcEndpointId: registration.endpointId, sessionId: session.sessionId },
+          request,
+          sequence,
+        );
+        try {
+          await secureStore.putOutboundFrame({ packet: candidate, sequence, sessionId: session.sessionId });
+          packet = candidate;
+        } catch (cause) {
+          if (!(cause instanceof Error) || cause.message !== 'HC outbox sequence changed concurrently') {
+            throw cause;
+          }
+        }
+      }
+      if (packet === null) {
+        throw new Error('HC outbox sequence could not be reserved');
+      }
+      connection.socket.send(new Uint8Array(packet).buffer);
+'''
+          if text.count(old) != 1:
+              raise SystemExit('SessionSetup send packet anchor changed')
+          text = text.replace(old, new)
+          text = text.replace('      await secureStore?.deleteSessionInbox(session.sessionId);\n', '      await secureStore?.deleteSessionInbox(session.sessionId);\n      await secureStore?.deleteSessionOutbox(session.sessionId);\n', 1)
+          text = text.replace('      await secureStore?.deleteSessionInbox(sessionId);\n', '      await secureStore?.deleteSessionInbox(sessionId);\n      await secureStore?.deleteSessionOutbox(sessionId);\n', 1)
+          session.write_text(text)
+          PY
+          gofmt -w platform/internal/harness/gateway/connection_directory.go platform/internal/harness/gateway/connection_directory_test.go platform/internal/harness/gateway/ready_packet.go
+          cargo fmt --manifest-path aba/Cargo.toml --all
+          git diff --check
+
+      - name: Add HC outbox tests
+        shell: bash
+        run: |
+          set -euo pipefail
+          cat >> hc/packages/core/src/secure-store.test.ts <<'TS'
+
+it('persists outbound frames before send and removes them only after acknowledgment', async () => {
+  const store = new IndexedDbSecureStore(indexedDB, `hc-outbox-${crypto.randomUUID()}`);
+  const sessionId = '11'.repeat(16);
+  expect(await store.nextOutboundFrameSequence(sessionId)).toBe(1n);
+  await store.putOutboundFrame({ packet: new Uint8Array([1, 2, 3]), sequence: 1n, sessionId });
+  expect(await store.nextOutboundFrameSequence(sessionId)).toBe(2n);
+  await store.putOutboundFrame({ packet: new Uint8Array([4, 5, 6]), sequence: 2n, sessionId });
+  expect((await store.listOutboundFrames(sessionId)).map((value) => value.sequence)).toEqual([1n, 2n]);
+  await store.acknowledgeOutboundFrames(sessionId, 1n);
+  expect((await store.listOutboundFrames(sessionId)).map((value) => value.sequence)).toEqual([2n]);
+  await store.acknowledgeOutboundFrames(sessionId, 0n, [{ start: 2n, end: 2n }]);
+  expect(await store.listOutboundFrames(sessionId)).toEqual([]);
+});
+
+it('persists independent monotonic control sequence scopes', async () => {
+  const store = new IndexedDbSecureStore(indexedDB, `hc-control-${crypto.randomUUID()}`);
+  expect(await store.nextControlSequence('platform')).toBe(1n);
+  expect(await store.nextControlSequence('peer:abcdef')).toBe(1n);
+  expect(await store.nextControlSequence('platform')).toBe(2n);
+  expect(await store.nextControlSequence('peer:abcdef')).toBe(2n);
+});
+TS
+
+      - name: Verify checkpoint
+        shell: bash
+        run: |
+          set -euo pipefail
+          cd platform
+          go test -count=1 ./internal/harness/gateway
+          go test -race -count=1 ./internal/harness/gateway
+          go test -count=1 ./...
+          go vet ./...
+          cd ../aba
+          cargo fmt --all -- --check
+          cargo clippy --locked --workspace --all-targets --all-features -- -D warnings
+          cargo test --locked --workspace --all-targets
+          cd ../hc
+          corepack prepare pnpm@10.34.5 --activate
+          pnpm install --frozen-lockfile
+          pnpm lint
+          pnpm typecheck
+          pnpm test
+          pnpm build
+
+      - name: Commit and push checkpoint
+        id: push
+        shell: bash
+        run: |
+          set -euo pipefail
+          git config user.name "OpenAI Codex"
+          git config user.email "codex@openai.com"
+          git add platform/internal/harness/gateway/connection_directory.go \
+                  platform/internal/harness/gateway/connection_directory_test.go \
+                  platform/internal/harness/gateway/ready_packet.go \
+                  aba/src/gateway/control.rs \
+                  hc/packages/core/src/secure-store.ts \
+                  hc/packages/core/src/secure-store.test.ts \
+                  hc/packages/core/src/frame.ts \
+                  hc/web/src/SessionSetup.tsx
+          git commit -m "fix(hc): persist encrypted outbox and scoped sequences"
+          sha=$(git rev-parse HEAD)
+          git push origin HEAD:${TARGET_BRANCH}
+          echo "sha=$sha" >> "$GITHUB_OUTPUT"
+
+      - name: Wait for checkpoint CI
+        shell: bash
+        run: |
+          set -euo pipefail
+          sha='${{ steps.push.outputs.sha }}'
+          for attempt in $(seq 1 120); do
+            runs=$(gh api "repos/${REPO}/actions/runs?head_sha=${sha}&per_page=100")
+            push=$(jq -r '[.workflow_runs[] | select(.name == "Harness Platform CI" and .event == "push")][0].conclusion // ""' <<<"$runs")
+            pr=$(jq -r '[.workflow_runs[] | select(.name == "Harness Platform CI" and .event == "pull_request")][0].conclusion // ""' <<<"$runs")
+            if [[ "$push" == success && "$pr" == success ]]; then
+              gh pr comment 1 --repo "$REPO" --body "Review repair checkpoint passed: HC encrypted outbox, signed ABA ACK consumption, exact reconnect replay, and receiver-scoped monotonic control sequences at \`${sha}\`. Both push and PR CI succeeded."
+              exit 0
+            fi
+            if [[ "$push" =~ ^(failure|cancelled)$ || "$pr" =~ ^(failure|cancelled)$ ]]; then
+              echo "checkpoint CI failed: push=$push pr=$pr" >&2
+              exit 1
+            fi
+            sleep 15
+          done
+          echo "checkpoint CI did not finish" >&2
+          exit 1
