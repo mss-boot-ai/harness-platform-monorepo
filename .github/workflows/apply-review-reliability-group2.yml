@@ -77,3 +77,5 @@ jobs:
           git diff --cached --check
           git commit -m 'fix(relay): persist control delivery and stabilize session idempotency [skip ci]'
           git push origin HEAD:codex/bootstrap-harness-platform-foundation
+
+# Condition is deliberately quoted to avoid YAML scalar ambiguity.
