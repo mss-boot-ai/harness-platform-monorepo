@@ -1,0 +1,156 @@
+name: Orchestrate Delayed Replay Repair
+
+on:
+  push:
+    branches:
+      - codex/review-repair-orchestrator-20260905
+
+permissions:
+  contents: write
+  pull-requests: write
+
+jobs:
+  repair:
+    if: github.event.head_commit.message == 'chore(ci): orchestrate delayed replay repair'
+    runs-on: ubuntu-latest
+    env:
+      TARGET_BRANCH: codex/bootstrap-harness-platform-foundation
+      REPO: mss-boot-ai/harness-platform-monorepo
+      GH_TOKEN: ${{ github.token }}
+    steps:
+      - name: Wait for backpressure checkpoint
+        shell: bash
+        run: |
+          set -euo pipefail
+          wanted='fix(gateway): reconnect on outbound backpressure'
+          for attempt in $(seq 1 180); do
+            sha=$(git ls-remote "https://x-access-token:${GH_TOKEN}@github.com/${REPO}.git" "refs/heads/${TARGET_BRANCH}" | awk '{print $1}')
+            message=$(gh api "repos/${REPO}/commits/${sha}" --jq '.commit.message | split("\n")[0]')
+            if [[ "$message" == "$wanted" ]]; then
+              runs=$(gh api "repos/${REPO}/actions/runs?head_sha=${sha}&per_page=100")
+              push=$(jq -r '[.workflow_runs[] | select(.name == "Harness Platform CI" and .event == "push")][0].conclusion // ""' <<<"$runs")
+              pr=$(jq -r '[.workflow_runs[] | select(.name == "Harness Platform CI" and .event == "pull_request")][0].conclusion // ""' <<<"$runs")
+              if [[ "$push" == success && "$pr" == success ]]; then
+                echo "BASE_SHA=$sha" >> "$GITHUB_ENV"
+                exit 0
+              fi
+              if [[ "$push" =~ ^(failure|cancelled)$ || "$pr" =~ ^(failure|cancelled)$ ]]; then
+                echo "previous checkpoint CI failed: push=$push pr=$pr" >&2
+                exit 1
+              fi
+            fi
+            sleep 15
+          done
+          echo "previous checkpoint did not reach successful CI" >&2
+          exit 1
+
+      - name: Checkout target branch
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          ref: ${{ env.TARGET_BRANCH }}
+          fetch-depth: 0
+
+      - name: Guard exact base
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$(git rev-parse HEAD)" = "$BASE_SHA"
+
+      - name: Accept delayed durable frame delivery
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 <<'PY'
+          from pathlib import Path
+
+          path = Path('aba/src/gateway/control.rs')
+          text = path.read_text()
+          block = '''        if intake == IntakeOutcome::New {
+            if !fresh_initial_frame(frame.created_at_ms, now_ms) {
+                return Err(GatewayError::ProtocolStage("encrypted frame time"));
+            }
+            if frame.sequence != next_sequence {
+'''
+          replacement = '''        if intake == IntakeOutcome::New {
+            // Platform already validates wall-clock freshness before durable
+            // ingress. ABA must accept the exact stored frame after an arbitrary
+            // network outage and rely on signature, Session, Generation and
+            // Sequence for replay safety.
+            if frame.sequence != next_sequence {
+'''
+          if text.count(block) != 1:
+              raise SystemExit('delayed replay intake anchor changed')
+          text = text.replace(block, replacement)
+          helper = '''fn fresh_initial_frame(created_at_ms: i64, now_ms: i64) -> bool {
+    created_at_ms >= now_ms - 300_000 && created_at_ms <= now_ms + 300_000
+}
+
+'''
+          if text.count(helper) != 1:
+              raise SystemExit('freshness helper anchor changed')
+          text = text.replace(helper, '')
+          test = '''    #[test]
+    fn initial_frames_require_fresh_time_but_replay_can_use_journal_state() {
+        let now_ms = 1_800_000_000_000_i64;
+        assert!(fresh_initial_frame(now_ms - 300_000, now_ms));
+        assert!(fresh_initial_frame(now_ms + 300_000, now_ms));
+        assert!(!fresh_initial_frame(now_ms - 300_001, now_ms));
+        assert!(!fresh_initial_frame(now_ms + 300_001, now_ms));
+    }
+
+'''
+          if text.count(test) != 1:
+              raise SystemExit('freshness test anchor changed')
+          path.write_text(text.replace(test, ''))
+          PY
+          cargo fmt --manifest-path aba/Cargo.toml --all
+          git diff --check
+
+      - name: Verify checkpoint
+        shell: bash
+        run: |
+          set -euo pipefail
+          cd aba
+          cargo fmt --all -- --check
+          cargo clippy --locked --workspace --all-targets --all-features -- -D warnings
+          cargo test --locked --workspace --all-targets
+          cd ../platform
+          go test -count=1 ./internal/harness/gateway ./internal/harness/store
+          go test -race -count=1 ./internal/harness/gateway ./internal/harness/store
+          go test -count=1 ./...
+          go vet ./...
+
+      - name: Commit and push checkpoint
+        id: push
+        shell: bash
+        run: |
+          set -euo pipefail
+          git config user.name "OpenAI Codex"
+          git config user.email "codex@openai.com"
+          git add aba/src/gateway/control.rs
+          git commit -m "fix(aba): accept delayed platform frame replay"
+          sha=$(git rev-parse HEAD)
+          git push origin HEAD:${TARGET_BRANCH}
+          echo "sha=$sha" >> "$GITHUB_OUTPUT"
+
+      - name: Wait for checkpoint CI
+        shell: bash
+        run: |
+          set -euo pipefail
+          sha='${{ steps.push.outputs.sha }}'
+          for attempt in $(seq 1 140); do
+            runs=$(gh api "repos/${REPO}/actions/runs?head_sha=${sha}&per_page=100")
+            push=$(jq -r '[.workflow_runs[] | select(.name == "Harness Platform CI" and .event == "push")][0].conclusion // ""' <<<"$runs")
+            pr=$(jq -r '[.workflow_runs[] | select(.name == "Harness Platform CI" and .event == "pull_request")][0].conclusion // ""' <<<"$runs")
+            if [[ "$push" == success && "$pr" == success ]]; then
+              gh pr comment 1 --repo "$REPO" --body "Review repair checkpoint passed: ABA now accepts delayed exact Platform frame delivery without weakening signature/Session/Generation/Sequence checks at \`${sha}\`. Both push and PR CI succeeded."
+              exit 0
+            fi
+            if [[ "$push" =~ ^(failure|cancelled)$ || "$pr" =~ ^(failure|cancelled)$ ]]; then
+              echo "checkpoint CI failed: push=$push pr=$pr" >&2
+              exit 1
+            fi
+            sleep 15
+          done
+          echo "checkpoint CI did not finish" >&2
+          exit 1
