@@ -1,0 +1,654 @@
+name: Execute And Finalize Review Repairs
+
+on:
+  push:
+    branches:
+      - codex/review-repair-orchestrator-20260905
+
+permissions:
+  actions: write
+  contents: write
+  pull-requests: write
+
+jobs:
+  repair:
+    if: github.event.head_commit.message == 'chore(ci): execute and finalize review repairs'
+    runs-on: ubuntu-latest
+    timeout-minutes: 360
+    env:
+      TARGET_BRANCH: codex/bootstrap-harness-platform-foundation
+      ORCHESTRATOR_BRANCH: codex/review-repair-orchestrator-20260905
+      REPO: mss-boot-ai/harness-platform-monorepo
+      GH_TOKEN: ${{ github.token }}
+    steps:
+      - name: Cancel obsolete repair automation
+        shell: bash
+        run: |
+          set -euo pipefail
+          current="$GITHUB_RUN_ID"
+          gh api "repos/${REPO}/actions/runs?branch=${ORCHESTRATOR_BRANCH}&per_page=100" --jq '.workflow_runs[] | [.id,.status,.name] | @tsv' |
+          while IFS=$'\t' read -r run status name; do
+            [[ "$run" == "$current" || "$status" == completed ]] && continue
+            gh api -X POST "repos/${REPO}/actions/runs/${run}/cancel" >/dev/null 2>&1 || true
+          done
+          gh api "repos/${REPO}/actions/workflows/apply-schema-contract-repair.yml/runs?branch=${TARGET_BRANCH}&per_page=20" \
+            --jq '.workflow_runs[] | [.id,.status] | @tsv' 2>/dev/null |
+          while IFS=$'\t' read -r run status; do
+            [[ "$status" == completed ]] && continue
+            gh api -X POST "repos/${REPO}/actions/runs/${run}/cancel" >/dev/null 2>&1 || true
+          done
+          sleep 30
+
+      - name: Checkout current PR branch
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          ref: ${{ env.TARGET_BRANCH }}
+          fetch-depth: 0
+
+      - name: Set up Go from Thin Host module
+        uses: actions/setup-go@d35c59abb061a4a6fb18e82ac0862c26744d6ab5
+        with:
+          go-version-file: platform/go.mod
+          cache: true
+          cache-dependency-path: platform/go.sum
+
+      - name: Set up Node 24
+        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020
+        with:
+          node-version: '24'
+          cache: pnpm
+          cache-dependency-path: |
+            platform/web/pnpm-lock.yaml
+            hc/pnpm-lock.yaml
+
+      - name: Load repair sources and helpers
+        shell: bash
+        run: |
+          set -euo pipefail
+          git fetch origin "${ORCHESTRATOR_BRANCH}:refs/remotes/origin/${ORCHESTRATOR_BRANCH}"
+          git show "origin/${ORCHESTRATOR_BRANCH}:.github/workflows/supervise-review-repairs.yml" > /tmp/supervisor.yml
+          git show "origin/${ORCHESTRATOR_BRANCH}:.github/workflows/supervise-review-repairs-v2.yml" > /tmp/supervisor-v2.yml
+          git config user.name "OpenAI Codex"
+          git config user.email "codex@openai.com"
+          cat > /tmp/repair-lib.sh <<'SH'
+          set -euo pipefail
+
+          has_commit() {
+            git log --format=%s | grep -Fxq "$1"
+          }
+
+          checkpoint_sha() {
+            git log --format='%H%x09%s' | awk -F '\t' -v wanted="$1" '$2 == wanted {print $1; exit}'
+          }
+
+          extract_step() {
+            local workflow="$1" step_name="$2" output="$3"
+            git show "origin/${ORCHESTRATOR_BRANCH}:.github/workflows/${workflow}" > /tmp/extract-workflow.yml
+            python3 - "$step_name" "$output" <<'PY'
+          from pathlib import Path
+          import sys
+          name, output = sys.argv[1], Path(sys.argv[2])
+          lines = Path('/tmp/extract-workflow.yml').read_text().splitlines()
+          marker = f'- name: {name}'
+          start = next(i for i, line in enumerate(lines) if line.strip() == marker)
+          run = next(i for i in range(start + 1, len(lines)) if lines[i].strip() == 'run: |') + 1
+          end = next((i for i in range(run, len(lines)) if lines[i].startswith('      - name: ')), len(lines))
+          body = lines[run:end]
+          indent = min(len(line) - len(line.lstrip()) for line in body if line.strip())
+          output.write_text('\n'.join(line[indent:] for line in body) + '\n')
+          PY
+            chmod +x "$output"
+          }
+
+          wait_ci() {
+            local sha="$1"
+            for attempt in $(seq 1 180); do
+              local runs push pr
+              runs=$(gh api "repos/${REPO}/actions/runs?head_sha=${sha}&per_page=100")
+              push=$(jq -r '[.workflow_runs[] | select(.name == "Harness Platform CI" and .event == "push")][0].conclusion // ""' <<<"$runs")
+              pr=$(jq -r '[.workflow_runs[] | select(.name == "Harness Platform CI" and .event == "pull_request")][0].conclusion // ""' <<<"$runs")
+              if [[ "$push" == success && "$pr" == success ]]; then
+                return 0
+              fi
+              if [[ "$push" =~ ^(failure|cancelled)$ || "$pr" =~ ^(failure|cancelled)$ ]]; then
+                echo "Harness Platform CI failed for ${sha}: push=${push} pr=${pr}" >&2
+                return 1
+              fi
+              sleep 15
+            done
+            echo "Harness Platform CI timed out for ${sha}" >&2
+            return 1
+          }
+
+          ensure_checkpoint_ci() {
+            local message="$1" sha
+            sha=$(checkpoint_sha "$message")
+            [[ -n "$sha" ]] || return 1
+            wait_ci "$sha"
+          }
+
+          commit_checkpoint() {
+            local message="$1" remote
+            git diff --check
+            remote=$(git ls-remote origin "refs/heads/${TARGET_BRANCH}" | awk '{print $1}')
+            test "$remote" = "$(git rev-parse HEAD)" || {
+              echo "target branch changed during checkpoint preparation: local=$(git rev-parse HEAD) remote=${remote}" >&2
+              exit 1
+            }
+            git add -A
+            git commit -m "$message"
+            local sha
+            sha=$(git rev-parse HEAD)
+            git push origin "HEAD:${TARGET_BRANCH}"
+            wait_ci "$sha"
+            printf '%s\t%s\n' "$sha" "$message" >> /tmp/review-repair-produced.tsv
+          }
+
+          run_supervisor_step() {
+            local step_name="$1" output=/tmp/reused-supervisor-step.sh
+            python3 - "$step_name" "$output" <<'PY'
+          from pathlib import Path
+          import sys
+          name, output = sys.argv[1], Path(sys.argv[2])
+          lines = Path('/tmp/supervisor.yml').read_text().splitlines()
+          marker = f'- name: {name}'
+          start = next(i for i, line in enumerate(lines) if line.strip() == marker)
+          run = next(i for i in range(start + 1, len(lines)) if lines[i].strip() == 'run: |') + 1
+          end = next((i for i in range(run, len(lines)) if lines[i].startswith('      - name: ')), len(lines))
+          body = lines[run:end]
+          indent = min(len(line) - len(line.lstrip()) for line in body if line.strip())
+          output.write_text('\n'.join(line[indent:] for line in body) + '\n')
+          PY
+            chmod +x "$output"
+            "$output"
+          }
+          SH
+          : > /tmp/review-repair-produced.tsv
+
+      - name: Wait for current branch Head CI before writing
+        shell: bash
+        run: |
+          source /tmp/repair-lib.sh
+          current=$(git rev-parse HEAD)
+          wait_ci "$current"
+          pr=$(gh api "repos/${REPO}/pulls/1")
+          test "$(jq -r .draft <<<"$pr")" = true
+          test "$(jq -r .merged <<<"$pr")" = false
+          test "$(jq -r .head.sha <<<"$pr")" = "$current"
+
+      - name: Complete checkpoints through WAITING_KEY recovery
+        shell: bash
+        run: |
+          source /tmp/repair-lib.sh
+          python3 <<'PY'
+          from pathlib import Path
+          lines = Path('/tmp/supervisor-v2.yml').read_text().splitlines()
+          marker = '- name: Verify or apply checkpoints through WAITING_KEY recovery'
+          start = next(i for i, line in enumerate(lines) if line.strip() == marker)
+          run = next(i for i in range(start + 1, len(lines)) if lines[i].strip() == 'run: |') + 1
+          end = next((i for i in range(run, len(lines)) if lines[i].startswith('      - name: ')), len(lines))
+          body = lines[run:end]
+          indent = min(len(line) - len(line.lstrip()) for line in body if line.strip())
+          Path('/tmp/through-waiting-key.sh').write_text('\n'.join(line[indent:] for line in body) + '\n')
+          PY
+          chmod +x /tmp/through-waiting-key.sh
+          /tmp/through-waiting-key.sh
+          git fetch origin "$TARGET_BRANCH"
+          test "$(git rev-parse HEAD)" = "$(git rev-parse origin/${TARGET_BRANCH})"
+
+      - name: Complete ABA process-incarnation fencing
+        shell: bash
+        run: |
+          source /tmp/repair-lib.sh
+          message='fix(relay): fence ABA process incarnation changes'
+          if has_commit "$message"; then
+            ensure_checkpoint_ci "$message"
+            exit 0
+          fi
+
+          extract_step orchestrate-aba-incarnation-repair.yml 'Add process incarnation fencing' /tmp/apply-process-incarnation.sh
+          /tmp/apply-process-incarnation.sh
+          sed -i 's/PROCESS_INCARCERATION_INVALID/PROCESS_INCARNATION_INVALID/g' platform/internal/harness/gateway/websocket.go
+          python3 <<'PY'
+          from pathlib import Path
+          import re
+
+          path = Path('platform/internal/harness/store/process_incarnation_test.go')
+          text = path.read_text()
+          pattern = re.compile(
+              r'\n\s*for _, value := range \[\]domain\.Session\{active, closed, otherTenant\} \{.*?\n\s*\}\n\s*affected, err :=',
+              re.S,
+          )
+          replacement = r'''
+	for _, desired := range []domain.Session{active, closed, otherTenant} {
+		value := desired
+		value.Status = domain.SessionStatusCreating
+		value.CurrentKeyGeneration = 0
+		value.ClosedAt = nil
+		if err := persistence.CreateSession(t.Context(), value); err != nil {
+			t.Fatalf("CreateSession: %v", err)
+		}
+		updates := map[string]any{
+			"status":                 string(desired.Status),
+			"current_key_generation": desired.CurrentKeyGeneration,
+			"updated_at":             now,
+		}
+		if desired.ClosedAt != nil {
+			updates["closed_at"] = *desired.ClosedAt
+		}
+		if err := persistence.db.Model(new(sessionRow)).Where("id = ?", desired.ID.String()).Updates(updates).Error; err != nil {
+			t.Fatalf("set session status %s: %v", desired.Status, err)
+		}
+	}
+	affected, err :='''
+          updated, count = pattern.subn(replacement, text, count=1)
+          if count != 1:
+              raise SystemExit('process-incarnation test setup anchor changed')
+          path.write_text(updated)
+
+          Path('platform/internal/harness/gateway/process_incarnation_test_helpers_test.go').write_text(r'''package gateway
+
+import (
+	"encoding/base64"
+	"net/http"
+)
+
+func abaProcessHeader(seed byte) http.Header {
+	value := [16]byte{seed}
+	return http.Header{
+		abaProcessIncarnationHeader: []string{base64.RawURLEncoding.EncodeToString(value[:])},
+	}
+}
+''')
+          pattern = re.compile(r'(\.Dial\([^,\n]+,\s*)nil(\s*\))')
+          replacements = 0
+          for test in Path('platform/internal/harness/gateway').glob('*_test.go'):
+              source = test.read_text()
+              changed, count = pattern.subn(r'\1abaProcessHeader(1)\2', source)
+              if count:
+                  test.write_text(changed)
+                  replacements += count
+          if replacements == 0:
+              raise SystemExit('no nil WebSocket test dials found for ABA process-incarnation header')
+          print(f'updated {replacements} WebSocket test dials')
+          PY
+
+          gofmt -w platform/internal/harness/gateway/*.go platform/internal/harness/store/process_incarnation*.go
+          cargo fmt --manifest-path aba/Cargo.toml --all
+          git diff --check
+          (
+            cd platform
+            go test -count=1 ./internal/harness/gateway ./internal/harness/store
+            go test -race -count=1 ./internal/harness/gateway ./internal/harness/store
+            go test -count=1 ./...
+            go vet ./...
+          )
+          (
+            cd aba
+            cargo fmt --all -- --check
+            cargo clippy --locked --workspace --all-targets --all-features -- -D warnings
+            cargo test --locked --workspace --all-targets
+          )
+          commit_checkpoint "$message"
+
+      - name: Commit inbound control sequence only after signature
+        shell: bash
+        run: |
+          source /tmp/repair-lib.sh
+          message='fix(gateway): commit inbound control sequence after signature'
+          if has_commit "$message"; then
+            ensure_checkpoint_ci "$message"
+            exit 0
+          fi
+          python3 <<'PY'
+          from pathlib import Path
+
+          path = Path('platform/internal/harness/gateway/connection_directory.go')
+          text = path.read_text()
+          start = text.index('func (connection *activeConnection) acceptInboundControlSequence(')
+          end = text.index('\nfunc (connection *activeConnection) close(', start)
+          replacement = r'''func inboundControlSequenceScope(receiver []byte) ([16]byte, bool) {
+	var scope [16]byte
+	if len(receiver) != len(scope) {
+		return scope, false
+	}
+	copy(scope[:], receiver)
+	return scope, true
+}
+
+func (connection *activeConnection) inboundControlSequenceNewer(receiver []byte, sequence uint64) bool {
+	scope, ok := inboundControlSequenceScope(receiver)
+	if !ok || sequence == 0 {
+		return false
+	}
+	connection.inboundControlMu.Lock()
+	defer connection.inboundControlMu.Unlock()
+	current, exists := connection.inboundControlSequences[scope]
+	return !exists || sequence > current
+}
+
+func (connection *activeConnection) commitInboundControlSequence(receiver []byte, sequence uint64) bool {
+	scope, ok := inboundControlSequenceScope(receiver)
+	if !ok || sequence == 0 {
+		return false
+	}
+	connection.inboundControlMu.Lock()
+	defer connection.inboundControlMu.Unlock()
+	current, exists := connection.inboundControlSequences[scope]
+	if exists && sequence <= current {
+		return false
+	}
+	connection.inboundControlSequences[scope] = sequence
+	return true
+}
+'''
+          path.write_text(text[:start] + replacement + text[end:])
+
+          ready = Path('platform/internal/harness/gateway/ready_packet.go')
+          text = ready.read_text()
+          old = '!connection.acceptInboundControlSequence(control.GetReceiverEndpointId(), control.GetControlSequence())'
+          if text.count(old) != 1:
+              raise SystemExit('pre-signature control sequence anchor changed')
+          text = text.replace(old, '!connection.inboundControlSequenceNewer(control.GetReceiverEndpointId(), control.GetControlSequence())')
+          anchor = '''\tif err != nil || !awpcrypto.VerifyP1363LowS(publicKey, transcript, control.GetSignature()) {
+          \t\treturn errors.New("control frame signature is invalid")
+          \t}
+          \tif control.GetType() == awpv1.ControlType_CONTROL_TYPE_RESUME_STATE {
+'''
+          replacement = '''\tif err != nil || !awpcrypto.VerifyP1363LowS(publicKey, transcript, control.GetSignature()) {
+          \t\treturn errors.New("control frame signature is invalid")
+          \t}
+          \tif !connection.commitInboundControlSequence(control.GetReceiverEndpointId(), control.GetControlSequence()) {
+          \t\treturn errors.New("control frame sequence changed concurrently")
+          \t}
+          \tif control.GetType() == awpv1.ControlType_CONTROL_TYPE_RESUME_STATE {
+'''
+          if text.count(anchor) != 1:
+              raise SystemExit('post-signature control sequence anchor changed')
+          ready.write_text(text.replace(anchor, replacement))
+
+          test = Path('platform/internal/harness/gateway/connection_directory_test.go')
+          text = test.read_text().replace(
+              'connection.acceptInboundControlSequence(',
+              'connection.commitInboundControlSequence(',
+          )
+          text += r'''
+
+func TestInboundControlSequencePreflightDoesNotCommitUnverifiedValue(t *testing.T) {
+	connection := newActiveConnection(domain.ID{5}, 1, [16]byte{1}, [32]byte{}, nil)
+	receiver := make([]byte, 16)
+	receiver[0] = 7
+	if !connection.inboundControlSequenceNewer(receiver, 100) {
+		t.Fatal("unverified high sequence did not pass non-mutating preflight")
+	}
+	if !connection.inboundControlSequenceNewer(receiver, 1) {
+		t.Fatal("preflight mutated sequence before signature verification")
+	}
+	if !connection.commitInboundControlSequence(receiver, 1) {
+		t.Fatal("verified sequence could not be committed")
+	}
+	if connection.inboundControlSequenceNewer(receiver, 1) || connection.commitInboundControlSequence(receiver, 1) {
+		t.Fatal("verified sequence replay was accepted")
+	}
+	if !connection.inboundControlSequenceNewer(receiver, 2) || !connection.commitInboundControlSequence(receiver, 2) {
+		t.Fatal("next verified sequence was rejected")
+	}
+}
+'''
+          test.write_text(text)
+          PY
+          gofmt -w platform/internal/harness/gateway/connection_directory.go platform/internal/harness/gateway/connection_directory_test.go platform/internal/harness/gateway/ready_packet.go
+          git diff --check
+          (
+            cd platform
+            go test -count=1 ./internal/harness/gateway
+            go test -race -count=1 ./internal/harness/gateway
+            go test -count=1 ./...
+            go vet ./...
+          )
+          commit_checkpoint "$message"
+
+      - name: Assert complete business chain and CI
+        shell: bash
+        run: |
+          source /tmp/repair-lib.sh
+          required=(
+            'fix(gateway): fence replaced connections and preserve control sequence'
+            'fix(relay): authorize encrypted frame persistence atomically'
+            'fix(store): verify critical unique index contracts'
+            'fix(gateway): keep session creation idempotency authoritative'
+            'fix(relay): recover pending session controls'
+            'fix(hc): persist encrypted outbox and scoped sequences'
+            'fix(relay): isolate stale sessions and durable replay'
+            'fix(gateway): reconnect on outbound backpressure'
+            'fix(aba): accept delayed platform frame replay'
+            'fix(relay): recover waiting key sessions from either endpoint'
+            'fix(relay): fence ABA process incarnation changes'
+            'fix(gateway): commit inbound control sequence after signature'
+          )
+          : > /tmp/review-repair-chain.tsv
+          for message in "${required[@]}"; do
+            sha=$(checkpoint_sha "$message")
+            [[ -n "$sha" ]] || { echo "missing checkpoint: $message" >&2; exit 1; }
+            wait_ci "$sha"
+            printf '%s\t%s\n' "$sha" "$message" >> /tmp/review-repair-chain.tsv
+          done
+          git fetch origin "$TARGET_BRANCH"
+          test "$(git rev-parse HEAD)" = "$(git rev-parse origin/${TARGET_BRANCH})"
+
+      - name: Remove temporary PR-branch workflows
+        shell: bash
+        run: |
+          source /tmp/repair-lib.sh
+          rm -f .github/workflows/export-review-worktree.yml .github/workflows/apply-schema-contract-repair.yml
+          if git status --porcelain -- .github/workflows | grep -q .; then
+            commit_checkpoint 'chore(ci): remove temporary review workflows'
+          fi
+          echo "IMPLEMENTATION_SHA=$(git rev-parse HEAD)" >> "$GITHUB_ENV"
+
+      - name: Run complete verification on clean implementation Head
+        shell: bash
+        run: |
+          set -euo pipefail
+          test -z "$(git status --porcelain)"
+          test "$(git rev-parse HEAD)" = "$IMPLEMENTATION_SHA"
+          ./scripts/check-docs.sh
+          ./scripts/verify-platform-import.sh
+          ./scripts/check-protocol.sh
+          bash -n deploy/run-local-mvp.sh
+          (
+            cd platform
+            go test -count=1 ./...
+            go vet ./...
+            go test -race -count=1 ./internal/harness/gateway ./internal/harness/store ./internal/modules/harness
+          )
+          (
+            cd platform/web
+            corepack prepare pnpm@10.34.5 --activate
+            pnpm install --frozen-lockfile
+            pnpm lint
+            pnpm test
+            pnpm build
+          )
+          (
+            cd hc
+            corepack prepare pnpm@10.34.5 --activate
+            pnpm install --frozen-lockfile
+            pnpm lint
+            pnpm typecheck
+            pnpm test
+            pnpm build
+          )
+          (
+            cd aba
+            cargo metadata --locked --format-version 1 --no-deps >/dev/null
+            cargo fmt --all -- --check
+            cargo clippy --locked --workspace --all-targets --all-features -- -D warnings
+            cargo test --locked --workspace --all-targets
+          )
+          if command -v mss >/dev/null 2>&1; then
+            mss doctor --strict
+            mss verify --all
+            mss upgrade admin v1.3.7 --format json > /tmp/mss-upgrade.json
+            jq -e '.dryRun == true and .success == true and (.conflicts | length) == 0' /tmp/mss-upgrade.json >/dev/null
+            echo passed > /tmp/mss-status
+          else
+            echo unavailable > /tmp/mss-status
+          fi
+
+      - name: Collect CI evidence
+        shell: bash
+        run: |
+          set -euo pipefail
+          : > /tmp/review-repair-evidence.tsv
+          while IFS=$'\t' read -r sha message; do
+            runs=$(gh api "repos/${REPO}/actions/runs?head_sha=${sha}&per_page=100")
+            push_id=$(jq -r '[.workflow_runs[] | select(.name == "Harness Platform CI" and .event == "push")][0].id' <<<"$runs")
+            push_result=$(jq -r '[.workflow_runs[] | select(.name == "Harness Platform CI" and .event == "push")][0].conclusion' <<<"$runs")
+            pr_id=$(jq -r '[.workflow_runs[] | select(.name == "Harness Platform CI" and .event == "pull_request")][0].id' <<<"$runs")
+            pr_result=$(jq -r '[.workflow_runs[] | select(.name == "Harness Platform CI" and .event == "pull_request")][0].conclusion' <<<"$runs")
+            test "$push_result" = success
+            test "$pr_result" = success
+            printf '%s\t%s\t%s\t%s\t%s\t%s\n' "$sha" "$push_id" "$push_result" "$pr_id" "$pr_result" "$message" >> /tmp/review-repair-evidence.tsv
+          done < /tmp/review-repair-chain.tsv
+
+      - name: Write review repair report and work log
+        shell: bash
+        run: |
+          set -euo pipefail
+          base_sha=$(gh api "repos/${REPO}/pulls/1" --jq .base.sha)
+          mss_status=$(cat /tmp/mss-status)
+          mkdir -p docs/roadmap/verification
+          {
+            echo '# PR #1 Review 修复验证'
+            echo
+            echo '- 日期：2026-09-05'
+            echo "- 仓库：\`${REPO}\`"
+            echo "- 分支：\`${TARGET_BRANCH}\`"
+            echo "- 验证实现 SHA：\`${IMPLEMENTATION_SHA}\`"
+            echo "- Base SHA：\`${base_sha}\`"
+            echo "- 串行执行 Run：\`${GITHUB_RUN_ID}\`"
+            echo "- \`mss doctor --strict / verify --all / no-op upgrade\`：\`${mss_status}\`"
+            echo
+            echo '## 检查点与 CI'
+            echo
+            echo '| SHA | 单一职责 | Push CI | PR CI |'
+            echo '| --- | --- | ---: | ---: |'
+            while IFS=$'\t' read -r sha push_id push_result pr_id pr_result message; do
+              echo "| \`${sha}\` | ${message} | \`${push_id}\` ${push_result} | \`${pr_id}\` ${pr_result} |"
+            done < /tmp/review-repair-evidence.tsv
+            echo
+            echo '## 已关闭的 Review 问题'
+            echo
+            echo '- 旧 WSS Connection/Generation 的已读包不能跨越新连接激活；Platform Control Sequence 仅在成功入队后提交。'
+            echo '- EncryptedFrame 在单事务内复核 Session、双方 Endpoint、Credential、Generation 与 exact owner/tenant 后写入。'
+            echo '- 首发 Flags 严格为零；Frame Sequence 和 Endpoint JKT 的安全关键唯一索引验证唯一性、完整列与顺序。'
+            echo '- Session 创建的持久化幂等结果为权威，即时 ABA 投递失败只标记 pending。'
+            echo '- CREATING、WAITING_KEY、CLOSED 控制意图支持重连恢复；ABA 对重复 OpenTunnel 幂等重发待确认 Key Package。'
+            echo '- HC 加密 Outbox 先持久化原始 WirePacket 和 Sequence，验证 ABA ACK 后删除，重连按序重发原字节。'
+            echo '- HC Control Sequence 按接收方持久化作用域单调递增；Platform 只在签名验证成功后提交入站序列。'
+            echo '- ABA 对未知 Session 返回签名 SESSION_NOT_FOUND；单个旧包不再终止 ABA 网络主循环。'
+            echo '- Platform 初次入口负责 Wall Clock 新鲜度；ABA 接受已持久化原密文的任意延迟投递。'
+            echo '- 目标连接背压时关闭 WSS 触发恢复，不再静默丢包后继续报告在线。'
+            echo '- ABA Process Incarnation 在进程内稳定；改变时单实例 Platform 先终止旧进程 Session。'
+            echo
+            echo '## 本 SHA 实际通过'
+            echo
+            echo '```text'
+            echo './scripts/check-docs.sh'
+            echo './scripts/verify-platform-import.sh'
+            echo './scripts/check-protocol.sh'
+            echo 'bash -n deploy/run-local-mvp.sh'
+            echo 'cd platform && go test -count=1 ./...'
+            echo 'cd platform && go vet ./...'
+            echo 'cd platform && go test -race -count=1 ./internal/harness/gateway ./internal/harness/store ./internal/modules/harness'
+            echo 'cd platform/web && pnpm install --frozen-lockfile && pnpm lint && pnpm test && pnpm build'
+            echo 'cd hc && pnpm install --frozen-lockfile && pnpm lint && pnpm typecheck && pnpm test && pnpm build'
+            echo 'cd aba && cargo metadata --locked --format-version 1 --no-deps'
+            echo 'cd aba && cargo fmt --all -- --check'
+            echo 'cd aba && cargo clippy --locked --workspace --all-targets --all-features -- -D warnings'
+            echo 'cd aba && cargo test --locked --workspace --all-targets'
+            echo '```'
+            echo
+            echo '## 未执行及 Draft 门禁'
+            echo
+            echo '- 本轮代码修改后的真实内置浏览器四进程 E2E 未重新执行；原 MVP 报告不能自动继承为本 SHA 的浏览器证据。'
+            echo '- 未执行 1,000 WSS/100 Session、跨实例、外部数据库、TLS/WSS、生产 KMS/OS Keyring、磁盘满、长稳和生产部署验证。'
+            echo '- Process Incarnation 和 Connection Directory 仍是单 Gateway 进程内实现；跨实例 Ownership/Kick 属于生产阶段。'
+            echo '- 固定上游 Admin Web v1.3.7 的已记录供应链风险门禁仍未关闭。'
+            echo '- PR 继续保持 Draft，未合并。'
+            echo
+            echo '## 安全边界'
+            echo
+            echo '本轮未引入任意远程命令入口。Platform/HC 只传 Runtime Profile ID、Workspace ID 和协议元数据；真实 command、args、env 与本地路径继续只来自 ABA 本地配置。'
+          } > docs/roadmap/verification/2026-09-05-review-repairs.md
+
+          cat >> docs/memory/work-log.md <<EOF
+
+          ## 2026-09-05 — Draft PR #1 Review 修复闭环
+
+          - 通过串行独立提交修复 Connection Fencing、Frame 原子授权、关键唯一索引、Session 幂等、控制恢复、HC 加密 Outbox、控制序列作用域、未知 Session 隔离、延迟原密文投递、背压恢复和 ABA Process Incarnation。
+          - 每个检查点均使用普通 fast-forward push，且绑定该 SHA 的 push 与 pull_request Harness Platform CI 同时成功后才进入下一项。
+          - 最终实现验证 SHA：\`${IMPLEMENTATION_SHA}\`；提交、CI、命令和未执行项见 \`docs/roadmap/verification/2026-09-05-review-repairs.md\`。
+          - PR 保持 Draft，未合并；没有把本轮未执行的浏览器、生产、跨实例或容量验证写成通过。
+          EOF
+          git diff --check
+
+      - name: Commit verification report
+        shell: bash
+        run: |
+          source /tmp/repair-lib.sh
+          commit_checkpoint 'docs: finalize PR review repair verification'
+          echo "REPORT_SHA=$(git rev-parse HEAD)" >> "$GITHUB_ENV"
+
+      - name: Update Draft PR with final evidence
+        shell: bash
+        run: |
+          set -euo pipefail
+          runs=$(gh api "repos/${REPO}/actions/runs?head_sha=${REPORT_SHA}&per_page=100")
+          push_run=$(jq -r '[.workflow_runs[] | select(.name == "Harness Platform CI" and .event == "push")][0].id' <<<"$runs")
+          pr_run=$(jq -r '[.workflow_runs[] | select(.name == "Harness Platform CI" and .event == "pull_request")][0].id' <<<"$runs")
+          cat > /tmp/pr-body.md <<EOF
+          ## 状态
+
+          当前 Head：\`${REPORT_SHA}\`。本 PR 保持 **Draft**，未合并。
+
+          - push CI \`${push_run}\`: success
+          - PR CI \`${pr_run}\`: success
+          - Review 修复报告：\`docs/roadmap/verification/2026-09-05-review-repairs.md\`
+          - 原本地 MVP 报告：\`docs/roadmap/verification/2026-09-05-mvp-final.md\`
+
+          ## 已修复的 Review 问题
+
+          1. 连接替换 Fencing 与 Platform Control Sequence 失败不烧号。
+          2. EncryptedFrame 状态/身份/Generation/owner/tenant 原子授权写入。
+          3. Session 创建幂等结果与即时投递结果不再分叉。
+          4. CREATING/WAITING_KEY/CLOSED 控制恢复与待确认 Key Package 幂等重发。
+          5. HC IndexedDB 加密 Outbox、ABA 签名 ACK 消费和原字节重连重发。
+          6. Control Sequence 接收方作用域和签名后提交。
+          7. 未知 Session 签名终态错误、长延迟原密文投递和 ABA 单包错误隔离。
+          8. Backpressure 关闭连接触发恢复，安全关键唯一索引精确验证。
+          9. ABA Process Incarnation 改变时终止旧进程 Session。
+
+          ## 保持 Draft 的门禁
+
+          - 本轮修复后的真实内置浏览器四进程 E2E 尚未重新执行。
+          - 固定上游 \`@mss-boot-io/admin-web@1.3.7\` 的供应链风险仍需上游安全版本。
+          - 生产 KMS/OS Keyring、TLS/WSS、外部数据库、跨实例 Ownership/Kick、完整容量、故障和长稳验证尚未完成。
+
+          ## 安全边界
+
+          本轮没有引入任意远程命令入口；真实 command、args、env 和 Workspace path 继续只来自 ABA 本地配置。
+          EOF
+          gh pr edit 1 --repo "$REPO" --body-file /tmp/pr-body.md
+          pr=$(gh api "repos/${REPO}/pulls/1")
+          test "$(jq -r .draft <<<"$pr")" = true
+          test "$(jq -r .merged <<<"$pr")" = false
+          test "$(jq -r .head.sha <<<"$pr")" = "$REPORT_SHA"
+          gh pr comment 1 --repo "$REPO" --body "Review repair closure passed at \`${REPORT_SHA}\`; push CI \`${push_run}\` and PR CI \`${pr_run}\` succeeded. PR remains Draft and unmerged."
+
+      - name: Remove temporary orchestrator branch
+        shell: bash
+        run: |
+          set -euo pipefail
+          git push origin --delete "$ORCHESTRATOR_BRANCH"
