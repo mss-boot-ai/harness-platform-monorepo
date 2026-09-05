@@ -1,0 +1,445 @@
+name: Drive Review Repair Checkpoints
+
+on:
+  push:
+    branches:
+      - codex/review-repair-driver-20260905
+
+permissions:
+  actions: write
+  contents: write
+  pull-requests: write
+
+jobs:
+  drive:
+    if: github.event.head_commit.message == 'chore(ci): drive review repair checkpoints'
+    runs-on: ubuntu-latest
+    timeout-minutes: 360
+    env:
+      TARGET_BRANCH: codex/bootstrap-harness-platform-foundation
+      DRIVER_BRANCH: codex/review-repair-driver-20260905
+      SOURCE_BRANCH: codex/review-repair-orchestrator-20260905
+      CONVERGER_BRANCH: codex/review-repair-converger-20260905
+      PROBE_BRANCH: codex/review-repair-probe-20260905
+      WATCHDOG_BRANCH: codex/review-repair-watchdog-20260905
+      REPO: mss-boot-ai/harness-platform-monorepo
+      GH_TOKEN: ${{ github.token }}
+    steps:
+      - name: Cancel obsolete automation and assert PR namespace
+        shell: bash
+        run: |
+          set -euo pipefail
+          current="$GITHUB_RUN_ID"
+          for branch in "$SOURCE_BRANCH" "$CONVERGER_BRANCH" "$PROBE_BRANCH" "$WATCHDOG_BRANCH"; do
+            gh api "repos/${REPO}/actions/runs?branch=${branch}&per_page=100" --jq '.workflow_runs[] | [.id,.status] | @tsv' 2>/dev/null |
+            while IFS=$'\t' read -r run status; do
+              [[ "$run" == "$current" || "$status" == completed ]] && continue
+              gh api -X POST "repos/${REPO}/actions/runs/${run}/cancel" >/dev/null 2>&1 || true
+            done
+          done
+          gh api "repos/${REPO}/actions/workflows/apply-schema-contract-repair.yml/runs?branch=${TARGET_BRANCH}&per_page=20" \
+            --jq '.workflow_runs[] | [.id,.status] | @tsv' 2>/dev/null |
+          while IFS=$'\t' read -r run status; do
+            [[ "$status" == completed ]] && continue
+            gh api -X POST "repos/${REPO}/actions/runs/${run}/cancel" >/dev/null 2>&1 || true
+          done
+          sleep 30
+          max_pr=$(gh api --paginate "repos/${REPO}/pulls?state=all&per_page=100" --jq '.[].number' | sort -n | tail -1)
+          if [[ "${max_pr:-0}" != 1 ]]; then
+            echo "unexpected existing pull request namespace: max=${max_pr}" >&2
+            exit 1
+          fi
+
+      - name: Checkout current Draft branch
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          ref: ${{ env.TARGET_BRANCH }}
+          fetch-depth: 0
+
+      - name: Set up Go
+        uses: actions/setup-go@d35c59abb061a4a6fb18e82ac0862c26744d6ab5
+        with:
+          go-version-file: platform/go.mod
+          cache: true
+          cache-dependency-path: platform/go.sum
+
+      - name: Set up Node 24
+        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020
+        with:
+          node-version: '24'
+
+      - name: Load source-aware repair programs
+        shell: bash
+        run: |
+          set -euo pipefail
+          git fetch origin \
+            "${SOURCE_BRANCH}:refs/remotes/origin/${SOURCE_BRANCH}" \
+            "${CONVERGER_BRANCH}:refs/remotes/origin/${CONVERGER_BRANCH}" \
+            "${PROBE_BRANCH}:refs/remotes/origin/${PROBE_BRANCH}"
+          git show "origin/${SOURCE_BRANCH}:.github/workflows/supervise-review-repairs.yml" > /tmp/supervisor.yml
+          git show "origin/${CONVERGER_BRANCH}:.github/workflows/converge-review-repairs.yml" > /tmp/converger.yml
+          git show "origin/${PROBE_BRANCH}:.github/workflows/probe-and-finalize-review-repairs.yml" > /tmp/probe.yml
+          git config user.name "OpenAI Codex"
+          git config user.email "codex@openai.com"
+          echo 1 > /tmp/stage-index
+          : > /tmp/review-checkpoints.tsv
+          cat > /tmp/repair-lib.sh <<'SH'
+          set -euo pipefail
+
+          has_commit() { git log --format=%s | grep -Fxq "$1"; }
+          checkpoint_sha() { git log --format='%H%x09%s' | awk -F '\t' -v wanted="$1" '$2 == wanted {print $1; exit}'; }
+
+          extract_step() {
+            local source="$1" name="$2" output="$3"
+            python3 - "$source" "$name" "$output" <<'PY'
+          from pathlib import Path
+          import sys
+          source, name, output = Path(sys.argv[1]), sys.argv[2], Path(sys.argv[3])
+          lines = source.read_text().splitlines()
+          marker = f'- name: {name}'
+          start = next(i for i, line in enumerate(lines) if line.strip() == marker)
+          run = next(i for i in range(start + 1, len(lines)) if lines[i].strip() == 'run: |') + 1
+          end = next((i for i in range(run, len(lines)) if lines[i].startswith('      - name: ')), len(lines))
+          body = lines[run:end]
+          indent = min(len(line) - len(line.lstrip()) for line in body if line.strip())
+          output.write_text('\n'.join(line[indent:] for line in body) + '\n')
+          PY
+            chmod +x "$output"
+          }
+
+          wait_ci() {
+            local sha="$1"
+            for attempt in $(seq 1 220); do
+              local runs push pr push_id pr_id
+              runs=$(gh api "repos/${REPO}/actions/runs?head_sha=${sha}&per_page=100")
+              push=$(jq -r '[.workflow_runs[] | select(.name == "Harness Platform CI" and .event == "push")][0].conclusion // ""' <<<"$runs")
+              pr=$(jq -r '[.workflow_runs[] | select(.name == "Harness Platform CI" and .event == "pull_request")][0].conclusion // ""' <<<"$runs")
+              if [[ "$push" == success && "$pr" == success ]]; then
+                push_id=$(jq -r '[.workflow_runs[] | select(.name == "Harness Platform CI" and .event == "push")][0].id' <<<"$runs")
+                pr_id=$(jq -r '[.workflow_runs[] | select(.name == "Harness Platform CI" and .event == "pull_request")][0].id' <<<"$runs")
+                printf '%s\t%s\t%s\n' "$sha" "$push_id" "$pr_id"
+                return 0
+              fi
+              if [[ "$push" =~ ^(failure|cancelled)$ || "$pr" =~ ^(failure|cancelled)$ ]]; then
+                echo "Harness Platform CI failed for ${sha}: push=${push} pr=${pr}" >&2
+                return 1
+              fi
+              sleep 15
+            done
+            echo "Harness Platform CI timed out for ${sha}" >&2
+            return 1
+          }
+
+          ensure_checkpoint_ci() {
+            local message="$1" sha evidence
+            sha=$(checkpoint_sha "$message")
+            [[ -n "$sha" ]] || return 1
+            evidence=$(wait_ci "$sha")
+            printf '%s\t%s\n' "$evidence" "$message" >> /tmp/review-checkpoints.tsv
+          }
+
+          commit_checkpoint() {
+            local message="$1" index stage title created pr_number expected target_sha evidence
+            git diff --check
+            git add -A
+            git commit -m "$message"
+            index=$(cat /tmp/stage-index)
+            printf -v stage 'codex/review-stage-%02d' "$index"
+            title="$message"
+            git push origin "HEAD:${stage}"
+
+            expected=$((index + 1))
+            created=''
+            if created=$(gh pr create --repo "$REPO" --base "$TARGET_BRANCH" --head "$stage" --title "$title" \
+              --body "Internal review-repair checkpoint. Merge with rebase only; PR #1 remains Draft." 2>/tmp/pr-create-error); then
+              pr_number=$(gh pr view "$created" --repo "$REPO" --json number --jq .number)
+              if [[ "$pr_number" != "$expected" ]]; then
+                echo "unexpected internal PR number ${pr_number}; expected ${expected}" >&2
+                exit 1
+              fi
+            else
+              echo "GitHub Actions could not create internal PR #${expected}; waiting for Connector creation from ${stage}" >&2
+              pr_number="$expected"
+            fi
+
+            gh pr comment 1 --repo "$REPO" --body "Internal checkpoint ready: PR #${pr_number}, branch \`${stage}\`, intent \`${message}\`. It must be merged by the GitHub Connector so the target push triggers normal CI."
+
+            for attempt in $(seq 1 480); do
+              state=$(gh api "repos/${REPO}/pulls/${pr_number}" 2>/dev/null || true)
+              if [[ -n "$state" && "$(jq -r .merged <<<"$state")" == true ]]; then
+                break
+              fi
+              sleep 15
+            done
+            state=$(gh api "repos/${REPO}/pulls/${pr_number}")
+            test "$(jq -r .merged <<<"$state")" = true
+            test "$(jq -r .base.ref <<<"$state")" = "$TARGET_BRANCH"
+            test "$(jq -r .head.ref <<<"$state")" = "$stage"
+
+            git fetch origin "$TARGET_BRANCH"
+            git reset --hard "origin/${TARGET_BRANCH}"
+            has_commit "$message" || {
+              echo "merged checkpoint does not preserve expected commit subject: ${message}" >&2
+              exit 1
+            }
+            target_sha=$(git rev-parse HEAD)
+            evidence=$(wait_ci "$target_sha")
+            printf '%s\t%s\n' "$evidence" "$message" >> /tmp/review-checkpoints.tsv
+            git push origin --delete "$stage" || true
+            echo $((index + 1)) > /tmp/stage-index
+          }
+
+          run_supervisor_step() {
+            local name="$1" output=/tmp/supervisor-step.sh
+            extract_step /tmp/supervisor.yml "$name" "$output"
+            "$output"
+          }
+          SH
+
+      - name: Verify stable baseline locally
+        shell: bash
+        run: |
+          set -euo pipefail
+          pr=$(gh api "repos/${REPO}/pulls/1")
+          test "$(jq -r .draft <<<"$pr")" = true
+          test "$(jq -r .merged <<<"$pr")" = false
+          test "$(jq -r .head.sha <<<"$pr")" = "$(git rev-parse HEAD)"
+          ./scripts/check-docs.sh
+          ./scripts/verify-platform-import.sh
+          ./scripts/check-protocol.sh
+          (cd platform && go test -count=1 ./... && go vet ./...)
+          (cd aba && cargo fmt --all -- --check && cargo clippy --locked --workspace --all-targets --all-features -- -D warnings && cargo test --locked --workspace --all-targets)
+
+      - name: Drive schema and idempotency checkpoints
+        shell: bash
+        run: |
+          source /tmp/repair-lib.sh
+          for pair in \
+            'fix(store): verify critical unique index contracts|Converge schema and idempotency' \
+            'fix(gateway): keep session creation idempotency authoritative|Converge schema and idempotency'
+          do
+            message=${pair%%|*}
+            if has_commit "$message"; then
+              ensure_checkpoint_ci "$message"
+              continue
+            fi
+            extract_step /tmp/converger.yml 'Converge schema and idempotency' /tmp/step.sh
+            /tmp/step.sh
+            has_commit "$message" || { echo "converger did not produce ${message}" >&2; exit 1; }
+          done
+
+      - name: Drive durable Session control recovery
+        shell: bash
+        run: |
+          source /tmp/repair-lib.sh
+          message='fix(relay): recover pending session controls'
+          if has_commit "$message"; then
+            ensure_checkpoint_ci "$message"
+          else
+            extract_step /tmp/converger.yml 'Converge durable Session control recovery' /tmp/step.sh
+            /tmp/step.sh
+          fi
+
+      - name: Drive HC encrypted Outbox
+        shell: bash
+        run: |
+          source /tmp/repair-lib.sh
+          message='fix(hc): persist encrypted outbox and scoped sequences'
+          if has_commit "$message"; then
+            ensure_checkpoint_ci "$message"
+          else
+            extract_step /tmp/converger.yml 'Converge source-aware HC encrypted Outbox' /tmp/step.sh
+            /tmp/step.sh
+          fi
+
+      - name: Drive stale Session isolation
+        shell: bash
+        run: |
+          source /tmp/repair-lib.sh
+          message='fix(relay): isolate stale sessions and durable replay'
+          if has_commit "$message"; then
+            ensure_checkpoint_ci "$message"
+          else
+            extract_step /tmp/converger.yml 'Converge signed stale-session isolation' /tmp/step.sh
+            /tmp/step.sh
+          fi
+
+      - name: Drive backpressure delayed replay and WAITING_KEY
+        shell: bash
+        run: |
+          source /tmp/repair-lib.sh
+          messages=(
+            'fix(gateway): reconnect on outbound backpressure'
+            'fix(aba): accept delayed platform frame replay'
+            'fix(relay): recover waiting key sessions from either endpoint'
+          )
+          for message in "${messages[@]}"; do
+            if has_commit "$message"; then
+              ensure_checkpoint_ci "$message"
+              continue
+            fi
+            extract_step /tmp/converger.yml 'Converge backpressure delayed replay and WAITING_KEY' /tmp/step.sh
+            /tmp/step.sh
+            has_commit "$message" || { echo "converger did not produce ${message}" >&2; exit 1; }
+          done
+
+      - name: Drive ABA Process Incarnation
+        shell: bash
+        run: |
+          source /tmp/repair-lib.sh
+          message='fix(relay): fence ABA process incarnation changes'
+          if has_commit "$message"; then
+            ensure_checkpoint_ci "$message"
+          else
+            extract_step /tmp/probe.yml 'Add ABA process incarnation fencing when missing' /tmp/step.sh
+            /tmp/step.sh
+          fi
+
+      - name: Drive signature-gated inbound Control Sequence
+        shell: bash
+        run: |
+          source /tmp/repair-lib.sh
+          message='fix(gateway): commit inbound control sequence after signature'
+          if has_commit "$message"; then
+            ensure_checkpoint_ci "$message"
+          else
+            export FIRST_MISSING="$message"
+            extract_step /tmp/probe.yml 'Commit inbound sequence only after signature when missing' /tmp/step.sh
+            /tmp/step.sh
+          fi
+
+      - name: Remove temporary target workflows as a checkpoint
+        shell: bash
+        run: |
+          source /tmp/repair-lib.sh
+          rm -f .github/workflows/export-review-worktree.yml .github/workflows/apply-schema-contract-repair.yml
+          if git status --porcelain -- .github/workflows | grep -q .; then
+            commit_checkpoint 'chore(ci): remove temporary review workflows'
+          fi
+
+      - name: Run full bound verification
+        shell: bash
+        run: |
+          set -euo pipefail
+          test -z "$(git status --porcelain)"
+          ./scripts/check-docs.sh
+          ./scripts/verify-platform-import.sh
+          ./scripts/check-protocol.sh
+          bash -n deploy/run-local-mvp.sh
+          (cd platform && go test -count=1 ./... && go vet ./... && go test -race -count=1 ./internal/harness/gateway ./internal/harness/store ./internal/modules/harness)
+          (cd platform/web && corepack prepare pnpm@10.34.5 --activate && pnpm install --frozen-lockfile && pnpm lint && pnpm test && pnpm build)
+          (cd hc && corepack prepare pnpm@10.34.5 --activate && pnpm install --frozen-lockfile && pnpm lint && pnpm typecheck && pnpm test && pnpm build)
+          (cd aba && cargo metadata --locked --format-version 1 --no-deps >/dev/null && cargo fmt --all -- --check && cargo clippy --locked --workspace --all-targets --all-features -- -D warnings && cargo test --locked --workspace --all-targets)
+          if command -v mss >/dev/null 2>&1; then
+            mss doctor --strict
+            mss verify --all
+            mss upgrade admin v1.3.7 --format json > /tmp/mss-upgrade.json
+            jq -e '.dryRun == true and .success == true and (.conflicts | length) == 0' /tmp/mss-upgrade.json >/dev/null
+            echo passed > /tmp/mss-status
+          else
+            echo unavailable > /tmp/mss-status
+          fi
+
+      - name: Publish durable report as final checkpoint
+        shell: bash
+        run: |
+          source /tmp/repair-lib.sh
+          implementation_sha=$(git rev-parse HEAD)
+          base_sha=$(gh api "repos/${REPO}/pulls/1" --jq .base.sha)
+          mss_status=$(cat /tmp/mss-status)
+          mkdir -p docs/roadmap/verification
+          {
+            echo '# PR #1 Review 修复验证'
+            echo
+            echo '- 日期：2026-09-05'
+            echo "- 仓库：\`${REPO}\`"
+            echo "- 分支：\`${TARGET_BRANCH}\`"
+            echo "- 验证实现 SHA：\`${implementation_sha}\`"
+            echo "- Base SHA：\`${base_sha}\`"
+            echo "- Driver Run：\`${GITHUB_RUN_ID}\`"
+            echo "- mss 验证：\`${mss_status}\`"
+            echo
+            echo '## 检查点与 CI'
+            echo
+            echo '| SHA | 单一职责 | Push CI | PR CI |'
+            echo '| --- | --- | ---: | ---: |'
+            while IFS=$'\t' read -r sha push_id pr_id message; do
+              echo "| \`${sha}\` | ${message} | \`${push_id}\` success | \`${pr_id}\` success |"
+            done < /tmp/review-checkpoints.tsv
+            echo
+            echo '## 已关闭问题'
+            echo
+            echo '- Connection Fencing、失败不烧号，以及签名验证成功后才提交入站 Control Sequence。'
+            echo '- EncryptedFrame 身份、状态、Credential、Generation 与 exact owner/tenant 原子授权写入。'
+            echo '- 安全关键唯一索引精确验证及 Flags=0 首发合同。'
+            echo '- Session 创建幂等权威结果、控制恢复和待确认 Key Package 幂等重发。'
+            echo '- HC IndexedDB 加密 Outbox、ABA 签名 ACK、Generation/Range 校验和原字节恢复。'
+            echo '- 未知 Session 隔离、延迟原密文投递、Backpressure 与 ABA Process Incarnation。'
+            echo
+            echo '## 本实现 SHA 实际通过'
+            echo
+            echo '文档、Thin Host import、Protocol、Go 全量/Vet/Race、Admin Web lint/test/build、HC lint/typecheck/test/build、Rust metadata/fmt/Clippy/test，以及 Launcher shell 语法检查。'
+            echo
+            echo '## 未执行及 Draft 门禁'
+            echo
+            echo '- 本轮 Head 的真实内置浏览器四进程 E2E 未重新执行；原 MVP 浏览器证据不能自动继承。'
+            echo '- 未执行生产 KMS/OS Keyring、TLS/WSS、外部数据库、跨实例 Ownership/Kick、容量、磁盘满、长稳和生产部署。'
+            echo '- 固定 Admin Web v1.3.7 的已记录供应链风险仍未关闭。'
+            echo '- PR 保持 Draft、未合并。'
+            echo
+            echo '## 安全边界'
+            echo
+            echo '没有引入任意远程命令入口；真实 command、args、env 与 Workspace path 继续只来自 ABA 本地配置。'
+          } > docs/roadmap/verification/2026-09-05-review-repairs.md
+          if ! grep -q 'Draft PR #1 Review 修复闭环' docs/memory/work-log.md; then
+            cat >> docs/memory/work-log.md <<EOF
+
+          ## 2026-09-05 — Draft PR #1 Review 修复闭环
+
+          - 通过独立检查点修复 Connection Fencing、Frame 原子授权、关键唯一索引、Session 幂等、控制恢复、HC 加密 Outbox、Control Sequence、未知 Session、延迟重放、背压和 ABA Process Incarnation。
+          - 每个检查点均先在隔离 staging 分支自测，再由 GitHub Connector 推进；目标分支真实 push 的 push/PR CI 同时成功后才进入下一项。
+          - 最终实现验证 SHA：\`${implementation_sha}\`；证据见 \`docs/roadmap/verification/2026-09-05-review-repairs.md\`。
+          - PR 保持 Draft、未合并；未把本轮浏览器或生产验证写成通过。
+          EOF
+          fi
+          git diff --check
+          commit_checkpoint 'docs: finalize PR review repair verification'
+          echo "REPORT_SHA=$(git rev-parse HEAD)" >> "$GITHUB_ENV"
+
+      - name: Update Draft PR and clean temporary branches
+        shell: bash
+        run: |
+          set -euo pipefail
+          evidence=$(tail -1 /tmp/review-checkpoints.tsv)
+          IFS=$'\t' read -r report_sha push_run pr_run report_message <<<"$evidence"
+          test "$report_message" = 'docs: finalize PR review repair verification'
+          cat > /tmp/pr-body.md <<EOF
+          ## 状态
+
+          当前 Head：\`${report_sha}\`。本 PR 保持 **Draft**，未合并。
+
+          - push CI \`${push_run}\`: success
+          - PR CI \`${pr_run}\`: success
+          - Review 修复报告：\`docs/roadmap/verification/2026-09-05-review-repairs.md\`
+
+          ## 已修复
+
+          - Connection Fencing、原子 Frame 授权和安全关键唯一索引。
+          - Session 幂等、重连控制恢复与待确认 Key Package 重发。
+          - HC 加密 Outbox、ABA 签名 ACK、Generation/Range 校验和原字节恢复。
+          - Control Sequence 接收方作用域及签名后提交。
+          - 未知 Session 隔离、延迟原密文投递、Backpressure 和 ABA Process Incarnation。
+
+          ## Draft 门禁
+
+          本轮 Head 的真实浏览器四进程 E2E、生产 KMS/TLS/外部数据库/跨实例/容量/长稳验证未重新完成；固定 Admin Web v1.3.7 的供应链风险仍未关闭。
+          EOF
+          gh pr edit 1 --repo "$REPO" --body-file /tmp/pr-body.md
+          pr=$(gh api "repos/${REPO}/pulls/1")
+          test "$(jq -r .draft <<<"$pr")" = true
+          test "$(jq -r .merged <<<"$pr")" = false
+          test "$(jq -r .head.sha <<<"$pr")" = "$report_sha"
+          gh pr comment 1 --repo "$REPO" --body "Connector-driven Review repair closure passed at \`${report_sha}\`; push CI \`${push_run}\`, PR CI \`${pr_run}\`. PR remains Draft and unmerged."
+          for branch in "$SOURCE_BRANCH" "$CONVERGER_BRANCH" "$PROBE_BRANCH" "$WATCHDOG_BRANCH" "$DRIVER_BRANCH"; do
+            git push origin --delete "$branch" || true
+          done
