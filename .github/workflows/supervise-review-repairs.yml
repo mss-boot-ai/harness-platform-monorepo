@@ -1,0 +1,384 @@
+name: Supervise Serialized Review Repairs
+
+on:
+  push:
+    branches:
+      - codex/review-repair-orchestrator-20260905
+
+permissions:
+  actions: write
+  contents: write
+  pull-requests: write
+
+jobs:
+  repair:
+    if: github.event.head_commit.message == 'chore(ci): supervise serialized review repairs'
+    runs-on: ubuntu-latest
+    timeout-minutes: 330
+    env:
+      TARGET_BRANCH: codex/bootstrap-harness-platform-foundation
+      ORCHESTRATOR_BRANCH: codex/review-repair-orchestrator-20260905
+      REPO: mss-boot-ai/harness-platform-monorepo
+      GH_TOKEN: ${{ github.token }}
+    steps:
+      - name: Cancel older orchestrator waiters
+        shell: bash
+        run: |
+          set -euo pipefail
+          current="$GITHUB_RUN_ID"
+          for status in queued in_progress; do
+            gh api "repos/${REPO}/actions/runs?branch=${ORCHESTRATOR_BRANCH}&status=${status}&per_page=100" \
+              --jq '.workflow_runs[].id' | while read -r run; do
+                [[ -z "$run" || "$run" == "$current" ]] && continue
+                gh api -X POST "repos/${REPO}/actions/runs/${run}/cancel" >/dev/null 2>&1 || true
+              done
+          done
+          sleep 20
+
+      - name: Checkout target branch
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          ref: ${{ env.TARGET_BRANCH }}
+          fetch-depth: 0
+
+      - name: Fetch repair scripts and establish helpers
+        shell: bash
+        run: |
+          set -euo pipefail
+          git fetch origin "${ORCHESTRATOR_BRANCH}:refs/remotes/origin/${ORCHESTRATOR_BRANCH}"
+          cat > /tmp/repair-lib.sh <<'SH'
+          set -euo pipefail
+
+          has_commit() {
+            git log --format=%s | grep -Fxq "$1"
+          }
+
+          extract_step() {
+            local workflow="$1" step_name="$2" output="$3"
+            git show "origin/${ORCHESTRATOR_BRANCH}:.github/workflows/${workflow}" > /tmp/workflow.yml
+            python3 - "$step_name" "$output" <<'PY'
+          from pathlib import Path
+          import sys
+          name, output = sys.argv[1], Path(sys.argv[2])
+          lines = Path('/tmp/workflow.yml').read_text().splitlines()
+          marker = f'- name: {name}'
+          start = next(i for i, line in enumerate(lines) if line.strip() == marker)
+          run = next(i for i in range(start + 1, len(lines)) if lines[i].strip() == 'run: |') + 1
+          end = next((i for i in range(run, len(lines)) if lines[i].startswith('      - name: ')), len(lines))
+          body = lines[run:end]
+          indent = min(len(line) - len(line.lstrip()) for line in body if line.strip())
+          output.write_text('\n'.join(line[indent:] for line in body) + '\n')
+          PY
+            chmod +x "$output"
+          }
+
+          wait_ci() {
+            local sha="$1"
+            for attempt in $(seq 1 160); do
+              local runs push pr
+              runs=$(gh api "repos/${REPO}/actions/runs?head_sha=${sha}&per_page=100")
+              push=$(jq -r '[.workflow_runs[] | select(.name == "Harness Platform CI" and .event == "push")][0].conclusion // ""' <<<"$runs")
+              pr=$(jq -r '[.workflow_runs[] | select(.name == "Harness Platform CI" and .event == "pull_request")][0].conclusion // ""' <<<"$runs")
+              if [[ "$push" == success && "$pr" == success ]]; then
+                printf '%s\t%s\t%s\n' "$sha" "$push" "$pr" >> /tmp/review-repair-ci.tsv
+                return 0
+              fi
+              if [[ "$push" =~ ^(failure|cancelled)$ || "$pr" =~ ^(failure|cancelled)$ ]]; then
+                echo "CI failed for ${sha}: push=${push} pr=${pr}" >&2
+                return 1
+              fi
+              sleep 15
+            done
+            echo "CI timed out for ${sha}" >&2
+            return 1
+          }
+
+          commit_checkpoint() {
+            local message="$1"
+            git diff --check
+            git add -A
+            git commit -m "$message"
+            local sha
+            sha=$(git rev-parse HEAD)
+            git push origin "HEAD:${TARGET_BRANCH}"
+            wait_ci "$sha"
+            printf '%s\t%s\n' "$sha" "$message" >> /tmp/review-repair-commits.tsv
+          }
+          SH
+
+      - name: Let an already-running target repair settle
+        shell: bash
+        run: |
+          set -euo pipefail
+          previous=''
+          stable=0
+          for attempt in $(seq 1 24); do
+            current=$(git ls-remote origin "refs/heads/${TARGET_BRANCH}" | awk '{print $1}')
+            if [[ "$current" == "$previous" ]]; then
+              stable=$((stable + 1))
+            else
+              stable=0
+              previous="$current"
+            fi
+            [[ "$stable" -ge 3 ]] && break
+            sleep 10
+          done
+          git fetch origin "$TARGET_BRANCH"
+          git reset --hard "origin/${TARGET_BRANCH}"
+
+      - name: Apply missing Schema contract checkpoint
+        shell: bash
+        run: |
+          source /tmp/repair-lib.sh
+          message='fix(store): verify critical unique index contracts'
+          if ! has_commit "$message"; then
+            if [[ -f .github/workflows/apply-schema-contract-repair.yml ]]; then
+              python3 <<'PY'
+          from pathlib import Path
+          lines = Path('.github/workflows/apply-schema-contract-repair.yml').read_text().splitlines()
+          start = next(i for i, line in enumerate(lines) if line.strip() == "python3 <<'PY'") + 1
+          end = next(i for i in range(start, len(lines)) if lines[i].strip() == 'PY')
+          body = lines[start:end]
+          indent = min(len(line) - len(line.lstrip()) for line in body if line.strip())
+          Path('/tmp/schema.py').write_text('\n'.join(line[indent:] for line in body) + '\n')
+          PY
+              python3 /tmp/schema.py
+              gofmt -w platform/internal/harness/store/repository.go platform/internal/harness/store/base_schema_constraints.go platform/internal/harness/store/base_schema_constraints_test.go
+              (cd platform && go test -count=1 ./internal/harness/store && go test -race -count=1 ./internal/harness/store && go test -count=1 ./... && go vet ./...)
+              commit_checkpoint "$message"
+            else
+              echo 'schema repair workflow is missing from target' >&2
+              exit 1
+            fi
+          fi
+
+      - name: Apply missing authoritative idempotency checkpoint
+        shell: bash
+        run: |
+          source /tmp/repair-lib.sh
+          message='fix(gateway): keep session creation idempotency authoritative'
+          if ! has_commit "$message"; then
+            extract_step orchestrate-session-idempotency-repair.yml 'Make session create idempotency authoritative' /tmp/apply.sh
+            /tmp/apply.sh
+            (cd platform && go test -count=1 ./internal/harness/gateway && go test -race -count=1 ./internal/harness/gateway && go test -count=1 ./... && go vet ./...)
+            commit_checkpoint "$message"
+          fi
+
+      - name: Apply missing session-control recovery checkpoint
+        shell: bash
+        run: |
+          source /tmp/repair-lib.sh
+          message='fix(relay): recover pending session controls'
+          if ! has_commit "$message"; then
+            extract_step orchestrate-session-control-recovery.yml 'Implement durable session-control recovery' /tmp/apply.sh
+            /tmp/apply.sh
+            python3 <<'PY'
+          from pathlib import Path
+          path = Path('platform/internal/harness/store/session_delivery_test.go')
+          text = path.read_text()
+          text = text.replace('''\t\tvalue.Status = status
+          \t\tif status == domain.SessionStatusClosed {
+          \t\t\tclosed := now
+          \t\t\tvalue.ClosedAt = &closed
+          \t\t}
+          \t\tif err := persistence.CreateSession(t.Context(), value); err != nil {
+          \t\t\tt.Fatalf("CreateSession: %v", err)
+          \t\t}
+          \t\treturn value
+''', '''\t\tvalue.Status = domain.SessionStatusCreating
+          \t\tif err := persistence.CreateSession(t.Context(), value); err != nil {
+          \t\t\tt.Fatalf("CreateSession: %v", err)
+          \t\t}
+          \t\tupdates := map[string]any{"status": string(status), "updated_at": now.Add(time.Second)}
+          \t\tif status == domain.SessionStatusClosed {
+          \t\t\tupdates["closed_at"] = now.Add(time.Second)
+          \t\t}
+          \t\tif err := persistence.db.Model(new(sessionRow)).Where("id = ?", value.ID.String()).Updates(updates).Error; err != nil {
+          \t\t\tt.Fatalf("set session status %s: %v", status, err)
+          \t\t}
+          \t\tvalue.Status = status
+          \t\treturn value
+''')
+          path.write_text(text)
+          PY
+            gofmt -w platform/internal/harness/store/session_delivery_test.go
+            (cd platform && go test -count=1 ./internal/harness/store ./internal/harness/gateway && go test -race -count=1 ./internal/harness/store ./internal/harness/gateway && go test -count=1 ./... && go vet ./...)
+            (cd aba && cargo fmt --all -- --check && cargo clippy --locked --workspace --all-targets --all-features -- -D warnings && cargo test --locked --workspace --all-targets)
+            (cd hc && corepack prepare pnpm@10.34.5 --activate && pnpm install --frozen-lockfile && pnpm lint && pnpm typecheck && pnpm test && pnpm build)
+            commit_checkpoint "$message"
+          fi
+
+      - name: Apply missing HC outbox checkpoint
+        shell: bash
+        run: |
+          source /tmp/repair-lib.sh
+          message='fix(hc): persist encrypted outbox and scoped sequences'
+          if ! has_commit "$message"; then
+            extract_step orchestrate-hc-outbox-repair.yml 'Add persistent HC outbox and scoped control sequence' /tmp/apply.sh
+            /tmp/apply.sh
+            extract_step orchestrate-hc-outbox-repair.yml 'Add HC outbox tests' /tmp/tests.sh
+            /tmp/tests.sh
+            python3 <<'PY'
+          from pathlib import Path
+          path = Path('hc/web/src/SessionSetup.tsx')
+          text = path.read_text()
+          text = text.replace(
+              '[connection, identity, registration.endpointId, session]);',
+              '[connection, identity, registration.endpointId, secureStore, session]);',
+              1,
+          )
+          path.write_text(text)
+          PY
+            (cd platform && go test -count=1 ./internal/harness/gateway && go test -race -count=1 ./internal/harness/gateway && go test -count=1 ./... && go vet ./...)
+            (cd aba && cargo fmt --all -- --check && cargo clippy --locked --workspace --all-targets --all-features -- -D warnings && cargo test --locked --workspace --all-targets)
+            (cd hc && corepack prepare pnpm@10.34.5 --activate && pnpm install --frozen-lockfile && pnpm lint && pnpm typecheck && pnpm test && pnpm build)
+            commit_checkpoint "$message"
+          fi
+
+      - name: Apply missing replay isolation checkpoint
+        shell: bash
+        run: |
+          source /tmp/repair-lib.sh
+          message='fix(relay): isolate stale sessions and durable replay'
+          if ! has_commit "$message"; then
+            extract_step orchestrate-replay-isolation-repair.yml 'Isolate unknown sessions and permit durable replay' /tmp/apply.sh
+            /tmp/apply.sh
+            cat >> hc/packages/core/src/frame.ts <<'TS'
+
+          /** Compatibility alias retained for consumers that only handle UNCERTAIN. */
+          export async function openABAUncertainErrorPacket(
+            abaSigningPublicJwk: P256PublicJwk,
+            encoded: Uint8Array,
+          ): Promise<{ readonly code: ErrorCode; readonly relatedMessageId: Uint8Array } | null> {
+            return openABASessionErrorPacket(abaSigningPublicJwk, encoded);
+          }
+          TS
+            (cd platform && go test -count=1 ./internal/harness/gateway && go test -race -count=1 ./internal/harness/gateway && go test -count=1 ./... && go vet ./...)
+            (cd aba && cargo fmt --all -- --check && cargo clippy --locked --workspace --all-targets --all-features -- -D warnings && cargo test --locked --workspace --all-targets)
+            (cd hc && corepack prepare pnpm@10.34.5 --activate && pnpm install --frozen-lockfile && pnpm lint && pnpm typecheck && pnpm test && pnpm build)
+            commit_checkpoint "$message"
+          fi
+
+      - name: Apply missing backpressure checkpoint
+        shell: bash
+        run: |
+          source /tmp/repair-lib.sh
+          message='fix(gateway): reconnect on outbound backpressure'
+          if ! has_commit "$message"; then
+            extract_step orchestrate-backpressure-recovery.yml 'Fail closed on outbound backpressure' /tmp/apply.sh
+            /tmp/apply.sh
+            (cd platform && go test -count=1 ./internal/harness/gateway && go test -race -count=1 ./internal/harness/gateway && go test -count=1 ./... && go vet ./...)
+            commit_checkpoint "$message"
+          fi
+
+      - name: Apply missing delayed replay checkpoint
+        shell: bash
+        run: |
+          source /tmp/repair-lib.sh
+          message='fix(aba): accept delayed platform frame replay'
+          if ! has_commit "$message"; then
+            extract_step orchestrate-delayed-replay-repair.yml 'Accept delayed durable frame delivery' /tmp/apply.sh
+            /tmp/apply.sh
+            (cd aba && cargo fmt --all -- --check && cargo clippy --locked --workspace --all-targets --all-features -- -D warnings && cargo test --locked --workspace --all-targets)
+            (cd platform && go test -count=1 ./internal/harness/gateway ./internal/harness/store && go test -race -count=1 ./internal/harness/gateway ./internal/harness/store && go test -count=1 ./... && go vet ./...)
+            commit_checkpoint "$message"
+          fi
+
+      - name: Apply missing WAITING_KEY recovery checkpoint
+        shell: bash
+        run: |
+          source /tmp/repair-lib.sh
+          message='fix(relay): recover waiting key sessions from either endpoint'
+          if ! has_commit "$message"; then
+            extract_step orchestrate-waiting-key-recovery.yml 'Recover WAITING_KEY when either endpoint reconnects' /tmp/apply.sh
+            /tmp/apply.sh
+            python3 <<'PY'
+          from pathlib import Path
+          source = Path('platform/internal/harness/gateway/connection_directory.go').read_text()
+          test = Path('platform/internal/harness/gateway/session_recovery_test.go')
+          text = test.read_text()
+          signature = source[source.index('func newActiveConnection('):source.index(') *activeConnection {', source.index('func newActiveConnection('))]
+          if 'fencingToken' in signature or 'fencing' in signature:
+              text = text.replace(
+                  'newActiveConnection(aba.ID, 1, [16]byte{1}, nil)',
+                  'newActiveConnection(aba.ID, 1, [16]byte{1}, [32]byte{}, nil)',
+              )
+          test.write_text(text)
+          PY
+            gofmt -w platform/internal/harness/gateway/session_recovery_test.go
+            (cd platform && go test -count=1 ./internal/harness/gateway && go test -race -count=1 ./internal/harness/gateway ./internal/harness/store && go test -count=1 ./... && go vet ./...)
+            commit_checkpoint "$message"
+          fi
+
+      - name: Apply missing ABA incarnation checkpoint
+        shell: bash
+        run: |
+          source /tmp/repair-lib.sh
+          message='fix(relay): fence ABA process incarnation changes'
+          if ! has_commit "$message"; then
+            extract_step orchestrate-aba-incarnation-repair.yml 'Add process incarnation fencing' /tmp/apply.sh
+            /tmp/apply.sh
+            sed -i 's/PROCESS_INCARCERATION_INVALID/PROCESS_INCARNATION_INVALID/g' platform/internal/harness/gateway/websocket.go
+            python3 <<'PY'
+          from pathlib import Path
+          path = Path('platform/internal/harness/store/process_incarnation_test.go')
+          text = path.read_text()
+          old = '''    for _, value := range []domain.Session{active, closed, otherTenant} {
+              if err := persistence.CreateSession(t.Context(), value); err != nil {
+                  t.Fatalf("CreateSession: %v", err)
+              }
+          }
+'''
+          new = '''    for _, desired := range []domain.Session{active, closed, otherTenant} {
+              value := desired
+              value.Status = domain.SessionStatusCreating
+              value.CurrentKeyGeneration = 0
+              value.ClosedAt = nil
+              if err := persistence.CreateSession(t.Context(), value); err != nil {
+                  t.Fatalf("CreateSession: %v", err)
+              }
+              updates := map[string]any{
+                  "status": string(desired.Status),
+                  "current_key_generation": desired.CurrentKeyGeneration,
+                  "updated_at": now,
+              }
+              if desired.ClosedAt != nil {
+                  updates["closed_at"] = *desired.ClosedAt
+              }
+              if err := persistence.db.Model(new(sessionRow)).Where("id = ?", desired.ID.String()).Updates(updates).Error; err != nil {
+                  t.Fatalf("set session status %s: %v", desired.Status, err)
+              }
+          }
+'''
+          if old not in text:
+              raise SystemExit('process incarnation test setup anchor changed')
+          path.write_text(text.replace(old, new))
+          PY
+            gofmt -w platform/internal/harness/gateway/server.go platform/internal/harness/gateway/websocket.go platform/internal/harness/gateway/process_incarnation_test.go platform/internal/harness/store/process_incarnation.go platform/internal/harness/store/process_incarnation_test.go
+            (cd platform && go test -count=1 ./internal/harness/gateway ./internal/harness/store && go test -race -count=1 ./internal/harness/gateway ./internal/harness/store && go test -count=1 ./... && go vet ./...)
+            (cd aba && cargo fmt --all -- --check && cargo clippy --locked --workspace --all-targets --all-features -- -D warnings && cargo test --locked --workspace --all-targets)
+            commit_checkpoint "$message"
+          fi
+
+      - name: Publish supervisor evidence
+        shell: bash
+        run: |
+          set -euo pipefail
+          final=$(git rev-parse HEAD)
+          {
+            echo 'Serialized review repair supervisor completed.'
+            echo
+            echo "Final business HEAD: \`${final}\`"
+            echo
+            echo 'Checkpoints produced by this supervisor:'
+            if [[ -s /tmp/review-repair-commits.tsv ]]; then
+              while IFS=$'\t' read -r sha message; do
+                echo "- \`${sha}\` — ${message}"
+              done < /tmp/review-repair-commits.tsv
+            else
+              echo '- All checkpoints already existed and were CI-verified.'
+            fi
+            echo
+            echo 'Every newly produced checkpoint was pushed with normal fast-forward and waited for both push and pull_request Harness Platform CI success before the next checkpoint.'
+          } > /tmp/comment.md
+          gh pr comment 1 --repo "$REPO" --body-file /tmp/comment.md
