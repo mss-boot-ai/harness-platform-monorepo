@@ -1,0 +1,316 @@
+name: Finalize Serialized Review Repairs
+
+on:
+  push:
+    branches:
+      - codex/review-repair-orchestrator-20260905
+
+permissions:
+  actions: read
+  contents: write
+  pull-requests: write
+
+jobs:
+  finalize:
+    if: github.event.head_commit.message == 'chore(ci): finalize serialized review repairs'
+    runs-on: ubuntu-latest
+    timeout-minutes: 180
+    env:
+      TARGET_BRANCH: codex/bootstrap-harness-platform-foundation
+      ORCHESTRATOR_BRANCH: codex/review-repair-orchestrator-20260905
+      REPO: mss-boot-ai/harness-platform-monorepo
+      GH_TOKEN: ${{ github.token }}
+    steps:
+      - name: Wait for supervisor success
+        shell: bash
+        run: |
+          set -euo pipefail
+          for attempt in $(seq 1 240); do
+            response=$(gh api "repos/${REPO}/actions/workflows/supervise-review-repairs.yml/runs?branch=${ORCHESTRATOR_BRANCH}&per_page=5")
+            run=$(jq -c '[.workflow_runs[] | select(.name == "Supervise Serialized Review Repairs")][0] // {}' <<<"$response")
+            status=$(jq -r '.status // ""' <<<"$run")
+            conclusion=$(jq -r '.conclusion // ""' <<<"$run")
+            if [[ "$status" == completed ]]; then
+              if [[ "$conclusion" != success ]]; then
+                echo "review repair supervisor failed: ${conclusion}" >&2
+                exit 1
+              fi
+              echo "SUPERVISOR_RUN=$(jq -r '.id' <<<"$run")" >> "$GITHUB_ENV"
+              exit 0
+            fi
+            sleep 15
+          done
+          echo "review repair supervisor did not complete" >&2
+          exit 1
+
+      - name: Checkout repaired target branch
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          ref: ${{ env.TARGET_BRANCH }}
+          fetch-depth: 0
+
+      - name: Assert all review checkpoints exist
+        shell: bash
+        run: |
+          set -euo pipefail
+          required=(
+            'fix(gateway): fence replaced connections and preserve control sequence'
+            'fix(relay): authorize encrypted frame persistence atomically'
+            'fix(store): verify critical unique index contracts'
+            'fix(gateway): keep session creation idempotency authoritative'
+            'fix(relay): recover pending session controls'
+            'fix(hc): persist encrypted outbox and scoped sequences'
+            'fix(relay): isolate stale sessions and durable replay'
+            'fix(gateway): reconnect on outbound backpressure'
+            'fix(aba): accept delayed platform frame replay'
+            'fix(relay): recover waiting key sessions from either endpoint'
+            'fix(relay): fence ABA process incarnation changes'
+          )
+          for message in "${required[@]}"; do
+            git log --format=%s | grep -Fxq "$message" || {
+              echo "missing checkpoint: $message" >&2
+              exit 1
+            }
+          done
+          pr=$(gh api "repos/${REPO}/pulls/1")
+          test "$(jq -r .draft <<<"$pr")" = true
+          test "$(jq -r .merged <<<"$pr")" = false
+          test "$(jq -r .head.sha <<<"$pr")" = "$(git rev-parse HEAD)"
+
+      - name: Remove temporary target-branch repair workflows
+        shell: bash
+        run: |
+          set -euo pipefail
+          rm -f .github/workflows/export-review-worktree.yml
+          rm -f .github/workflows/apply-schema-contract-repair.yml
+          git diff --check
+          git config user.name "OpenAI Codex"
+          git config user.email "codex@openai.com"
+          git add -A .github/workflows
+          if git diff --cached --quiet; then
+            echo "CLEANUP_SHA=$(git rev-parse HEAD)" >> "$GITHUB_ENV"
+          else
+            git commit -m "chore(ci): remove temporary review workflows"
+            cleanup=$(git rev-parse HEAD)
+            git push origin "HEAD:${TARGET_BRANCH}"
+            echo "CLEANUP_SHA=$cleanup" >> "$GITHUB_ENV"
+          fi
+
+      - name: Wait for cleanup CI
+        shell: bash
+        run: |
+          set -euo pipefail
+          sha="$CLEANUP_SHA"
+          for attempt in $(seq 1 160); do
+            runs=$(gh api "repos/${REPO}/actions/runs?head_sha=${sha}&per_page=100")
+            push=$(jq -r '[.workflow_runs[] | select(.name == "Harness Platform CI" and .event == "push")][0].conclusion // ""' <<<"$runs")
+            pr=$(jq -r '[.workflow_runs[] | select(.name == "Harness Platform CI" and .event == "pull_request")][0].conclusion // ""' <<<"$runs")
+            if [[ "$push" == success && "$pr" == success ]]; then
+              echo "CLEANUP_PUSH_RUN=$(jq -r '[.workflow_runs[] | select(.name == "Harness Platform CI" and .event == "push")][0].id' <<<"$runs")" >> "$GITHUB_ENV"
+              echo "CLEANUP_PR_RUN=$(jq -r '[.workflow_runs[] | select(.name == "Harness Platform CI" and .event == "pull_request")][0].id' <<<"$runs")" >> "$GITHUB_ENV"
+              exit 0
+            fi
+            if [[ "$push" =~ ^(failure|cancelled)$ || "$pr" =~ ^(failure|cancelled)$ ]]; then
+              echo "cleanup CI failed: push=$push pr=$pr" >&2
+              exit 1
+            fi
+            sleep 15
+          done
+          exit 1
+
+      - name: Run full review-repair verification
+        shell: bash
+        run: |
+          set -euo pipefail
+          ./scripts/check-docs.sh
+          ./scripts/verify-platform-import.sh
+          ./scripts/check-protocol.sh
+
+          (
+            cd platform
+            go test -count=1 ./...
+            go vet ./...
+            go test -race -count=1 ./internal/harness/gateway ./internal/harness/store ./internal/modules/harness
+          )
+
+          (
+            cd platform/web
+            corepack prepare pnpm@10.34.5 --activate
+            pnpm install --frozen-lockfile
+            pnpm lint
+            pnpm test
+            pnpm build
+          )
+
+          (
+            cd hc
+            corepack prepare pnpm@10.34.5 --activate
+            pnpm install --frozen-lockfile
+            pnpm lint
+            pnpm typecheck
+            pnpm test
+            pnpm build
+          )
+
+          (
+            cd aba
+            cargo metadata --locked --format-version 1 --no-deps >/dev/null
+            cargo fmt --all -- --check
+            cargo clippy --locked --workspace --all-targets --all-features -- -D warnings
+            cargo test --locked --workspace --all-targets
+          )
+
+      - name: Write durable verification report and work log
+        shell: bash
+        run: |
+          set -euo pipefail
+          implementation_head=$(git rev-parse HEAD)
+          base=$(gh api "repos/${REPO}/pulls/1" --jq .base.sha)
+          mkdir -p docs/roadmap/verification
+          {
+            echo '# PR #1 Review 修复验证'
+            echo
+            echo "- 日期：2026-09-05"
+            echo "- 分支：\`${TARGET_BRANCH}\`"
+            echo "- 验证实现 SHA：\`${implementation_head}\`"
+            echo "- Base SHA：\`${base}\`"
+            echo "- Supervisor Run：\`${SUPERVISOR_RUN}\`"
+            echo "- Cleanup push/PR CI：\`${CLEANUP_PUSH_RUN}\` / \`${CLEANUP_PR_RUN}\`"
+            echo
+            echo '## 已关闭的 Review 问题'
+            echo
+            echo '- 替换连接的服务端 Fencing 与失败不烧号的 Platform Control Sequence。'
+            echo '- EncryptedFrame 在单事务内复核 Session、Endpoint、Credential、Generation 和 owner/tenant。'
+            echo '- Frame Flags 首发严格为零，安全关键唯一索引验证唯一性、列集合和顺序。'
+            echo '- Session 创建幂等结果不再因即时 ABA 交付失败变成矛盾的 503/FAILED。'
+            echo '- CREATING、WAITING_KEY、CLOSED 控制意图可由任一 Endpoint 重连恢复；ABA 幂等重放待确认 Key Package。'
+            echo '- HC 加密 Outbox 先持久化再发送，验证 ABA ACK 后删除，重连发送原始字节。'
+            echo '- HC Control Sequence 按接收方持久化作用域单调递增；Platform/ABA 拒绝回退。'
+            echo '- ABA 对未知 Session 返回签名 SESSION_NOT_FOUND；单个旧包不再退出 ABA 主循环。'
+            echo '- Platform 初次入口负责时间新鲜度；ABA 接受任意延迟的已存原密文投递。'
+            echo '- 目标队列背压会关闭 WSS 触发恢复，不再静默丢弃后继续标记在线。'
+            echo '- ABA Process Incarnation 变化时，单实例 Platform 在恢复前终止旧进程 Session。'
+            echo
+            echo '## 本 SHA 实际执行并通过'
+            echo
+            echo '```text'
+            echo './scripts/check-docs.sh'
+            echo './scripts/verify-platform-import.sh'
+            echo './scripts/check-protocol.sh'
+            echo 'cd platform && go test -count=1 ./...'
+            echo 'cd platform && go vet ./...'
+            echo 'cd platform && go test -race -count=1 ./internal/harness/gateway ./internal/harness/store ./internal/modules/harness'
+            echo 'cd platform/web && pnpm install --frozen-lockfile && pnpm lint && pnpm test && pnpm build'
+            echo 'cd hc && pnpm install --frozen-lockfile && pnpm lint && pnpm typecheck && pnpm test && pnpm build'
+            echo 'cd aba && cargo metadata --locked --format-version 1 --no-deps'
+            echo 'cd aba && cargo fmt --all -- --check'
+            echo 'cd aba && cargo clippy --locked --workspace --all-targets --all-features -- -D warnings'
+            echo 'cd aba && cargo test --locked --workspace --all-targets'
+            echo '```'
+            echo
+            echo '## 仍未声明的验证'
+            echo
+            echo '- 本轮未重新执行真实内置浏览器四进程 E2E；原有本地 MVP 报告不能自动继承为本轮代码的浏览器证据。'
+            echo '- 未执行 1,000 WSS/100 Session、跨实例、外部数据库、TLS/WSS、KMS/OS Keyring、磁盘满、长稳和生产部署验证。'
+            echo '- Process Incarnation 比较当前是单 Gateway 进程内状态；跨实例 Ownership/Kick 仍属于生产阶段。'
+            echo '- 固定上游 Admin Web v1.3.7 的供应链 Audit 阻断继续存在，PR 保持 Draft。'
+          } > docs/roadmap/verification/2026-09-05-review-repairs.md
+
+          cat >> docs/memory/work-log.md <<EOF
+
+          ## 2026-09-05 — PR #1 Review 修复闭环
+
+          - 在 Draft PR #1 上按独立检查点修复连接 Fencing、Frame 原子授权、关键唯一索引、Session 幂等、控制恢复、HC 加密 Outbox、控制序列作用域、延迟重放、背压恢复和 ABA Process Incarnation。
+          - 每个新增业务提交均使用普通 fast-forward push，并在继续前等待该 SHA 的 push 与 pull_request Harness Platform CI 成功。
+          - 最终实现验证 SHA：\`${implementation_head}\`；完整命令、边界和未执行项见 \`docs/roadmap/verification/2026-09-05-review-repairs.md\`。
+          - PR 保持 Draft，未合并；本轮没有宣称生产就绪或跨实例能力完成。
+          EOF
+          git diff --check
+
+      - name: Commit verification closure
+        id: report
+        shell: bash
+        run: |
+          set -euo pipefail
+          git config user.name "OpenAI Codex"
+          git config user.email "codex@openai.com"
+          git add docs/roadmap/verification/2026-09-05-review-repairs.md docs/memory/work-log.md
+          git commit -m "docs: record PR review repair verification"
+          sha=$(git rev-parse HEAD)
+          git push origin "HEAD:${TARGET_BRANCH}"
+          echo "sha=$sha" >> "$GITHUB_OUTPUT"
+
+      - name: Wait for final report CI
+        id: final_ci
+        shell: bash
+        run: |
+          set -euo pipefail
+          sha='${{ steps.report.outputs.sha }}'
+          for attempt in $(seq 1 180); do
+            runs=$(gh api "repos/${REPO}/actions/runs?head_sha=${sha}&per_page=100")
+            push=$(jq -r '[.workflow_runs[] | select(.name == "Harness Platform CI" and .event == "push")][0].conclusion // ""' <<<"$runs")
+            pr=$(jq -r '[.workflow_runs[] | select(.name == "Harness Platform CI" and .event == "pull_request")][0].conclusion // ""' <<<"$runs")
+            if [[ "$push" == success && "$pr" == success ]]; then
+              echo "push_run=$(jq -r '[.workflow_runs[] | select(.name == "Harness Platform CI" and .event == "push")][0].id' <<<"$runs")" >> "$GITHUB_OUTPUT"
+              echo "pr_run=$(jq -r '[.workflow_runs[] | select(.name == "Harness Platform CI" and .event == "pull_request")][0].id' <<<"$runs")" >> "$GITHUB_OUTPUT"
+              exit 0
+            fi
+            if [[ "$push" =~ ^(failure|cancelled)$ || "$pr" =~ ^(failure|cancelled)$ ]]; then
+              echo "final report CI failed: push=$push pr=$pr" >&2
+              exit 1
+            fi
+            sleep 15
+          done
+          exit 1
+
+      - name: Update Draft PR body with current evidence
+        shell: bash
+        run: |
+          set -euo pipefail
+          sha='${{ steps.report.outputs.sha }}'
+          push_run='${{ steps.final_ci.outputs.push_run }}'
+          pr_run='${{ steps.final_ci.outputs.pr_run }}'
+          cat > /tmp/pr-body.md <<EOF
+          ## 状态
+
+          本 PR 当前 Head：\`${sha}\`。PR 保持 **Draft**，未合并。
+
+          - push CI \`${push_run}\`: success
+          - PR CI \`${pr_run}\`: success
+          - Review 修复报告：\`docs/roadmap/verification/2026-09-05-review-repairs.md\`
+          - 原本地 MVP 报告：\`docs/roadmap/verification/2026-09-05-mvp-final.md\`
+
+          ## 本轮 Review 修复
+
+          - 服务端替换连接 Fencing，旧 Generation 已读未提交的数据不能跨过新连接激活。
+          - EncryptedFrame 的 Session、Endpoint、Credential、Generation、owner/tenant 在一个事务中复核并写入。
+          - Session 创建的幂等 HTTP 结果与持久状态保持一致；即时 ABA 交付失败只记为 pending。
+          - CREATING/WAITING_KEY/CLOSED 控制意图支持重连恢复，ABA 对同一 Session 幂等返回并重发待确认 Key Package。
+          - HC 使用 IndexedDB 加密 Outbox：持久化原始加密包后发送，验证 ABA ACK 后删除，重连按序重发原字节。
+          - HC Control Sequence 按 Platform/Peer 接收方作用域持久化并单调递增。
+          - ABA 对未知 Session 返回签名 SESSION_NOT_FOUND；延迟原密文重放不再因五分钟窗口误杀。
+          - 目标 WSS 队列背压会关闭连接触发恢复，不再静默丢包。
+          - ABA Process Incarnation 改变会在单实例 Platform 中先终止旧进程 Session。
+          - 基础 Frame/Endpoint 安全关键唯一索引验证唯一性与准确列顺序。
+
+          ## 当前仍保持 Draft 的原因
+
+          - 本轮代码修改后的真实内置浏览器四进程 E2E 尚未重新执行；构建和自动化测试不能替代浏览器证据。
+          - 固定上游 \`@mss-boot-io/admin-web@1.3.7\` 的 production dependency audit 仍有已记录的高危/严重项，需要上游安全版本。
+          - 生产 KMS/OS Keyring、TLS/WSS、外部数据库、跨实例 Connection Directory/Kick、完整容量、故障和长稳验证尚未完成。
+
+          ## 审查边界
+
+          本轮未引入任意远程命令入口。Runtime command、args、env 与 Workspace path 仍只来自 ABA 本地配置；Platform/HC 只传稳定 ID。
+          EOF
+          gh pr edit 1 --repo "$REPO" --body-file /tmp/pr-body.md
+          pr=$(gh api "repos/${REPO}/pulls/1")
+          test "$(jq -r .draft <<<"$pr")" = true
+          test "$(jq -r .merged <<<"$pr")" = false
+          test "$(jq -r .head.sha <<<"$pr")" = "$sha"
+
+      - name: Publish closure comment
+        shell: bash
+        run: |
+          set -euo pipefail
+          gh pr comment 1 --repo "$REPO" --body "Serialized review repair closure passed at \`${{ steps.report.outputs.sha }}\`; push CI \`${{ steps.final_ci.outputs.push_run }}\` and PR CI \`${{ steps.final_ci.outputs.pr_run }}\` succeeded. PR remains Draft and unmerged."
