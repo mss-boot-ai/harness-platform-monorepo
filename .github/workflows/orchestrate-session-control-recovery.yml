@@ -1,0 +1,594 @@
+name: Orchestrate Session Control Recovery
+
+on:
+  push:
+    branches:
+      - codex/review-repair-orchestrator-20260905
+
+permissions:
+  contents: write
+  pull-requests: write
+
+jobs:
+  repair:
+    if: github.event.head_commit.message == 'chore(ci): orchestrate session control recovery'
+    runs-on: ubuntu-latest
+    env:
+      TARGET_BRANCH: codex/bootstrap-harness-platform-foundation
+      REPO: mss-boot-ai/harness-platform-monorepo
+      GH_TOKEN: ${{ github.token }}
+    steps:
+      - name: Wait for authoritative idempotency checkpoint
+        shell: bash
+        run: |
+          set -euo pipefail
+          wanted='fix(gateway): keep session creation idempotency authoritative'
+          for attempt in $(seq 1 100); do
+            sha=$(git ls-remote "https://x-access-token:${GH_TOKEN}@github.com/${REPO}.git" "refs/heads/${TARGET_BRANCH}" | awk '{print $1}')
+            message=$(gh api "repos/${REPO}/commits/${sha}" --jq '.commit.message | split("\n")[0]')
+            if [[ "$message" == "$wanted" ]]; then
+              runs=$(gh api "repos/${REPO}/actions/runs?head_sha=${sha}&per_page=100")
+              push=$(jq -r '[.workflow_runs[] | select(.name == "Harness Platform CI" and .event == "push")][0].conclusion // ""' <<<"$runs")
+              pr=$(jq -r '[.workflow_runs[] | select(.name == "Harness Platform CI" and .event == "pull_request")][0].conclusion // ""' <<<"$runs")
+              if [[ "$push" == success && "$pr" == success ]]; then
+                echo "BASE_SHA=$sha" >> "$GITHUB_ENV"
+                exit 0
+              fi
+              if [[ "$push" =~ ^(failure|cancelled)$ || "$pr" =~ ^(failure|cancelled)$ ]]; then
+                echo "previous checkpoint CI failed: push=$push pr=$pr" >&2
+                exit 1
+              fi
+            fi
+            sleep 15
+          done
+          echo "previous checkpoint did not reach successful CI" >&2
+          exit 1
+
+      - name: Checkout target branch
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          ref: ${{ env.TARGET_BRANCH }}
+          fetch-depth: 0
+
+      - name: Guard exact base
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$(git rev-parse HEAD)" = "$BASE_SHA"
+
+      - name: Implement durable session-control recovery
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 <<'PY'
+          from pathlib import Path
+
+          server = Path('platform/internal/harness/gateway/server.go')
+          text = server.read_text()
+          anchor = '''\tGetSession(context.Context, domain.ID) (domain.Session, error)
+          \tUpdateSession(context.Context, domain.ID, func(*domain.Session) error) (domain.Session, error)
+          \tListEndpoints(context.Context, string, string, int) ([]domain.Endpoint, error)
+'''
+          replacement = '''\tGetSession(context.Context, domain.ID) (domain.Session, error)
+          \tUpdateSession(context.Context, domain.ID, func(*domain.Session) error) (domain.Session, error)
+          \tGetScopedEndpoint(context.Context, domain.ID, string, string) (domain.Endpoint, error)
+          \tListSessionsForEndpointDelivery(context.Context, domain.Endpoint, []domain.SessionStatus, int) ([]domain.Session, error)
+          \tListEndpoints(context.Context, string, string, int) ([]domain.Endpoint, error)
+'''
+          if text.count(anchor) != 1:
+              raise SystemExit('gateway Persistence session anchor changed')
+          server.write_text(text.replace(anchor, replacement))
+
+          websocket = Path('platform/internal/harness/gateway/websocket.go')
+          text = websocket.read_text()
+          anchor = '''\tdefer server.connections.remove(active)
+          \tdefer active.close(websocket.CloseNormalClosure, "connection closed")
+          \tgo active.runWriter()
+          \t_ = connection.SetReadDeadline(time.Now().Add(2 * time.Duration(heartbeatIntervalMS) * time.Millisecond))
+'''
+          replacement = '''\tdefer server.connections.remove(active)
+          \tdefer active.close(websocket.CloseNormalClosure, "connection closed")
+          \tgo active.runWriter()
+          \tif err := server.recoverPendingSessionControls(request.Context(), endpoint); err != nil {
+          \t\tactive.close(websocket.CloseInternalServerErr, "session recovery unavailable")
+          \t\treturn
+          \t}
+          \t_ = connection.SetReadDeadline(time.Now().Add(2 * time.Duration(heartbeatIntervalMS) * time.Millisecond))
+'''
+          if text.count(anchor) != 1:
+              raise SystemExit('websocket activation anchor changed')
+          websocket.write_text(text.replace(anchor, replacement))
+
+          ready = Path('platform/internal/harness/gateway/ready_packet.go')
+          text = ready.read_text()
+          old = '''\tif session.ABAEndpointID != endpoint.ID || session.HCEndpointID != receiverID ||
+          \t\tsession.Status != domain.SessionStatusCreating || result.GetActiveKeyGeneration() != 0 ||
+          \t\t!capabilitySubset(result.GetNegotiatedCapabilityHints(), session.RequestedCapabilities) {
+          \t\treturn domain.ID{}, errors.New("OpenTunnelResult session binding is invalid")
+          \t}
+'''
+          new = '''\tif session.ABAEndpointID != endpoint.ID || session.HCEndpointID != receiverID ||
+          \t\t(session.Status != domain.SessionStatusCreating && session.Status != domain.SessionStatusWaitingKey) ||
+          \t\tresult.GetActiveKeyGeneration() != 0 ||
+          \t\t!capabilitySubset(result.GetNegotiatedCapabilityHints(), session.RequestedCapabilities) {
+          \t\treturn domain.ID{}, errors.New("OpenTunnelResult session binding is invalid")
+          \t}
+'''
+          if text.count(old) != 1:
+              raise SystemExit('OpenTunnelResult state anchor changed')
+          text = text.replace(old, new)
+          old = '''\t\t_, err = server.persistence.UpdateSession(ctx, session.ID, func(value *domain.Session) error {
+          \t\t\treturn value.WaitForKey(now)
+          \t\t})
+'''
+          new = '''\t\tif session.Status == domain.SessionStatusCreating {
+          \t\t\t_, err = server.persistence.UpdateSession(ctx, session.ID, func(value *domain.Session) error {
+          \t\t\t\treturn value.WaitForKey(now)
+          \t\t\t})
+          \t\t}
+'''
+          if text.count(old) != 1:
+              raise SystemExit('OpenTunnelResult transition anchor changed')
+          ready.write_text(text.replace(old, new))
+
+          Path('platform/internal/harness/store/session_delivery.go').write_text(r'''package store
+
+import (
+    "context"
+    "strings"
+
+    "github.com/mss-boot-ai/harness-platform-monorepo/platform/internal/harness/domain"
+)
+
+func (store *Store) GetScopedEndpoint(
+    ctx context.Context,
+    id domain.ID,
+    owner string,
+    tenant string,
+) (domain.Endpoint, error) {
+    if err := requireStore(store, ctx); err != nil {
+        return domain.Endpoint{}, err
+    }
+    owner = strings.TrimSpace(owner)
+    tenant = strings.TrimSpace(tenant)
+    if id.IsZero() || owner == "" {
+        return domain.Endpoint{}, domain.NewProblem(domain.CodeInvalidArgument, "endpoint scope is required", nil)
+    }
+    var row endpointRow
+    if err := store.db.WithContext(ctx).Where(
+        "id = ? AND owner_user_id = ? AND tenant_id = ?", id.String(), owner, tenant,
+    ).First(&row).Error; err != nil {
+        return domain.Endpoint{}, notFoundOr("read scoped endpoint", "endpoint was not found", err)
+    }
+    return endpointFromRow(row)
+}
+
+func (store *Store) ListSessionsForEndpointDelivery(
+    ctx context.Context,
+    endpoint domain.Endpoint,
+    statuses []domain.SessionStatus,
+    limit int,
+) ([]domain.Session, error) {
+    if err := requireStore(store, ctx); err != nil {
+        return nil, err
+    }
+    if endpoint.ID.IsZero() || strings.TrimSpace(endpoint.OwnerUserID) == "" || limit <= 0 || limit > 256 || len(statuses) == 0 {
+        return nil, domain.NewProblem(domain.CodeInvalidArgument, "session delivery scope is invalid", nil)
+    }
+    values := make([]string, 0, len(statuses))
+    for _, status := range statuses {
+        switch status {
+        case domain.SessionStatusCreating, domain.SessionStatusWaitingKey, domain.SessionStatusClosed:
+            values = append(values, string(status))
+        default:
+            return nil, domain.NewProblem(domain.CodeInvalidArgument, "session delivery status is invalid", nil)
+        }
+    }
+    column := ""
+    switch endpoint.Type {
+    case domain.EndpointTypeABA:
+        column = "aba_endpoint_id"
+    case domain.EndpointTypeHCWeb, domain.EndpointTypeHCReference:
+        column = "hc_endpoint_id"
+    default:
+        return nil, domain.NewProblem(domain.CodeInvalidArgument, "endpoint cannot receive session controls", nil)
+    }
+    var rows []sessionRow
+    if err := store.db.WithContext(ctx).Where(
+        column+" = ? AND owner_user_id = ? AND tenant_id = ? AND status IN ?",
+        endpoint.ID.String(), strings.TrimSpace(endpoint.OwnerUserID), strings.TrimSpace(endpoint.TenantID), values,
+    ).Order("updated_at ASC, id ASC").Limit(limit).Find(&rows).Error; err != nil {
+        return nil, classifyPersistence(err, "list pending session controls")
+    }
+    sessions := make([]domain.Session, 0, len(rows))
+    for _, row := range rows {
+        session, err := sessionFromRow(row)
+        if err != nil {
+            return nil, err
+        }
+        sessions = append(sessions, session)
+    }
+    return sessions, nil
+}
+''')
+
+          Path('platform/internal/harness/gateway/session_recovery.go').write_text(r'''package gateway
+
+import (
+    "context"
+
+    "github.com/mss-boot-ai/harness-platform-monorepo/platform/internal/harness/domain"
+)
+
+const maxRecoveredSessionControls = 128
+
+func (server *Server) recoverPendingSessionControls(ctx context.Context, endpoint domain.Endpoint) error {
+    var statuses []domain.SessionStatus
+    switch endpoint.Type {
+    case domain.EndpointTypeABA:
+        statuses = []domain.SessionStatus{domain.SessionStatusCreating, domain.SessionStatusClosed}
+    case domain.EndpointTypeHCWeb, domain.EndpointTypeHCReference:
+        statuses = []domain.SessionStatus{domain.SessionStatusWaitingKey}
+    default:
+        return nil
+    }
+    sessions, err := server.persistence.ListSessionsForEndpointDelivery(
+        ctx, endpoint, statuses, maxRecoveredSessionControls,
+    )
+    if err != nil {
+        return err
+    }
+    now := server.now().UTC()
+    for _, session := range sessions {
+        switch {
+        case endpoint.Type == domain.EndpointTypeABA && session.Status == domain.SessionStatusCreating:
+            hc, lookupErr := server.persistence.GetScopedEndpoint(
+                ctx, session.HCEndpointID, session.OwnerUserID, session.TenantID,
+            )
+            if lookupErr == nil {
+                _ = server.sendOpenTunnelRequest(session, hc, now)
+            }
+        case endpoint.Type == domain.EndpointTypeABA && session.Status == domain.SessionStatusClosed:
+            _ = server.sendCloseTunnelRequest(session, now)
+        case (endpoint.Type == domain.EndpointTypeHCWeb || endpoint.Type == domain.EndpointTypeHCReference) &&
+            session.Status == domain.SessionStatusWaitingKey:
+            _ = server.sendOpenTunnelRequest(session, endpoint, now)
+        }
+    }
+    return nil
+}
+''')
+
+          Path('platform/internal/harness/store/session_delivery_test.go').write_text(r'''package store
+
+import (
+    "testing"
+    "time"
+
+    "github.com/mss-boot-ai/harness-platform-monorepo/platform/internal/harness/domain"
+)
+
+func TestListSessionsForEndpointDeliveryIsScopedAndStatusBounded(t *testing.T) {
+    persistence := newTestStore(t)
+    now := time.Unix(1_800_000_000, 0).UTC()
+    aba := endpoint(101, 102, 103, domain.EndpointTypeABA, "owner", now)
+    aba.TenantID = "tenant-a"
+    hc := endpoint(104, 105, 106, domain.EndpointTypeHCWeb, "owner", now)
+    hc.TenantID = "tenant-a"
+    other := endpoint(107, 108, 109, domain.EndpointTypeHCWeb, "owner", now)
+    other.TenantID = "tenant-b"
+    for _, value := range []domain.Endpoint{aba, hc, other} {
+        if err := persistence.CreateEndpoint(t.Context(), value); err != nil {
+            t.Fatalf("CreateEndpoint: %v", err)
+        }
+    }
+    create := func(id byte, tenant string, hcID domain.ID, status domain.SessionStatus) domain.Session {
+        value := session(id, aba.ID, hcID, "owner", now)
+        value.TenantID = tenant
+        value.Status = status
+        if status == domain.SessionStatusClosed {
+            closed := now
+            value.ClosedAt = &closed
+        }
+        if err := persistence.CreateSession(t.Context(), value); err != nil {
+            t.Fatalf("CreateSession: %v", err)
+        }
+        return value
+    }
+    creating := create(110, "tenant-a", hc.ID, domain.SessionStatusCreating)
+    waiting := create(111, "tenant-a", hc.ID, domain.SessionStatusWaitingKey)
+    _ = create(112, "tenant-b", other.ID, domain.SessionStatusCreating)
+
+    abaValues, err := persistence.ListSessionsForEndpointDelivery(
+        t.Context(), aba, []domain.SessionStatus{domain.SessionStatusCreating}, 10,
+    )
+    if err != nil {
+        t.Fatalf("ListSessionsForEndpointDelivery ABA: %v", err)
+    }
+    if len(abaValues) != 1 || abaValues[0].ID != creating.ID {
+        t.Fatalf("ABA deliveries=%#v", abaValues)
+    }
+    hcValues, err := persistence.ListSessionsForEndpointDelivery(
+        t.Context(), hc, []domain.SessionStatus{domain.SessionStatusWaitingKey}, 10,
+    )
+    if err != nil {
+        t.Fatalf("ListSessionsForEndpointDelivery HC: %v", err)
+    }
+    if len(hcValues) != 1 || hcValues[0].ID != waiting.ID {
+        t.Fatalf("HC deliveries=%#v", hcValues)
+    }
+    if _, err := persistence.GetScopedEndpoint(t.Context(), other.ID, "owner", "tenant-a"); !domain.HasCode(err, domain.CodeNotFound) {
+        t.Fatalf("cross-tenant GetScopedEndpoint error=%v", err)
+    }
+}
+''')
+
+          # ABA idempotent OpenTunnel recovery.
+          path = Path('aba/src/gateway/control.rs')
+          text = path.read_text()
+          old = '''    uncertain: bool,
+    uncertain_message_id: Option<[u8; 16]>,
+}'''
+          new = '''    uncertain: bool,
+    uncertain_message_id: Option<[u8; 16]>,
+    runtime_profile_id: String,
+    workspace_id: String,
+    negotiated_capabilities: Vec<String>,
+    key_package_payload: Vec<u8>,
+}'''
+          if text.count(old) != 1:
+              raise SystemExit('LocalSession field anchor changed')
+          text = text.replace(old, new)
+
+          anchor = '''        let request = OpenTunnelRequest::decode(control_frame.payload.as_slice())
+            .map_err(|_| GatewayError::Protocol)?;
+        validate_open_request(&request, now_ms)?;
+        let mut decision = if self.sessions.len() >= usize::from(config.limits.max_sessions) {'''
+          replacement = '''        let request = OpenTunnelRequest::decode(control_frame.payload.as_slice())
+            .map_err(|_| GatewayError::Protocol)?;
+        validate_open_request(&request, now_ms)?;
+        let session_id: [u8; 16] = request
+            .session_id
+            .as_slice()
+            .try_into()
+            .map_err(|_| GatewayError::Protocol)?;
+        if let Some(existing) = self.sessions.get(&session_id) {
+            let recipient: [u8; 16] = request
+                .hc_endpoint_id
+                .as_slice()
+                .try_into()
+                .map_err(|_| GatewayError::Protocol)?;
+            if existing.material.recipient_hc_endpoint_id != recipient
+                || existing.material.generation != request.requested_key_generation
+                || existing.material.policy_revision != request.authorization_revision
+                || existing.runtime_profile_id != request.runtime_profile_id
+                || existing.workspace_id != request.workspace_id
+                || existing.negotiated_capabilities != request.requested_acp_capabilities
+            {
+                return Err(GatewayError::ProtocolStage("duplicate OpenTunnel binding"));
+            }
+            let active_generation = if existing.active { existing.material.generation } else { 0 };
+            let pending_package = (!existing.active).then(|| existing.key_package_payload.clone());
+            let receiver = existing.material.recipient_hc_endpoint_id;
+            let capabilities = existing.negotiated_capabilities.clone();
+            self.platform_inbound_sequence = control_frame.control_sequence;
+            let payload = OpenTunnelResult {
+                session_id: request.session_id.clone(),
+                status: OpenTunnelStatus::AlreadyOpen as i32,
+                stable_error_code: String::new(),
+                accepted_authorization_revision: request.authorization_revision,
+                active_key_generation: active_generation,
+                negotiated_capability_hints: capabilities,
+            }
+            .encode_to_vec();
+            let mut responses = vec![self.signed_control(
+                endpoint_id,
+                &receiver,
+                ControlType::OpenTunnelResult,
+                payload,
+                identity,
+                now_ms,
+            )?];
+            if let Some(package) = pending_package {
+                responses.push(self.signed_control(
+                    endpoint_id,
+                    &receiver,
+                    ControlType::SessionKeyPackage,
+                    package,
+                    identity,
+                    now_ms,
+                )?);
+            }
+            return Ok(responses);
+        }
+        let mut decision = if self.sessions.len() >= usize::from(config.limits.max_sessions) {'''
+          if text.count(anchor) != 1:
+              raise SystemExit('OpenTunnel decode anchor changed')
+          text = text.replace(anchor, replacement)
+
+          duplicate_session_decl = '''        let session_id: [u8; 16] = request
+            .session_id
+            .as_slice()
+            .try_into()
+            .map_err(|_| GatewayError::Protocol)?;
+        let recipient = p256_public_jwk_from_sec1(&request.hc_kem_public_key, &request.hc_kem_jkt)?;'''
+          replacement = '''        let recipient = p256_public_jwk_from_sec1(&request.hc_kem_public_key, &request.hc_kem_jkt)?;'''
+          if text.count(duplicate_session_decl) != 1:
+              raise SystemExit('second session_id declaration anchor changed')
+          text = text.replace(duplicate_session_decl, replacement)
+
+          old = '''        let package = SessionKeyPackage {
+            session_id: session_id.to_vec(),'''
+          new = '''        let package_payload = SessionKeyPackage {
+            session_id: session_id.to_vec(),'''
+          if text.count(old) != 1:
+              raise SystemExit('key package payload anchor changed')
+          text = text.replace(old, new)
+          old = '''        }
+        .encode_to_vec();
+        responses.push(self.signed_control(
+            endpoint_id,
+            &material.recipient_hc_endpoint_id,
+            ControlType::SessionKeyPackage,
+            package,
+            identity,
+            now_ms,
+        )?);'''
+          new = '''        }
+        .encode_to_vec();
+        responses.push(self.signed_control(
+            endpoint_id,
+            &material.recipient_hc_endpoint_id,
+            ControlType::SessionKeyPackage,
+            package_payload.clone(),
+            identity,
+            now_ms,
+        )?);'''
+          if text.count(old) != 1:
+              raise SystemExit('key package send anchor changed')
+          text = text.replace(old, new)
+          old = '''                uncertain: false,
+                uncertain_message_id: None,
+            },'''
+          new = '''                uncertain: false,
+                uncertain_message_id: None,
+                runtime_profile_id: request.runtime_profile_id.clone(),
+                workspace_id: request.workspace_id.clone(),
+                negotiated_capabilities: decision.negotiated_capabilities.clone(),
+                key_package_payload: package_payload,
+            },'''
+          if text.count(old) != 1:
+              raise SystemExit('LocalSession initializer anchor changed')
+          path.write_text(text.replace(old, new))
+
+          # HC accepts an exact duplicate package and re-ACKs it.
+          path = Path('hc/web/src/SessionSetup.tsx')
+          text = path.read_text()
+          old = '''      if (opened !== null) {
+        if (opened.controlSequence <= lastPackageSequence.current) {
+          throw new Error('SessionKeyPackage control sequence replayed');
+        }
+        zeroOpenedPackage(openedPackage.current);
+        openedPackage.current = opened;
+        lastPackageSequence.current = opened.controlSequence;
+        setKeyReady(true);'''
+          new = '''      if (opened !== null) {
+        const currentPackage = openedPackage.current;
+        const duplicatePackage = currentPackage !== null &&
+          equalBytes(currentPackage.keyPackageId, opened.keyPackageId) &&
+          currentPackage.material.generation === opened.material.generation;
+        if (opened.controlSequence <= lastPackageSequence.current && !duplicatePackage) {
+          zeroOpenedPackage(opened);
+          throw new Error('SessionKeyPackage control sequence replayed');
+        }
+        if (duplicatePackage) {
+          zeroOpenedPackage(opened);
+        } else {
+          zeroOpenedPackage(currentPackage);
+          openedPackage.current = opened;
+          lastPackageSequence.current = opened.controlSequence;
+          setKeyReady(true);
+        }'''
+          if text.count(old) != 1:
+              raise SystemExit('HC key package replay anchor changed')
+          text = text.replace(old, new)
+          old = '''function zeroOpenedPackage(value: OpenedSessionKeyPackage | null): void {
+  if (value === null) {
+    return;
+  }
+  value.hcToAbaKey.fill(0);
+  value.abaToHcKey.fill(0);
+  value.material.srk.fill(0);
+  value.material.sessionNonce.fill(0);
+}
+'''
+          new = '''function zeroOpenedPackage(value: OpenedSessionKeyPackage | null): void {
+  if (value === null) {
+    return;
+  }
+  value.hcToAbaKey.fill(0);
+  value.abaToHcKey.fill(0);
+  value.material.srk.fill(0);
+  value.material.sessionNonce.fill(0);
+}
+
+function equalBytes(left: Uint8Array, right: Uint8Array): boolean {
+  return left.length === right.length && left.every((value, index) => value === right[index]);
+}
+'''
+          if text.count(old) != 1:
+              raise SystemExit('HC zero helper anchor changed')
+          path.write_text(text.replace(old, new))
+          PY
+          gofmt -w \
+            platform/internal/harness/gateway/server.go \
+            platform/internal/harness/gateway/websocket.go \
+            platform/internal/harness/gateway/ready_packet.go \
+            platform/internal/harness/gateway/session_recovery.go \
+            platform/internal/harness/store/session_delivery.go \
+            platform/internal/harness/store/session_delivery_test.go
+          cargo fmt --manifest-path aba/Cargo.toml --all
+          git diff --check
+
+      - name: Verify checkpoint
+        shell: bash
+        run: |
+          set -euo pipefail
+          cd platform
+          go test -count=1 ./internal/harness/store ./internal/harness/gateway
+          go test -race -count=1 ./internal/harness/store ./internal/harness/gateway
+          go test -count=1 ./...
+          go vet ./...
+          cd ../aba
+          cargo fmt --all -- --check
+          cargo clippy --locked --workspace --all-targets --all-features -- -D warnings
+          cargo test --locked --workspace --all-targets
+          cd ../hc
+          corepack prepare pnpm@10.34.5 --activate
+          pnpm install --frozen-lockfile
+          pnpm lint
+          pnpm typecheck
+          pnpm test
+          pnpm build
+
+      - name: Commit and push checkpoint
+        id: push
+        shell: bash
+        run: |
+          set -euo pipefail
+          git config user.name "OpenAI Codex"
+          git config user.email "codex@openai.com"
+          git add platform/internal/harness/gateway/server.go \
+                  platform/internal/harness/gateway/websocket.go \
+                  platform/internal/harness/gateway/ready_packet.go \
+                  platform/internal/harness/gateway/session_recovery.go \
+                  platform/internal/harness/store/session_delivery.go \
+                  platform/internal/harness/store/session_delivery_test.go \
+                  aba/src/gateway/control.rs \
+                  hc/web/src/SessionSetup.tsx
+          git commit -m "fix(relay): recover pending session controls"
+          sha=$(git rev-parse HEAD)
+          git push origin HEAD:${TARGET_BRANCH}
+          echo "sha=$sha" >> "$GITHUB_OUTPUT"
+
+      - name: Wait for checkpoint CI
+        shell: bash
+        run: |
+          set -euo pipefail
+          sha='${{ steps.push.outputs.sha }}'
+          for attempt in $(seq 1 100); do
+            runs=$(gh api "repos/${REPO}/actions/runs?head_sha=${sha}&per_page=100")
+            push=$(jq -r '[.workflow_runs[] | select(.name == "Harness Platform CI" and .event == "push")][0].conclusion // ""' <<<"$runs")
+            pr=$(jq -r '[.workflow_runs[] | select(.name == "Harness Platform CI" and .event == "pull_request")][0].conclusion // ""' <<<"$runs")
+            if [[ "$push" == success && "$pr" == success ]]; then
+              gh pr comment 1 --repo "$REPO" --body "Review repair checkpoint passed: pending Session/OpenTunnel/CloseTunnel control recovery and idempotent ABA Key Package redelivery at \`${sha}\`. Both push and PR CI succeeded."
+              exit 0
+            fi
+            if [[ "$push" =~ ^(failure|cancelled)$ || "$pr" =~ ^(failure|cancelled)$ ]]; then
+              echo "checkpoint CI failed: push=$push pr=$pr" >&2
+              exit 1
+            fi
+            sleep 15
+          done
+          echo "checkpoint CI did not finish" >&2
+          exit 1
