@@ -1,0 +1,214 @@
+name: Orchestrate Waiting Key Recovery
+
+on:
+  push:
+    branches:
+      - codex/review-repair-orchestrator-20260905
+
+permissions:
+  contents: write
+  pull-requests: write
+
+jobs:
+  repair:
+    if: github.event.head_commit.message == 'chore(ci): orchestrate waiting key recovery'
+    runs-on: ubuntu-latest
+    env:
+      TARGET_BRANCH: codex/bootstrap-harness-platform-foundation
+      REPO: mss-boot-ai/harness-platform-monorepo
+      GH_TOKEN: ${{ github.token }}
+    steps:
+      - name: Wait for delayed replay checkpoint
+        shell: bash
+        run: |
+          set -euo pipefail
+          wanted='fix(aba): accept delayed platform frame replay'
+          for attempt in $(seq 1 200); do
+            sha=$(git ls-remote "https://x-access-token:${GH_TOKEN}@github.com/${REPO}.git" "refs/heads/${TARGET_BRANCH}" | awk '{print $1}')
+            message=$(gh api "repos/${REPO}/commits/${sha}" --jq '.commit.message | split("\n")[0]')
+            if [[ "$message" == "$wanted" ]]; then
+              runs=$(gh api "repos/${REPO}/actions/runs?head_sha=${sha}&per_page=100")
+              push=$(jq -r '[.workflow_runs[] | select(.name == "Harness Platform CI" and .event == "push")][0].conclusion // ""' <<<"$runs")
+              pr=$(jq -r '[.workflow_runs[] | select(.name == "Harness Platform CI" and .event == "pull_request")][0].conclusion // ""' <<<"$runs")
+              if [[ "$push" == success && "$pr" == success ]]; then
+                echo "BASE_SHA=$sha" >> "$GITHUB_ENV"
+                exit 0
+              fi
+              if [[ "$push" =~ ^(failure|cancelled)$ || "$pr" =~ ^(failure|cancelled)$ ]]; then
+                echo "previous checkpoint CI failed: push=$push pr=$pr" >&2
+                exit 1
+              fi
+            fi
+            sleep 15
+          done
+          echo "previous checkpoint did not reach successful CI" >&2
+          exit 1
+
+      - name: Checkout target branch
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          ref: ${{ env.TARGET_BRANCH }}
+          fetch-depth: 0
+
+      - name: Guard exact base
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$(git rev-parse HEAD)" = "$BASE_SHA"
+
+      - name: Recover WAITING_KEY when either endpoint reconnects
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 <<'PY'
+          from pathlib import Path
+
+          path = Path('platform/internal/harness/gateway/session_recovery.go')
+          text = path.read_text()
+          old = '''\tcase domain.EndpointTypeABA:
+          \t\tstatuses = []domain.SessionStatus{domain.SessionStatusCreating, domain.SessionStatusClosed}
+'''
+          new = '''\tcase domain.EndpointTypeABA:
+          \t\tstatuses = []domain.SessionStatus{
+          \t\t\tdomain.SessionStatusCreating,
+          \t\t\tdomain.SessionStatusWaitingKey,
+          \t\t\tdomain.SessionStatusClosed,
+          \t\t}
+'''
+          if text.count(old) != 1:
+              raise SystemExit('ABA recovery status anchor changed')
+          text = text.replace(old, new)
+          old = '''\t\tcase endpoint.Type == domain.EndpointTypeABA && session.Status == domain.SessionStatusCreating:
+'''
+          new = '''\t\tcase endpoint.Type == domain.EndpointTypeABA &&
+          \t\t\t(session.Status == domain.SessionStatusCreating || session.Status == domain.SessionStatusWaitingKey):
+'''
+          if text.count(old) != 1:
+              raise SystemExit('ABA open recovery switch anchor changed')
+          path.write_text(text.replace(old, new))
+
+          test = Path('platform/internal/harness/gateway/session_recovery_test.go')
+          test.write_text(r'''package gateway
+
+import (
+    "bytes"
+    "context"
+    "testing"
+    "time"
+
+    "github.com/mss-boot-ai/harness-platform-monorepo/platform/internal/harness/domain"
+    "github.com/mss-boot-ai/harness-platform-monorepo/platform/internal/harness/protocol/awpv1"
+    "google.golang.org/protobuf/proto"
+)
+
+func TestWaitingKeyRecoveryQueuesOpenTunnelWhenABAReconnects(t *testing.T) {
+    now := time.Unix(1_800_000_000, 0).UTC()
+    persistence, aba, _, _, _, _, _ := abaGatewayFixture(t, now)
+    hc, _, err := persistence.GetEndpointCredential(t.Context(), gatewayID(1), gatewayID(3), now)
+    if err != nil {
+        t.Fatalf("GetEndpointCredential HC: %v", err)
+    }
+    session := domain.Session{
+        ID: gatewayID(121), OwnerUserID: aba.OwnerUserID, TenantID: aba.TenantID,
+        ABAEndpointID: aba.ID, HCEndpointID: hc.ID,
+        RuntimeProfileID: "test-agent", WorkspaceID: "fixture",
+        RequestedCapabilities: []string{"prompt", "session"},
+        Status: domain.SessionStatusCreating, CreatedAt: now, UpdatedAt: now,
+    }
+    if err := persistence.CreateSession(t.Context(), session); err != nil {
+        t.Fatalf("CreateSession: %v", err)
+    }
+    if _, err := persistence.UpdateSession(t.Context(), session.ID, func(value *domain.Session) error {
+        return value.WaitForKey(now.Add(time.Second))
+    }); err != nil {
+        t.Fatalf("WaitForKey: %v", err)
+    }
+    trust, err := NewEphemeralTrust(deterministicGatewayBytes(512), now)
+    if err != nil {
+        t.Fatalf("NewEphemeralTrust: %v", err)
+    }
+    directory := newMemoryConnectionDirectory()
+    active := newActiveConnection(aba.ID, 1, [16]byte{1}, nil)
+    if _, accepted := directory.activate(active); !accepted {
+        t.Fatal("ABA connection did not activate")
+    }
+    server := &Server{
+        config: Config{}, persistence: persistence, random: deterministicGatewayBytes(4096),
+        now: func() time.Time { return now.Add(2 * time.Second) }, trust: trust, connections: directory,
+    }
+    if err := server.recoverPendingSessionControls(context.Background(), aba); err != nil {
+        t.Fatalf("recoverPendingSessionControls: %v", err)
+    }
+    var encoded []byte
+    select {
+    case encoded = <-active.outbound:
+        active.queuedBytes.Add(-int64(len(encoded)))
+    default:
+        t.Fatal("WAITING_KEY recovery did not queue OpenTunnelRequest")
+    }
+    packet := new(awpv1.WirePacket)
+    if err := proto.Unmarshal(encoded, packet); err != nil {
+        t.Fatalf("decode recovery packet: %v", err)
+    }
+    control := packet.GetControl()
+    if control == nil || control.GetType() != awpv1.ControlType_CONTROL_TYPE_OPEN_TUNNEL_REQUEST ||
+        !bytes.Equal(control.GetReceiverEndpointId(), aba.ID[:]) {
+        t.Fatalf("recovery control=%#v", control)
+    }
+    request := new(awpv1.OpenTunnelRequest)
+    if err := proto.Unmarshal(control.GetPayload(), request); err != nil {
+        t.Fatalf("decode OpenTunnelRequest: %v", err)
+    }
+    if !bytes.Equal(request.GetSessionId(), session.ID[:]) || !bytes.Equal(request.GetHcEndpointId(), hc.ID[:]) {
+        t.Fatalf("recovery request=%#v", request)
+    }
+}
+''')
+          PY
+          gofmt -w platform/internal/harness/gateway/session_recovery.go platform/internal/harness/gateway/session_recovery_test.go
+          git diff --check
+
+      - name: Verify checkpoint
+        shell: bash
+        run: |
+          set -euo pipefail
+          cd platform
+          go test -count=1 ./internal/harness/gateway -run 'TestWaitingKeyRecoveryQueuesOpenTunnelWhenABAReconnects|TestHCSessionCreateIsIdempotentAndDeliversSignedOpenTunnel'
+          go test -race -count=1 ./internal/harness/gateway ./internal/harness/store
+          go test -count=1 ./...
+          go vet ./...
+
+      - name: Commit and push checkpoint
+        id: push
+        shell: bash
+        run: |
+          set -euo pipefail
+          git config user.name "OpenAI Codex"
+          git config user.email "codex@openai.com"
+          git add platform/internal/harness/gateway/session_recovery.go platform/internal/harness/gateway/session_recovery_test.go
+          git commit -m "fix(relay): recover waiting key sessions from either endpoint"
+          sha=$(git rev-parse HEAD)
+          git push origin HEAD:${TARGET_BRANCH}
+          echo "sha=$sha" >> "$GITHUB_OUTPUT"
+
+      - name: Wait for checkpoint CI
+        shell: bash
+        run: |
+          set -euo pipefail
+          sha='${{ steps.push.outputs.sha }}'
+          for attempt in $(seq 1 140); do
+            runs=$(gh api "repos/${REPO}/actions/runs?head_sha=${sha}&per_page=100")
+            push=$(jq -r '[.workflow_runs[] | select(.name == "Harness Platform CI" and .event == "push")][0].conclusion // ""' <<<"$runs")
+            pr=$(jq -r '[.workflow_runs[] | select(.name == "Harness Platform CI" and .event == "pull_request")][0].conclusion // ""' <<<"$runs")
+            if [[ "$push" == success && "$pr" == success ]]; then
+              gh pr comment 1 --repo "$REPO" --body "Review repair checkpoint passed: WAITING_KEY recovery is now triggered by either HC or ABA reconnection at \`${sha}\`. Both push and PR CI succeeded."
+              exit 0
+            fi
+            if [[ "$push" =~ ^(failure|cancelled)$ || "$pr" =~ ^(failure|cancelled)$ ]]; then
+              echo "checkpoint CI failed: push=$push pr=$pr" >&2
+              exit 1
+            fi
+            sleep 15
+          done
+          echo "checkpoint CI did not finish" >&2
+          exit 1
