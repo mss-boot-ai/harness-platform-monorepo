@@ -1,0 +1,840 @@
+name: Probe And Finalize Review Repairs
+
+on:
+  push:
+    branches:
+      - codex/review-repair-probe-20260905
+
+permissions:
+  actions: read
+  contents: write
+  pull-requests: write
+
+jobs:
+  probe:
+    if: github.event.head_commit.message == 'chore(ci): probe and finalize review repairs'
+    runs-on: ubuntu-latest
+    timeout-minutes: 360
+    env:
+      TARGET_BRANCH: codex/bootstrap-harness-platform-foundation
+      CONVERGER_BRANCH: codex/review-repair-converger-20260905
+      SOURCE_BRANCH: codex/review-repair-orchestrator-20260905
+      WATCHDOG_BRANCH: codex/review-repair-watchdog-20260905
+      PROBE_BRANCH: codex/review-repair-probe-20260905
+      REPO: mss-boot-ai/harness-platform-monorepo
+      GH_TOKEN: ${{ github.token }}
+    steps:
+      - name: Wait for convergence executor to stop
+        shell: bash
+        run: |
+          set -euo pipefail
+          for attempt in $(seq 1 520); do
+            response=$(gh api "repos/${REPO}/actions/workflows/converge-review-repairs.yml/runs?branch=${CONVERGER_BRANCH}&per_page=5" 2>/dev/null || echo '{"workflow_runs":[]}')
+            run=$(jq -c '.workflow_runs[0] // {}' <<<"$response")
+            status=$(jq -r '.status // ""' <<<"$run")
+            if [[ "$status" == completed ]]; then
+              echo "CONVERGENCE_RUN=$(jq -r '.id' <<<"$run")" >> "$GITHUB_ENV"
+              echo "CONVERGENCE_URL=$(jq -r '.html_url' <<<"$run")" >> "$GITHUB_ENV"
+              echo "CONVERGENCE_CONCLUSION=$(jq -r '.conclusion // ""' <<<"$run")" >> "$GITHUB_ENV"
+              exit 0
+            fi
+            sleep 15
+          done
+          echo "convergence executor did not complete" >&2
+          exit 1
+
+      - name: Checkout current PR branch
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          ref: ${{ env.TARGET_BRANCH }}
+          fetch-depth: 0
+
+      - name: Set up Go
+        uses: actions/setup-go@d35c59abb061a4a6fb18e82ac0862c26744d6ab5
+        with:
+          go-version-file: platform/go.mod
+          cache: true
+          cache-dependency-path: platform/go.sum
+
+      - name: Set up Node 24
+        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020
+        with:
+          node-version: '24'
+
+      - name: Initialize helpers and inspect first gap
+        shell: bash
+        run: |
+          set -euo pipefail
+          git config user.name "OpenAI Codex"
+          git config user.email "codex@openai.com"
+          cat > /tmp/repair-lib.sh <<'SH'
+          set -euo pipefail
+          has_commit() { git log --format=%s | grep -Fxq "$1"; }
+          checkpoint_sha() { git log --format='%H%x09%s' | awk -F '\t' -v wanted="$1" '$2 == wanted {print $1; exit}'; }
+          wait_ci() {
+            local sha="$1"
+            for attempt in $(seq 1 220); do
+              local runs push pr
+              runs=$(gh api "repos/${REPO}/actions/runs?head_sha=${sha}&per_page=100")
+              push=$(jq -r '[.workflow_runs[] | select(.name == "Harness Platform CI" and .event == "push")][0].conclusion // ""' <<<"$runs")
+              pr=$(jq -r '[.workflow_runs[] | select(.name == "Harness Platform CI" and .event == "pull_request")][0].conclusion // ""' <<<"$runs")
+              [[ "$push" == success && "$pr" == success ]] && return 0
+              if [[ "$push" =~ ^(failure|cancelled)$ || "$pr" =~ ^(failure|cancelled)$ ]]; then
+                echo "CI failed for ${sha}: push=${push} pr=${pr}" >&2
+                return 1
+              fi
+              sleep 15
+            done
+            return 1
+          }
+          ensure_checkpoint_ci() {
+            local sha
+            sha=$(checkpoint_sha "$1")
+            [[ -n "$sha" ]] && wait_ci "$sha"
+          }
+          commit_checkpoint() {
+            local message="$1" remote sha
+            git diff --check
+            remote=$(git ls-remote origin "refs/heads/${TARGET_BRANCH}" | awk '{print $1}')
+            test "$remote" = "$(git rev-parse HEAD)" || {
+              echo "target branch changed: local=$(git rev-parse HEAD) remote=${remote}" >&2
+              exit 1
+            }
+            git add -A
+            git commit -m "$message"
+            sha=$(git rev-parse HEAD)
+            git push origin "HEAD:${TARGET_BRANCH}"
+            wait_ci "$sha"
+          }
+          SH
+
+          required=(
+            'fix(gateway): fence replaced connections and preserve control sequence'
+            'fix(relay): authorize encrypted frame persistence atomically'
+            'fix(store): verify critical unique index contracts'
+            'fix(gateway): keep session creation idempotency authoritative'
+            'fix(relay): recover pending session controls'
+            'fix(hc): persist encrypted outbox and scoped sequences'
+            'fix(relay): isolate stale sessions and durable replay'
+            'fix(gateway): reconnect on outbound backpressure'
+            'fix(aba): accept delayed platform frame replay'
+            'fix(relay): recover waiting key sessions from either endpoint'
+            'fix(relay): fence ABA process incarnation changes'
+            'fix(gateway): commit inbound control sequence after signature'
+          )
+          first_missing=''
+          for message in "${required[@]}"; do
+            if ! has_commit "$message"; then
+              first_missing="$message"
+              break
+            fi
+          done
+          echo "FIRST_MISSING=${first_missing}" >> "$GITHUB_ENV"
+
+          case "$first_missing" in
+            ''|'fix(relay): fence ABA process incarnation changes'|'fix(gateway): commit inbound control sequence after signature')
+              ;;
+            *)
+              gh run view "$CONVERGENCE_RUN" --repo "$REPO" --log-failed > /tmp/convergence-failure.log 2>&1 || true
+              tail -n 120 /tmp/convergence-failure.log | sed -E 's/(token|secret|authorization)[^ ]*/[redacted]/Ig' > /tmp/convergence-failure-tail.log
+              {
+                echo "Convergence Run \`${CONVERGENCE_RUN}\` ended with \`${CONVERGENCE_CONCLUSION}\`."
+                echo
+                echo "First missing Review checkpoint: \`${first_missing}\`."
+                echo
+                echo "Run: ${CONVERGENCE_URL}"
+                echo
+                echo '<details><summary>Failed log tail</summary>'
+                echo
+                echo '```text'
+                cat /tmp/convergence-failure-tail.log
+                echo '```'
+                echo '</details>'
+                echo
+                echo 'Probe stopped without guessing another code change. PR remains Draft and unmerged.'
+              } > /tmp/failure-comment.md
+              gh pr comment 1 --repo "$REPO" --body-file /tmp/failure-comment.md
+              exit 1
+              ;;
+          esac
+
+      - name: Add ABA process incarnation fencing when missing
+        if: env.FIRST_MISSING == 'fix(relay): fence ABA process incarnation changes'
+        shell: bash
+        run: |
+          source /tmp/repair-lib.sh
+          python3 <<'PY'
+          from pathlib import Path
+          import re
+
+          server = Path('platform/internal/harness/gateway/server.go')
+          text = server.read_text()
+          if '"sync"' not in text:
+              text = text.replace('"strings"\n', '"strings"\n\t"sync"\n', 1)
+          if 'FailSessionsForABAProcessRestart' not in text:
+              anchor = '\tUseDPoPReplay(context.Context, string, string, time.Time, time.Time, int64) error\n}'
+              if text.count(anchor) != 1:
+                  raise SystemExit('Persistence interface tail changed')
+              text = text.replace(anchor, '\tUseDPoPReplay(context.Context, string, string, time.Time, time.Time, int64) error\n\tFailSessionsForABAProcessRestart(context.Context, domain.Endpoint, time.Time) (int64, error)\n}')
+          if 'abaProcessIncarnations map[domain.ID][16]byte' not in text:
+              anchor = '\ttrust       *TrustBundle\n\tconnections connectionDirectory\n}'
+              if text.count(anchor) != 1:
+                  raise SystemExit('Server field anchor changed')
+              text = text.replace(anchor, '\ttrust                  *TrustBundle\n\tconnections            connectionDirectory\n\tprocessMu              sync.Mutex\n\tabaProcessIncarnations map[domain.ID][16]byte\n}')
+          if 'abaProcessIncarnations: make(map[domain.ID][16]byte)' not in text:
+              anchor = '\t\ttrust: config.Trust, connections: newMemoryConnectionDirectory(),\n\t}'
+              if text.count(anchor) != 1:
+                  raise SystemExit('Server constructor anchor changed')
+              text = text.replace(anchor, '\t\ttrust: config.Trust, connections: newMemoryConnectionDirectory(),\n\t\tabaProcessIncarnations: make(map[domain.ID][16]byte),\n\t}')
+          server.write_text(text)
+
+          websocket = Path('platform/internal/harness/gateway/websocket.go')
+          text = websocket.read_text()
+          if 'abaProcessIncarnationHeader' not in text:
+              text = text.replace('const (\n\tmaxWirePacketBytes', 'const (\n\tabaProcessIncarnationHeader = "X-MSS-ABA-Process-Incarnation"\n\tmaxWirePacketBytes', 1)
+          if 'allowMissingABAProcessIncarnationForTests' not in text:
+              insertion = 'var allowMissingABAProcessIncarnationForTests bool\n\n'
+              const_end = text.index(')\n\n', text.index('const (')) + 3
+              text = text[:const_end] + insertion + text[const_end:]
+          credential_anchor = '''\tendpoint, credential, err := server.persistence.GetEndpointCredential(request.Context(), ticket.EndpointID, ticket.CredentialID, now)
+\tif err != nil {
+\t\twriteDomainError(writer, err)
+\t\treturn
+\t}
+'''
+          if 'processIncarnation, err := parseProcessIncarnation' not in text:
+              replacement = credential_anchor + '''\tprocessIncarnation, err := parseProcessIncarnation(request, endpoint.Type)
+\tif err != nil {
+\t\twriteGatewayError(writer, http.StatusUnauthorized, "PROCESS_INCARNATION_INVALID", "ABA process incarnation is invalid")
+\t\treturn
+\t}
+'''
+              if text.count(credential_anchor) != 1:
+                  raise SystemExit('endpoint credential anchor changed')
+              text = text.replace(credential_anchor, replacement)
+          presence_block = '''\tif err := server.persistence.MarkEndpointSeen(request.Context(), endpoint.ID, server.now().UTC()); err != nil {
+\t\t_ = connection.WriteControl(
+\t\t\twebsocket.CloseMessage,
+\t\t\twebsocket.FormatCloseMessage(websocket.ClosePolicyViolation, "endpoint presence rejected"),
+\t\t\ttime.Now().Add(time.Second),
+\t\t)
+\t\treturn
+\t}
+'''
+          if 'recordABAProcessIncarnation' not in text:
+              addition = presence_block + '''\tif endpoint.Type == domain.EndpointTypeABA && server.recordABAProcessIncarnation(endpoint.ID, processIncarnation) {
+\t\tif _, err := server.persistence.FailSessionsForABAProcessRestart(request.Context(), endpoint, server.now().UTC()); err != nil {
+\t\t\t_ = connection.WriteControl(
+\t\t\t\twebsocket.CloseMessage,
+\t\t\t\twebsocket.FormatCloseMessage(websocket.CloseInternalServerErr, "ABA restart fencing failed"),
+\t\t\t\ttime.Now().Add(time.Second),
+\t\t\t)
+\t\t\treturn
+\t\t}
+\t}
+'''
+              if text.count(presence_block) != 1:
+                  raise SystemExit('endpoint presence block changed')
+              text = text.replace(presence_block, addition)
+          if 'func parseProcessIncarnation(' not in text:
+              marker = '\nfunc (server *Server) validTicketRequest('
+              helper = r'''
+
+func parseProcessIncarnation(request *http.Request, endpointType domain.EndpointType) ([16]byte, error) {
+	var result [16]byte
+	values := request.Header.Values(abaProcessIncarnationHeader)
+	if endpointType != domain.EndpointTypeABA {
+		if len(values) != 0 {
+			return result, errors.New("HC cannot send ABA process incarnation")
+		}
+		return result, nil
+	}
+	if len(values) == 0 && allowMissingABAProcessIncarnationForTests {
+		result[len(result)-1] = 1
+		return result, nil
+	}
+	if len(values) != 1 {
+		return result, errors.New("exactly one ABA process incarnation is required")
+	}
+	decoded, err := base64.RawURLEncoding.Strict().DecodeString(strings.TrimSpace(values[0]))
+	if err != nil || len(decoded) != len(result) {
+		return result, errors.New("ABA process incarnation encoding is invalid")
+	}
+	copy(result[:], decoded)
+	if subtle.ConstantTimeCompare(result[:], make([]byte, len(result))) == 1 {
+		return result, errors.New("ABA process incarnation is zero")
+	}
+	return result, nil
+}
+
+func (server *Server) recordABAProcessIncarnation(endpointID domain.ID, incarnation [16]byte) bool {
+	server.processMu.Lock()
+	defer server.processMu.Unlock()
+	if server.abaProcessIncarnations == nil {
+		server.abaProcessIncarnations = make(map[domain.ID][16]byte)
+	}
+	previous, exists := server.abaProcessIncarnations[endpointID]
+	server.abaProcessIncarnations[endpointID] = incarnation
+	return exists && previous != incarnation
+}
+'''
+              if text.count(marker) != 1:
+                  raise SystemExit('process helper insertion anchor changed')
+              text = text.replace(marker, helper + marker)
+          websocket.write_text(text)
+
+          store = Path('platform/internal/harness/store/process_incarnation.go')
+          if not store.exists():
+              store.write_text(r'''package store
+
+import (
+	"context"
+	"time"
+
+	"github.com/mss-boot-ai/harness-platform-monorepo/platform/internal/harness/domain"
+	"gorm.io/gorm"
+	"gorm.io/gorm/clause"
+)
+
+func (store *Store) FailSessionsForABAProcessRestart(
+	ctx context.Context,
+	endpoint domain.Endpoint,
+	now time.Time,
+) (int64, error) {
+	if err := requireStore(store, ctx); err != nil {
+		return 0, err
+	}
+	if endpoint.ID.IsZero() || endpoint.Type != domain.EndpointTypeABA || endpoint.OwnerUserID == "" || now.IsZero() {
+		return 0, domain.NewProblem(domain.CodeInvalidArgument, "ABA restart scope is invalid", nil)
+	}
+	var affected int64
+	err := store.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
+		var row endpointRow
+		if err := tx.Clauses(clause.Locking{Strength: "UPDATE"}).Where(
+			"id = ? AND owner_user_id = ? AND tenant_id = ? AND type = ? AND status = ?",
+			endpoint.ID.String(), endpoint.OwnerUserID, endpoint.TenantID,
+			string(domain.EndpointTypeABA), string(domain.EndpointStatusActive),
+		).First(&row).Error; err != nil {
+			return notFoundOr("lock ABA endpoint for process restart", "ABA endpoint was not found", err)
+		}
+		result := tx.Model(new(sessionRow)).Where(
+			"aba_endpoint_id = ? AND owner_user_id = ? AND tenant_id = ? AND status IN ?",
+			endpoint.ID.String(), endpoint.OwnerUserID, endpoint.TenantID,
+			[]string{
+				string(domain.SessionStatusCreating),
+				string(domain.SessionStatusWaitingKey),
+				string(domain.SessionStatusActive),
+				string(domain.SessionStatusRekeyRequired),
+				string(domain.SessionStatusDraining),
+				string(domain.SessionStatusUncertain),
+			},
+		).Updates(map[string]any{
+			"status":      string(domain.SessionStatusFailed),
+			"closed_at":   now,
+			"updated_at":  now,
+			"row_version": gorm.Expr("row_version + 1"),
+		})
+		if result.Error != nil {
+			return classifyPersistence(result.Error, "fail sessions after ABA process restart")
+		}
+		affected = result.RowsAffected
+		return nil
+	})
+	return affected, err
+}
+''')
+
+          Path('platform/internal/harness/gateway/process_incarnation_legacy_test.go').write_text(r'''package gateway
+
+func init() {
+	// Legacy package tests predate the ABA process header. Production builds
+	// keep this false and fail closed; the dedicated parsing test disables the
+	// hook while asserting the production contract.
+	allowMissingABAProcessIncarnationForTests = true
+}
+''')
+
+          Path('platform/internal/harness/gateway/process_incarnation_test.go').write_text(r'''package gateway
+
+import (
+	"encoding/base64"
+	"net/http/httptest"
+	"testing"
+
+	"github.com/mss-boot-ai/harness-platform-monorepo/platform/internal/harness/domain"
+)
+
+func TestABAProcessIncarnationChangesOnlyAcrossProcessRestart(t *testing.T) {
+	server := &Server{abaProcessIncarnations: make(map[domain.ID][16]byte)}
+	endpointID := gatewayID(141)
+	first := [16]byte{1}
+	second := [16]byte{2}
+	if server.recordABAProcessIncarnation(endpointID, first) {
+		t.Fatal("first process incarnation was treated as a restart")
+	}
+	if server.recordABAProcessIncarnation(endpointID, first) {
+		t.Fatal("network reconnect with same process incarnation was treated as restart")
+	}
+	if !server.recordABAProcessIncarnation(endpointID, second) {
+		t.Fatal("new process incarnation was not detected")
+	}
+}
+
+func TestParseProcessIncarnationFailsClosedInProductionMode(t *testing.T) {
+	previous := allowMissingABAProcessIncarnationForTests
+	allowMissingABAProcessIncarnationForTests = false
+	defer func() { allowMissingABAProcessIncarnationForTests = previous }()
+
+	request := httptest.NewRequest("GET", "http://example.test/gateway/v1/ws", nil)
+	if _, err := parseProcessIncarnation(request, domain.EndpointTypeABA); err == nil {
+		t.Fatal("ABA without process incarnation was accepted")
+	}
+	request.Header.Set(abaProcessIncarnationHeader, base64.RawURLEncoding.EncodeToString([]byte{1, 2, 3}))
+	if _, err := parseProcessIncarnation(request, domain.EndpointTypeABA); err == nil {
+		t.Fatal("short process incarnation was accepted")
+	}
+	request.Header.Set(abaProcessIncarnationHeader, base64.RawURLEncoding.EncodeToString(make([]byte, 16)))
+	if _, err := parseProcessIncarnation(request, domain.EndpointTypeABA); err == nil {
+		t.Fatal("zero process incarnation was accepted")
+	}
+	value := [16]byte{9}
+	request.Header.Set(abaProcessIncarnationHeader, base64.RawURLEncoding.EncodeToString(value[:]))
+	parsed, err := parseProcessIncarnation(request, domain.EndpointTypeABA)
+	if err != nil || parsed != value {
+		t.Fatalf("parse valid incarnation=%x error=%v", parsed, err)
+	}
+	if _, err := parseProcessIncarnation(request, domain.EndpointTypeHCWeb); err == nil {
+		t.Fatal("HC request carrying ABA process incarnation was accepted")
+	}
+}
+''')
+
+          Path('platform/internal/harness/store/process_incarnation_test.go').write_text(r'''package store
+
+import (
+	"testing"
+	"time"
+
+	"github.com/mss-boot-ai/harness-platform-monorepo/platform/internal/harness/domain"
+)
+
+func TestFailSessionsForABAProcessRestartIsScopedAndTerminal(t *testing.T) {
+	persistence := newTestStore(t)
+	now := time.Unix(1_800_000_000, 0).UTC()
+	aba := endpoint(151, 152, 153, domain.EndpointTypeABA, "owner", now)
+	aba.TenantID = "tenant-a"
+	hc := endpoint(154, 155, 156, domain.EndpointTypeHCWeb, "owner", now)
+	hc.TenantID = "tenant-a"
+	otherHC := endpoint(157, 158, 159, domain.EndpointTypeHCWeb, "owner", now)
+	otherHC.TenantID = "tenant-b"
+	for _, value := range []domain.Endpoint{aba, hc, otherHC} {
+		if err := persistence.CreateEndpoint(t.Context(), value); err != nil {
+			t.Fatalf("CreateEndpoint: %v", err)
+		}
+	}
+	active := session(160, aba.ID, hc.ID, "owner", now)
+	active.TenantID = "tenant-a"
+	closed := session(161, aba.ID, hc.ID, "owner", now)
+	closed.TenantID = "tenant-a"
+	otherTenant := session(162, aba.ID, otherHC.ID, "owner", now)
+	otherTenant.TenantID = "tenant-b"
+	for _, value := range []domain.Session{active, closed, otherTenant} {
+		if err := persistence.CreateSession(t.Context(), value); err != nil {
+			t.Fatalf("CreateSession: %v", err)
+		}
+	}
+	if err := persistence.db.Model(new(sessionRow)).Where("id = ?", active.ID.String()).Updates(map[string]any{
+		"status": string(domain.SessionStatusActive), "current_key_generation": 1,
+	}).Error; err != nil {
+		t.Fatalf("activate session: %v", err)
+	}
+	if err := persistence.db.Model(new(sessionRow)).Where("id = ?", closed.ID.String()).Updates(map[string]any{
+		"status": string(domain.SessionStatusClosed), "closed_at": now,
+	}).Error; err != nil {
+		t.Fatalf("close fixture session: %v", err)
+	}
+	if err := persistence.db.Model(new(sessionRow)).Where("id = ?", otherTenant.ID.String()).Updates(map[string]any{
+		"status": string(domain.SessionStatusActive), "current_key_generation": 1,
+	}).Error; err != nil {
+		t.Fatalf("activate cross-tenant session: %v", err)
+	}
+	affected, err := persistence.FailSessionsForABAProcessRestart(t.Context(), aba, now.Add(time.Minute))
+	if err != nil {
+		t.Fatalf("FailSessionsForABAProcessRestart: %v", err)
+	}
+	if affected != 1 {
+		t.Fatalf("affected=%d, want 1", affected)
+	}
+	updated, err := persistence.GetSession(t.Context(), active.ID)
+	if err != nil || updated.Status != domain.SessionStatusFailed || updated.ClosedAt == nil {
+		t.Fatalf("active session after restart=%#v error=%v", updated, err)
+	}
+	unchanged, _ := persistence.GetSession(t.Context(), closed.ID)
+	if unchanged.Status != domain.SessionStatusClosed {
+		t.Fatalf("closed session changed to %s", unchanged.Status)
+	}
+	crossTenant, _ := persistence.GetSession(t.Context(), otherTenant.ID)
+	if crossTenant.Status != domain.SessionStatusActive {
+		t.Fatalf("cross-tenant session changed to %s", crossTenant.Status)
+	}
+}
+''')
+
+          client = Path('aba/src/gateway/client.rs')
+          text = client.read_text()
+          if 'HeaderName' not in text:
+              text = text.replace('use tungstenite::http::header::SEC_WEBSOCKET_PROTOCOL;', 'use tungstenite::http::header::{HeaderName, SEC_WEBSOCKET_PROTOCOL};', 1)
+          if 'process_incarnation: [u8; 16]' not in text:
+              anchor = '''pub struct GatewayClient {
+    base: Url,
+    http: Client,
+}
+'''
+              replacement = '''pub struct GatewayClient {
+    base: Url,
+    http: Client,
+    process_incarnation: [u8; 16],
+}
+'''
+              if text.count(anchor) != 1:
+                  raise SystemExit('GatewayClient fields anchor changed')
+              text = text.replace(anchor, replacement)
+          if 'process_incarnation: random_array::<16>()' not in text:
+              anchor = '        Ok(Self { base, http })\n'
+              replacement = '''        Ok(Self {
+            base,
+            http,
+            process_incarnation: random_array::<16>(),
+        })
+'''
+              if text.count(anchor) != 1:
+                  raise SystemExit('GatewayClient constructor anchor changed')
+              text = text.replace(anchor, replacement)
+          if 'x-mss-aba-process-incarnation' not in text:
+              anchor = '''        request
+            .headers_mut()
+            .insert(SEC_WEBSOCKET_PROTOCOL, protocols);
+'''
+              replacement = anchor + '''        request.headers_mut().insert(
+            HeaderName::from_static("x-mss-aba-process-incarnation"),
+            HeaderValue::from_str(&URL_SAFE_NO_PAD.encode(self.process_incarnation))
+                .map_err(|_| GatewayError::InvalidResponse)?,
+        );
+'''
+              if text.count(anchor) != 1:
+                  raise SystemExit('ABA WebSocket header anchor changed')
+              text = text.replace(anchor, replacement)
+          client.write_text(text)
+          PY
+
+          gofmt -w platform/internal/harness/gateway/*.go platform/internal/harness/store/process_incarnation*.go
+          cargo fmt --manifest-path aba/Cargo.toml --all
+          git diff --check
+          (
+            cd platform
+            go test -count=1 ./internal/harness/gateway ./internal/harness/store
+            go test -race -count=1 ./internal/harness/gateway ./internal/harness/store
+            go test -count=1 ./...
+            go vet ./...
+          )
+          (
+            cd aba
+            cargo fmt --all -- --check
+            cargo clippy --locked --workspace --all-targets --all-features -- -D warnings
+            cargo test --locked --workspace --all-targets
+          )
+          commit_checkpoint 'fix(relay): fence ABA process incarnation changes'
+          echo 'FIRST_MISSING=fix(gateway): commit inbound control sequence after signature' >> "$GITHUB_ENV"
+
+      - name: Commit inbound sequence only after signature when missing
+        if: env.FIRST_MISSING == 'fix(gateway): commit inbound control sequence after signature'
+        shell: bash
+        run: |
+          source /tmp/repair-lib.sh
+          if has_commit 'fix(gateway): commit inbound control sequence after signature'; then
+            ensure_checkpoint_ci 'fix(gateway): commit inbound control sequence after signature'
+            exit 0
+          fi
+          python3 <<'PY'
+          from pathlib import Path
+
+          path = Path('platform/internal/harness/gateway/connection_directory.go')
+          text = path.read_text()
+          start = text.index('func (connection *activeConnection) acceptInboundControlSequence(')
+          end = text.index('\nfunc (connection *activeConnection) close(', start)
+          replacement = r'''func inboundControlSequenceScope(receiver []byte) ([16]byte, bool) {
+	var scope [16]byte
+	if len(receiver) != len(scope) {
+		return scope, false
+	}
+	copy(scope[:], receiver)
+	return scope, true
+}
+
+func (connection *activeConnection) inboundControlSequenceNewer(receiver []byte, sequence uint64) bool {
+	scope, ok := inboundControlSequenceScope(receiver)
+	if !ok || sequence == 0 {
+		return false
+	}
+	connection.inboundControlMu.Lock()
+	defer connection.inboundControlMu.Unlock()
+	current, exists := connection.inboundControlSequences[scope]
+	return !exists || sequence > current
+}
+
+func (connection *activeConnection) commitInboundControlSequence(receiver []byte, sequence uint64) bool {
+	scope, ok := inboundControlSequenceScope(receiver)
+	if !ok || sequence == 0 {
+		return false
+	}
+	connection.inboundControlMu.Lock()
+	defer connection.inboundControlMu.Unlock()
+	current, exists := connection.inboundControlSequences[scope]
+	if exists && sequence <= current {
+		return false
+	}
+	connection.inboundControlSequences[scope] = sequence
+	return true
+}
+'''
+          path.write_text(text[:start] + replacement + text[end:])
+
+          ready = Path('platform/internal/harness/gateway/ready_packet.go')
+          text = ready.read_text()
+          old = '!connection.acceptInboundControlSequence(control.GetReceiverEndpointId(), control.GetControlSequence())'
+          if text.count(old) != 1:
+              raise SystemExit('pre-signature sequence anchor changed')
+          text = text.replace(old, '!connection.inboundControlSequenceNewer(control.GetReceiverEndpointId(), control.GetControlSequence())')
+          anchor = '''\tif err != nil || !awpcrypto.VerifyP1363LowS(publicKey, transcript, control.GetSignature()) {
+\t\treturn errors.New("control frame signature is invalid")
+\t}
+\tif control.GetType() == awpv1.ControlType_CONTROL_TYPE_RESUME_STATE {
+'''
+          replacement = '''\tif err != nil || !awpcrypto.VerifyP1363LowS(publicKey, transcript, control.GetSignature()) {
+\t\treturn errors.New("control frame signature is invalid")
+\t}
+\tif !connection.commitInboundControlSequence(control.GetReceiverEndpointId(), control.GetControlSequence()) {
+\t\treturn errors.New("control frame sequence changed concurrently")
+\t}
+\tif control.GetType() == awpv1.ControlType_CONTROL_TYPE_RESUME_STATE {
+'''
+          if text.count(anchor) != 1:
+              raise SystemExit('post-signature sequence anchor changed')
+          ready.write_text(text.replace(anchor, replacement))
+
+          test = Path('platform/internal/harness/gateway/connection_directory_test.go')
+          text = text = test.read_text().replace('connection.acceptInboundControlSequence(', 'connection.commitInboundControlSequence(')
+          text += r'''
+
+func TestInboundControlSequencePreflightDoesNotCommitUnverifiedValue(t *testing.T) {
+	connection := newActiveConnection(domain.ID{5}, 1, [16]byte{1}, [32]byte{}, nil)
+	receiver := make([]byte, 16)
+	receiver[0] = 7
+	if !connection.inboundControlSequenceNewer(receiver, 100) {
+		t.Fatal("unverified high sequence did not pass non-mutating preflight")
+	}
+	if !connection.inboundControlSequenceNewer(receiver, 1) {
+		t.Fatal("preflight mutated sequence before signature verification")
+	}
+	if !connection.commitInboundControlSequence(receiver, 1) {
+		t.Fatal("verified sequence could not be committed")
+	}
+	if connection.inboundControlSequenceNewer(receiver, 1) || connection.commitInboundControlSequence(receiver, 1) {
+		t.Fatal("verified sequence replay was accepted")
+	}
+	if !connection.inboundControlSequenceNewer(receiver, 2) || !connection.commitInboundControlSequence(receiver, 2) {
+		t.Fatal("next verified sequence was rejected")
+	}
+}
+'''
+          test.write_text(text)
+          PY
+          gofmt -w platform/internal/harness/gateway/connection_directory.go platform/internal/harness/gateway/connection_directory_test.go platform/internal/harness/gateway/ready_packet.go
+          git diff --check
+          (
+            cd platform
+            go test -count=1 ./internal/harness/gateway
+            go test -race -count=1 ./internal/harness/gateway
+            go test -count=1 ./...
+            go vet ./...
+          )
+          commit_checkpoint 'fix(gateway): commit inbound control sequence after signature'
+
+      - name: Assert complete chain and every checkpoint CI
+        shell: bash
+        run: |
+          source /tmp/repair-lib.sh
+          required=(
+            'fix(gateway): fence replaced connections and preserve control sequence'
+            'fix(relay): authorize encrypted frame persistence atomically'
+            'fix(store): verify critical unique index contracts'
+            'fix(gateway): keep session creation idempotency authoritative'
+            'fix(relay): recover pending session controls'
+            'fix(hc): persist encrypted outbox and scoped sequences'
+            'fix(relay): isolate stale sessions and durable replay'
+            'fix(gateway): reconnect on outbound backpressure'
+            'fix(aba): accept delayed platform frame replay'
+            'fix(relay): recover waiting key sessions from either endpoint'
+            'fix(relay): fence ABA process incarnation changes'
+            'fix(gateway): commit inbound control sequence after signature'
+          )
+          : > /tmp/review-repair-chain.tsv
+          for message in "${required[@]}"; do
+            sha=$(checkpoint_sha "$message")
+            [[ -n "$sha" ]] || { echo "missing checkpoint: $message" >&2; exit 1; }
+            wait_ci "$sha"
+            printf '%s\t%s\n' "$sha" "$message" >> /tmp/review-repair-chain.tsv
+          done
+          pr=$(gh api "repos/${REPO}/pulls/1")
+          test "$(jq -r .draft <<<"$pr")" = true
+          test "$(jq -r .merged <<<"$pr")" = false
+          test "$(jq -r .head.sha <<<"$pr")" = "$(git rev-parse HEAD)"
+
+      - name: Remove temporary target workflows
+        shell: bash
+        run: |
+          source /tmp/repair-lib.sh
+          rm -f .github/workflows/export-review-worktree.yml .github/workflows/apply-schema-contract-repair.yml
+          if git status --porcelain -- .github/workflows | grep -q .; then
+            commit_checkpoint 'chore(ci): remove temporary review workflows'
+          fi
+          echo "IMPLEMENTATION_SHA=$(git rev-parse HEAD)" >> "$GITHUB_ENV"
+
+      - name: Run full clean verification
+        shell: bash
+        run: |
+          set -euo pipefail
+          test -z "$(git status --porcelain)"
+          ./scripts/check-docs.sh
+          ./scripts/verify-platform-import.sh
+          ./scripts/check-protocol.sh
+          bash -n deploy/run-local-mvp.sh
+          (cd platform && go test -count=1 ./... && go vet ./... && go test -race -count=1 ./internal/harness/gateway ./internal/harness/store ./internal/modules/harness)
+          (cd platform/web && corepack prepare pnpm@10.34.5 --activate && pnpm install --frozen-lockfile && pnpm lint && pnpm test && pnpm build)
+          (cd hc && corepack prepare pnpm@10.34.5 --activate && pnpm install --frozen-lockfile && pnpm lint && pnpm typecheck && pnpm test && pnpm build)
+          (cd aba && cargo metadata --locked --format-version 1 --no-deps >/dev/null && cargo fmt --all -- --check && cargo clippy --locked --workspace --all-targets --all-features -- -D warnings && cargo test --locked --workspace --all-targets)
+          if command -v mss >/dev/null 2>&1; then
+            mss doctor --strict
+            mss verify --all
+            mss upgrade admin v1.3.7 --format json > /tmp/mss-upgrade.json
+            jq -e '.dryRun == true and .success == true and (.conflicts | length) == 0' /tmp/mss-upgrade.json >/dev/null
+            echo passed > /tmp/mss-status
+          else
+            echo unavailable > /tmp/mss-status
+          fi
+
+      - name: Write durable report and work log
+        shell: bash
+        run: |
+          source /tmp/repair-lib.sh
+          : > /tmp/review-repair-evidence.tsv
+          while IFS=$'\t' read -r sha message; do
+            runs=$(gh api "repos/${REPO}/actions/runs?head_sha=${sha}&per_page=100")
+            push_id=$(jq -r '[.workflow_runs[] | select(.name == "Harness Platform CI" and .event == "push")][0].id' <<<"$runs")
+            pr_id=$(jq -r '[.workflow_runs[] | select(.name == "Harness Platform CI" and .event == "pull_request")][0].id' <<<"$runs")
+            printf '%s\t%s\t%s\t%s\n' "$sha" "$push_id" "$pr_id" "$message" >> /tmp/review-repair-evidence.tsv
+          done < /tmp/review-repair-chain.tsv
+          base_sha=$(gh api "repos/${REPO}/pulls/1" --jq .base.sha)
+          mss_status=$(cat /tmp/mss-status)
+          mkdir -p docs/roadmap/verification
+          {
+            echo '# PR #1 Review 修复验证'
+            echo
+            echo '- 日期：2026-09-05'
+            echo "- 仓库：\`${REPO}\`"
+            echo "- 分支：\`${TARGET_BRANCH}\`"
+            echo "- 验证实现 SHA：\`${IMPLEMENTATION_SHA}\`"
+            echo "- Base SHA：\`${base_sha}\`"
+            echo "- Probe Run：\`${GITHUB_RUN_ID}\`"
+            echo "- Convergence Run：\`${CONVERGENCE_RUN}\`（\`${CONVERGENCE_CONCLUSION}\`）"
+            echo "- mss 验证：\`${mss_status}\`"
+            echo
+            echo '## 检查点与 CI'
+            echo
+            echo '| SHA | 单一职责 | Push CI | PR CI |'
+            echo '| --- | --- | ---: | ---: |'
+            while IFS=$'\t' read -r sha push_id pr_id message; do
+              echo "| \`${sha}\` | ${message} | \`${push_id}\` success | \`${pr_id}\` success |"
+            done < /tmp/review-repair-evidence.tsv
+            echo
+            echo '## 已关闭问题'
+            echo
+            echo '- Connection Fencing、失败不烧号以及签名验证后提交入站 Control Sequence。'
+            echo '- EncryptedFrame 原子身份、状态、Credential、Generation 和 exact owner/tenant 授权。'
+            echo '- 安全关键唯一索引精确合同与 Flags=0 首发合同。'
+            echo '- Session 幂等结果、控制恢复、待确认 Key Package 重发。'
+            echo '- HC IndexedDB 加密 Outbox、ABA 签名 ACK、Generation/Range 校验和原字节恢复。'
+            echo '- 未知 Session 隔离、延迟原密文投递、Backpressure 和 ABA Process Incarnation。'
+            echo
+            echo '## 本 SHA 实际通过'
+            echo
+            echo '文档、Thin Host import、Protocol、Go 全量/Vet/Race、Admin Web lint/test/build、HC lint/typecheck/test/build、Rust metadata/fmt/Clippy/test，以及 Launcher shell 语法检查。'
+            echo
+            echo '## 未执行及 Draft 门禁'
+            echo
+            echo '- 本轮 Head 的真实内置浏览器四进程 E2E 未重新执行；原 MVP 浏览器证据不能自动继承。'
+            echo '- 未执行生产 KMS/OS Keyring、TLS/WSS、外部数据库、跨实例 Ownership/Kick、容量、磁盘满、长稳和生产部署。'
+            echo '- Process Incarnation 和 Connection Directory 仍是单 Gateway 进程内实现。'
+            echo '- 固定 Admin Web v1.3.7 的已记录供应链风险仍未关闭。'
+            echo '- PR 保持 Draft、未合并。'
+            echo
+            echo '## 安全边界'
+            echo
+            echo '没有引入任意远程命令入口；真实 command、args、env 与 Workspace path 继续只来自 ABA 本地配置。'
+          } > docs/roadmap/verification/2026-09-05-review-repairs.md
+
+          if ! grep -q 'Draft PR #1 Review 修复闭环' docs/memory/work-log.md; then
+            cat >> docs/memory/work-log.md <<EOF
+
+          ## 2026-09-05 — Draft PR #1 Review 修复闭环
+
+          - 通过独立 fast-forward 提交修复连接 Fencing、Frame 原子授权、关键唯一索引、Session 幂等、控制恢复、HC 加密 Outbox、Control Sequence、未知 Session、延迟重放、背压和 ABA Process Incarnation。
+          - 每个检查点绑定该 SHA 的 push 与 pull_request CI 同时成功后才进入下一项。
+          - 最终实现验证 SHA：\`${IMPLEMENTATION_SHA}\`；证据见 \`docs/roadmap/verification/2026-09-05-review-repairs.md\`。
+          - PR 保持 Draft、未合并；未把浏览器或生产验证写成通过。
+          EOF
+          fi
+          git diff --check
+          if git status --porcelain | grep -q .; then
+            commit_checkpoint 'docs: finalize PR review repair verification'
+          fi
+          echo "REPORT_SHA=$(git rev-parse HEAD)" >> "$GITHUB_ENV"
+
+      - name: Update Draft PR and clean temporary branches
+        shell: bash
+        run: |
+          set -euo pipefail
+          runs=$(gh api "repos/${REPO}/actions/runs?head_sha=${REPORT_SHA}&per_page=100")
+          push_run=$(jq -r '[.workflow_runs[] | select(.name == "Harness Platform CI" and .event == "push")][0].id' <<<"$runs")
+          pr_run=$(jq -r '[.workflow_runs[] | select(.name == "Harness Platform CI" and .event == "pull_request")][0].id' <<<"$runs")
+          cat > /tmp/pr-body.md <<EOF
+          ## 状态
+
+          当前 Head：\`${REPORT_SHA}\`。本 PR 保持 **Draft**，未合并。
+
+          - push CI \`${push_run}\`: success
+          - PR CI \`${pr_run}\`: success
+          - Review 修复报告：\`docs/roadmap/verification/2026-09-05-review-repairs.md\`
+
+          ## 已修复
+
+          - Connection Fencing、原子 Frame 授权和安全关键唯一索引。
+          - Session 幂等、重连控制恢复与待确认 Key Package 重发。
+          - HC 加密 Outbox、ABA 签名 ACK、Generation/Range 校验和原字节恢复。
+          - Control Sequence 接收方作用域及签名后提交。
+          - 未知 Session 隔离、延迟原密文投递、Backpressure 和 ABA Process Incarnation。
+
+          ## Draft 门禁
+
+          本轮 Head 的真实浏览器四进程 E2E、生产 KMS/TLS/外部数据库/跨实例/容量/长稳验证未重新完成；固定 Admin Web v1.3.7 的供应链风险仍未关闭。
+          EOF
+          gh pr edit 1 --repo "$REPO" --body-file /tmp/pr-body.md
+          pr=$(gh api "repos/${REPO}/pulls/1")
+          test "$(jq -r .draft <<<"$pr")" = true
+          test "$(jq -r .merged <<<"$pr")" = false
+          test "$(jq -r .head.sha <<<"$pr")" = "$REPORT_SHA"
+          gh pr comment 1 --repo "$REPO" --body "Probe confirmed Review repair closure at \`${REPORT_SHA}\`; push CI \`${push_run}\`, PR CI \`${pr_run}\`. PR remains Draft and unmerged."
+          git push origin --delete "$SOURCE_BRANCH" || true
+          git push origin --delete "$WATCHDOG_BRANCH" || true
+          git push origin --delete "$CONVERGER_BRANCH" || true
+          git push origin --delete "$PROBE_BRANCH" || true
