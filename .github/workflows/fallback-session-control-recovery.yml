@@ -1,0 +1,222 @@
+name: Fallback Session Control Recovery
+
+on:
+  push:
+    branches:
+      - codex/review-repair-orchestrator-20260905
+
+permissions:
+  contents: write
+  pull-requests: write
+
+jobs:
+  repair:
+    if: github.event.head_commit.message == 'chore(ci): guard session control recovery fallback'
+    runs-on: ubuntu-latest
+    env:
+      TARGET_BRANCH: codex/bootstrap-harness-platform-foundation
+      ORCHESTRATOR_BRANCH: codex/review-repair-orchestrator-20260905
+      REPO: mss-boot-ai/harness-platform-monorepo
+      GH_TOKEN: ${{ github.token }}
+    steps:
+      - name: Wait for original recovery result
+        id: decision
+        shell: bash
+        run: |
+          set -euo pipefail
+          previous='fix(gateway): keep session creation idempotency authoritative'
+          completed='fix(relay): recover pending session controls'
+          for attempt in $(seq 1 140); do
+            target_sha=$(git ls-remote "https://x-access-token:${GH_TOKEN}@github.com/${REPO}.git" "refs/heads/${TARGET_BRANCH}" | awk '{print $1}')
+            target_message=$(gh api "repos/${REPO}/commits/${target_sha}" --jq '.commit.message | split("\n")[0]')
+            if [[ "$target_message" == "$completed" ]]; then
+              echo "action=none" >> "$GITHUB_OUTPUT"
+              exit 0
+            fi
+            run=$(gh api "repos/${REPO}/actions/workflows/orchestrate-session-control-recovery.yml/runs?branch=${ORCHESTRATOR_BRANCH}&per_page=1")
+            status=$(jq -r '.workflow_runs[0].status // ""' <<<"$run")
+            conclusion=$(jq -r '.workflow_runs[0].conclusion // ""' <<<"$run")
+            if [[ "$status" == completed ]]; then
+              if [[ "$conclusion" == success ]]; then
+                echo "original workflow succeeded but target checkpoint is not visible" >&2
+                exit 1
+              fi
+              if [[ "$target_message" != "$previous" ]]; then
+                echo "target changed unexpectedly to ${target_sha} ${target_message}" >&2
+                exit 1
+              fi
+              echo "action=repair" >> "$GITHUB_OUTPUT"
+              echo "BASE_SHA=$target_sha" >> "$GITHUB_ENV"
+              exit 0
+            fi
+            sleep 15
+          done
+          echo "original recovery workflow did not complete" >&2
+          exit 1
+
+      - name: Checkout target branch
+        if: steps.decision.outputs.action == 'repair'
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          ref: ${{ env.TARGET_BRANCH }}
+          fetch-depth: 0
+
+      - name: Apply original source repair with legal test state setup
+        if: steps.decision.outputs.action == 'repair'
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$(git rev-parse HEAD)" = "$BASE_SHA"
+          git fetch origin "${ORCHESTRATOR_BRANCH}:refs/remotes/origin/${ORCHESTRATOR_BRANCH}"
+          git show "origin/${ORCHESTRATOR_BRANCH}:.github/workflows/orchestrate-session-control-recovery.yml" > /tmp/original.yml
+          python3 <<'PY'
+          from pathlib import Path
+          lines = Path('/tmp/original.yml').read_text().splitlines()
+          start = next(i for i, line in enumerate(lines) if line.strip() == "python3 <<'PY'") + 1
+          end = next(i for i in range(start, len(lines)) if lines[i].strip() == 'PY')
+          body = lines[start:end]
+          indent = min(len(line) - len(line.lstrip()) for line in body if line.strip())
+          Path('/tmp/apply-session-control.py').write_text('\n'.join(line[indent:] for line in body) + '\n')
+          PY
+          python3 /tmp/apply-session-control.py
+          cat > platform/internal/harness/store/session_delivery_test.go <<'GO'
+          package store
+
+          import (
+              "testing"
+              "time"
+
+              "github.com/mss-boot-ai/harness-platform-monorepo/platform/internal/harness/domain"
+          )
+
+          func TestListSessionsForEndpointDeliveryIsScopedAndStatusBounded(t *testing.T) {
+              persistence := newTestStore(t)
+              now := time.Unix(1_800_000_000, 0).UTC()
+              aba := endpoint(101, 102, 103, domain.EndpointTypeABA, "owner", now)
+              aba.TenantID = "tenant-a"
+              hc := endpoint(104, 105, 106, domain.EndpointTypeHCWeb, "owner", now)
+              hc.TenantID = "tenant-a"
+              other := endpoint(107, 108, 109, domain.EndpointTypeHCWeb, "owner", now)
+              other.TenantID = "tenant-b"
+              for _, value := range []domain.Endpoint{aba, hc, other} {
+                  if err := persistence.CreateEndpoint(t.Context(), value); err != nil {
+                      t.Fatalf("CreateEndpoint: %v", err)
+                  }
+              }
+              create := func(id byte, tenant string, hcID domain.ID, status domain.SessionStatus) domain.Session {
+                  value := session(id, aba.ID, hcID, "owner", now)
+                  value.TenantID = tenant
+                  value.Status = domain.SessionStatusCreating
+                  if err := persistence.CreateSession(t.Context(), value); err != nil {
+                      t.Fatalf("CreateSession: %v", err)
+                  }
+                  updates := map[string]any{"status": string(status), "updated_at": now.Add(time.Second)}
+                  if status == domain.SessionStatusClosed {
+                      updates["closed_at"] = now.Add(time.Second)
+                  }
+                  if err := persistence.db.Model(new(sessionRow)).Where("id = ?", value.ID.String()).Updates(updates).Error; err != nil {
+                      t.Fatalf("set session status %s: %v", status, err)
+                  }
+                  value.Status = status
+                  return value
+              }
+              creating := create(110, "tenant-a", hc.ID, domain.SessionStatusCreating)
+              waiting := create(111, "tenant-a", hc.ID, domain.SessionStatusWaitingKey)
+              _ = create(112, "tenant-b", other.ID, domain.SessionStatusCreating)
+
+              abaValues, err := persistence.ListSessionsForEndpointDelivery(
+                  t.Context(), aba, []domain.SessionStatus{domain.SessionStatusCreating}, 10,
+              )
+              if err != nil {
+                  t.Fatalf("ListSessionsForEndpointDelivery ABA: %v", err)
+              }
+              if len(abaValues) != 1 || abaValues[0].ID != creating.ID {
+                  t.Fatalf("ABA deliveries=%#v", abaValues)
+              }
+              hcValues, err := persistence.ListSessionsForEndpointDelivery(
+                  t.Context(), hc, []domain.SessionStatus{domain.SessionStatusWaitingKey}, 10,
+              )
+              if err != nil {
+                  t.Fatalf("ListSessionsForEndpointDelivery HC: %v", err)
+              }
+              if len(hcValues) != 1 || hcValues[0].ID != waiting.ID {
+                  t.Fatalf("HC deliveries=%#v", hcValues)
+              }
+              if _, err := persistence.GetScopedEndpoint(t.Context(), other.ID, "owner", "tenant-a"); !domain.HasCode(err, domain.CodeNotFound) {
+                  t.Fatalf("cross-tenant GetScopedEndpoint error=%v", err)
+              }
+          }
+          GO
+          gofmt -w \
+            platform/internal/harness/gateway/server.go \
+            platform/internal/harness/gateway/websocket.go \
+            platform/internal/harness/gateway/ready_packet.go \
+            platform/internal/harness/gateway/session_recovery.go \
+            platform/internal/harness/store/session_delivery.go \
+            platform/internal/harness/store/session_delivery_test.go
+          cargo fmt --manifest-path aba/Cargo.toml --all
+          git diff --check
+
+      - name: Verify fallback checkpoint
+        if: steps.decision.outputs.action == 'repair'
+        shell: bash
+        run: |
+          set -euo pipefail
+          cd platform
+          go test -count=1 ./internal/harness/store ./internal/harness/gateway
+          go test -race -count=1 ./internal/harness/store ./internal/harness/gateway
+          go test -count=1 ./...
+          go vet ./...
+          cd ../aba
+          cargo fmt --all -- --check
+          cargo clippy --locked --workspace --all-targets --all-features -- -D warnings
+          cargo test --locked --workspace --all-targets
+          cd ../hc
+          corepack prepare pnpm@10.34.5 --activate
+          pnpm install --frozen-lockfile
+          pnpm lint
+          pnpm typecheck
+          pnpm test
+          pnpm build
+
+      - name: Commit fallback repair
+        if: steps.decision.outputs.action == 'repair'
+        id: push
+        shell: bash
+        run: |
+          set -euo pipefail
+          git config user.name "OpenAI Codex"
+          git config user.email "codex@openai.com"
+          git add platform/internal/harness/gateway/server.go \
+                  platform/internal/harness/gateway/websocket.go \
+                  platform/internal/harness/gateway/ready_packet.go \
+                  platform/internal/harness/gateway/session_recovery.go \
+                  platform/internal/harness/store/session_delivery.go \
+                  platform/internal/harness/store/session_delivery_test.go \
+                  aba/src/gateway/control.rs hc/web/src/SessionSetup.tsx
+          git commit -m "fix(relay): recover pending session controls"
+          sha=$(git rev-parse HEAD)
+          git push origin HEAD:${TARGET_BRANCH}
+          echo "sha=$sha" >> "$GITHUB_OUTPUT"
+
+      - name: Wait for fallback CI
+        if: steps.decision.outputs.action == 'repair'
+        shell: bash
+        run: |
+          set -euo pipefail
+          sha='${{ steps.push.outputs.sha }}'
+          for attempt in $(seq 1 120); do
+            runs=$(gh api "repos/${REPO}/actions/runs?head_sha=${sha}&per_page=100")
+            push=$(jq -r '[.workflow_runs[] | select(.name == "Harness Platform CI" and .event == "push")][0].conclusion // ""' <<<"$runs")
+            pr=$(jq -r '[.workflow_runs[] | select(.name == "Harness Platform CI" and .event == "pull_request")][0].conclusion // ""' <<<"$runs")
+            if [[ "$push" == success && "$pr" == success ]]; then
+              gh pr comment 1 --repo "$REPO" --body "Session-control recovery fallback passed after correcting test state construction at \`${sha}\`."
+              exit 0
+            fi
+            if [[ "$push" =~ ^(failure|cancelled)$ || "$pr" =~ ^(failure|cancelled)$ ]]; then
+              echo "fallback CI failed: push=$push pr=$pr" >&2
+              exit 1
+            fi
+            sleep 15
+          done
+          exit 1
