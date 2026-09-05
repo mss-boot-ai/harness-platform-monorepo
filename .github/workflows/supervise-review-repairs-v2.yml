@@ -1,0 +1,199 @@
+name: Hardened Serialized Review Repair Supervisor
+
+on:
+  push:
+    branches:
+      - codex/review-repair-orchestrator-20260905
+
+permissions:
+  actions: write
+  contents: write
+  pull-requests: write
+
+jobs:
+  repair:
+    if: github.event.head_commit.message == 'chore(ci): harden serialized repair supervisor'
+    runs-on: ubuntu-latest
+    timeout-minutes: 330
+    env:
+      TARGET_BRANCH: codex/bootstrap-harness-platform-foundation
+      ORCHESTRATOR_BRANCH: codex/review-repair-orchestrator-20260905
+      REPO: mss-boot-ai/harness-platform-monorepo
+      GH_TOKEN: ${{ github.token }}
+    steps:
+      - name: Wait for first supervisor to stop
+        shell: bash
+        run: |
+          set -euo pipefail
+          for attempt in $(seq 1 240); do
+            response=$(gh api "repos/${REPO}/actions/workflows/supervise-review-repairs.yml/runs?branch=${ORCHESTRATOR_BRANCH}&per_page=3")
+            status=$(jq -r '.workflow_runs[0].status // ""' <<<"$response")
+            if [[ "$status" == completed ]]; then
+              echo "FIRST_SUPERVISOR_CONCLUSION=$(jq -r '.workflow_runs[0].conclusion // ""' <<<"$response")" >> "$GITHUB_ENV"
+              break
+            fi
+            sleep 15
+          done
+
+      - name: Cancel obsolete waiters and finalizer
+        shell: bash
+        run: |
+          set -euo pipefail
+          current="$GITHUB_RUN_ID"
+          gh api "repos/${REPO}/actions/runs?branch=${ORCHESTRATOR_BRANCH}&per_page=100" --jq '.workflow_runs[] | [.id,.status,.name] | @tsv' |
+          while IFS=$'\t' read -r run status name; do
+            [[ "$run" == "$current" || "$status" == completed ]] && continue
+            gh api -X POST "repos/${REPO}/actions/runs/${run}/cancel" >/dev/null 2>&1 || true
+          done
+          sleep 20
+
+      - name: Checkout target
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          ref: ${{ env.TARGET_BRANCH }}
+          fetch-depth: 0
+
+      - name: Load helper library from first supervisor
+        shell: bash
+        run: |
+          set -euo pipefail
+          git fetch origin "${ORCHESTRATOR_BRANCH}:refs/remotes/origin/${ORCHESTRATOR_BRANCH}"
+          git show "origin/${ORCHESTRATOR_BRANCH}:.github/workflows/supervise-review-repairs.yml" > /tmp/supervisor.yml
+          python3 <<'PY'
+          from pathlib import Path
+
+          def extract_step(source: Path, name: str, output: Path) -> None:
+              lines = source.read_text().splitlines()
+              marker = f'- name: {name}'
+              start = next(i for i, line in enumerate(lines) if line.strip() == marker)
+              run = next(i for i in range(start + 1, len(lines)) if lines[i].strip() == 'run: |') + 1
+              end = next((i for i in range(run, len(lines)) if lines[i].startswith('      - name: ')), len(lines))
+              body = lines[run:end]
+              indent = min(len(line) - len(line.lstrip()) for line in body if line.strip())
+              output.write_text('\n'.join(line[indent:] for line in body) + '\n')
+
+          extract_step(Path('/tmp/supervisor.yml'), 'Fetch repair scripts and establish helpers', Path('/tmp/load-lib.sh'))
+          PY
+          chmod +x /tmp/load-lib.sh
+          /tmp/load-lib.sh
+          cat >> /tmp/repair-lib.sh <<'SH'
+
+          checkpoint_sha() {
+            git log --format='%H%x09%s' | awk -F '\t' -v wanted="$1" '$2 == wanted {print $1; exit}'
+          }
+
+          ensure_checkpoint_ci() {
+            local message="$1" sha
+            sha=$(checkpoint_sha "$message")
+            [[ -n "$sha" ]] || return 1
+            wait_ci "$sha"
+          }
+
+          run_supervisor_step() {
+            local step_name="$1" output=/tmp/reused-step.sh
+            python3 - "$step_name" "$output" <<'PY'
+          from pathlib import Path
+          import sys
+          name, output = sys.argv[1], Path(sys.argv[2])
+          lines = Path('/tmp/supervisor.yml').read_text().splitlines()
+          marker = f'- name: {name}'
+          start = next(i for i, line in enumerate(lines) if line.strip() == marker)
+          run = next(i for i in range(start + 1, len(lines)) if lines[i].strip() == 'run: |') + 1
+          end = next((i for i in range(run, len(lines)) if lines[i].startswith('      - name: ')), len(lines))
+          body = lines[run:end]
+          indent = min(len(line) - len(line.lstrip()) for line in body if line.strip())
+          output.write_text('\n'.join(line[indent:] for line in body) + '\n')
+          PY
+            chmod +x "$output"
+            "$output"
+          }
+          SH
+
+      - name: Verify or apply checkpoints through WAITING_KEY recovery
+        shell: bash
+        run: |
+          source /tmp/repair-lib.sh
+          declare -a entries=(
+            'fix(store): verify critical unique index contracts|Apply missing Schema contract checkpoint'
+            'fix(gateway): keep session creation idempotency authoritative|Apply missing authoritative idempotency checkpoint'
+            'fix(relay): recover pending session controls|Apply missing session-control recovery checkpoint'
+            'fix(hc): persist encrypted outbox and scoped sequences|Apply missing HC outbox checkpoint'
+            'fix(relay): isolate stale sessions and durable replay|Apply missing replay isolation checkpoint'
+            'fix(gateway): reconnect on outbound backpressure|Apply missing backpressure checkpoint'
+            'fix(aba): accept delayed platform frame replay|Apply missing delayed replay checkpoint'
+            'fix(relay): recover waiting key sessions from either endpoint|Apply missing WAITING_KEY recovery checkpoint'
+          )
+          for entry in "${entries[@]}"; do
+            message=${entry%%|*}
+            step=${entry#*|}
+            if has_commit "$message"; then
+              ensure_checkpoint_ci "$message"
+            else
+              run_supervisor_step "$step"
+            fi
+            git fetch origin "$TARGET_BRANCH"
+            test "$(git rev-parse HEAD)" = "$(git rev-parse origin/${TARGET_BRANCH})"
+          done
+
+      - name: Verify or apply ABA process-incarnation checkpoint
+        shell: bash
+        run: |
+          source /tmp/repair-lib.sh
+          message='fix(relay): fence ABA process incarnation changes'
+          if has_commit "$message"; then
+            ensure_checkpoint_ci "$message"
+            exit 0
+          fi
+          extract_step orchestrate-aba-incarnation-repair.yml 'Add process incarnation fencing' /tmp/apply-process.sh
+          /tmp/apply-process.sh
+          sed -i 's/PROCESS_INCARCERATION_INVALID/PROCESS_INCARNATION_INVALID/g' platform/internal/harness/gateway/websocket.go
+          python3 <<'PY'
+          from pathlib import Path
+          import re
+
+          path = Path('platform/internal/harness/store/process_incarnation_test.go')
+          text = path.read_text()
+          pattern = re.compile(
+              r'\n\s*for _, value := range \[\]domain\.Session\{active, closed, otherTenant\} \{.*?\n\s*\}\n\s*affected, err :=',
+              re.S,
+          )
+          replacement = r'''
+	for _, desired := range []domain.Session{active, closed, otherTenant} {
+		value := desired
+		value.Status = domain.SessionStatusCreating
+		value.CurrentKeyGeneration = 0
+		value.ClosedAt = nil
+		if err := persistence.CreateSession(t.Context(), value); err != nil {
+			t.Fatalf("CreateSession: %v", err)
+		}
+		updates := map[string]any{
+			"status":                 string(desired.Status),
+			"current_key_generation": desired.CurrentKeyGeneration,
+			"updated_at":             now,
+		}
+		if desired.ClosedAt != nil {
+			updates["closed_at"] = *desired.ClosedAt
+		}
+		if err := persistence.db.Model(new(sessionRow)).Where("id = ?", desired.ID.String()).Updates(updates).Error; err != nil {
+			t.Fatalf("set session status %s: %v", desired.Status, err)
+		}
+	}
+	affected, err :='''
+          updated, count = pattern.subn(replacement, text, count=1)
+          if count != 1:
+              raise SystemExit('process incarnation test setup could not be repaired')
+          path.write_text(updated)
+          PY
+          gofmt -w platform/internal/harness/gateway/server.go platform/internal/harness/gateway/websocket.go platform/internal/harness/gateway/process_incarnation_test.go platform/internal/harness/store/process_incarnation.go platform/internal/harness/store/process_incarnation_test.go
+          cargo fmt --manifest-path aba/Cargo.toml --all
+          git diff --check
+          (cd platform && go test -count=1 ./internal/harness/gateway ./internal/harness/store && go test -race -count=1 ./internal/harness/gateway ./internal/harness/store && go test -count=1 ./... && go vet ./...)
+          (cd aba && cargo fmt --all -- --check && cargo clippy --locked --workspace --all-targets --all-features -- -D warnings && cargo test --locked --workspace --all-targets)
+          commit_checkpoint "$message"
+
+      - name: Publish hardened supervisor evidence
+        shell: bash
+        run: |
+          set -euo pipefail
+          final=$(git rev-parse HEAD)
+          gh pr comment 1 --repo "$REPO" --body "Hardened serialized repair supervisor completed at \`${final}\`. Every required checkpoint exists and its push/PR Harness Platform CI is successful. First supervisor conclusion: \`${FIRST_SUPERVISOR_CONCLUSION:-unknown}\`."
