@@ -1,0 +1,162 @@
+name: Orchestrate Backpressure Recovery
+
+on:
+  push:
+    branches:
+      - codex/review-repair-orchestrator-20260905
+
+permissions:
+  contents: write
+  pull-requests: write
+
+jobs:
+  repair:
+    if: github.event.head_commit.message == 'chore(ci): orchestrate backpressure recovery'
+    runs-on: ubuntu-latest
+    env:
+      TARGET_BRANCH: codex/bootstrap-harness-platform-foundation
+      REPO: mss-boot-ai/harness-platform-monorepo
+      GH_TOKEN: ${{ github.token }}
+    steps:
+      - name: Wait for replay isolation checkpoint
+        shell: bash
+        run: |
+          set -euo pipefail
+          wanted='fix(relay): isolate stale sessions and durable replay'
+          for attempt in $(seq 1 160); do
+            sha=$(git ls-remote "https://x-access-token:${GH_TOKEN}@github.com/${REPO}.git" "refs/heads/${TARGET_BRANCH}" | awk '{print $1}')
+            message=$(gh api "repos/${REPO}/commits/${sha}" --jq '.commit.message | split("\n")[0]')
+            if [[ "$message" == "$wanted" ]]; then
+              runs=$(gh api "repos/${REPO}/actions/runs?head_sha=${sha}&per_page=100")
+              push=$(jq -r '[.workflow_runs[] | select(.name == "Harness Platform CI" and .event == "push")][0].conclusion // ""' <<<"$runs")
+              pr=$(jq -r '[.workflow_runs[] | select(.name == "Harness Platform CI" and .event == "pull_request")][0].conclusion // ""' <<<"$runs")
+              if [[ "$push" == success && "$pr" == success ]]; then
+                echo "BASE_SHA=$sha" >> "$GITHUB_ENV"
+                exit 0
+              fi
+              if [[ "$push" =~ ^(failure|cancelled)$ || "$pr" =~ ^(failure|cancelled)$ ]]; then
+                echo "previous checkpoint CI failed: push=$push pr=$pr" >&2
+                exit 1
+              fi
+            fi
+            sleep 15
+          done
+          echo "previous checkpoint did not reach successful CI" >&2
+          exit 1
+
+      - name: Checkout target branch
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          ref: ${{ env.TARGET_BRANCH }}
+          fetch-depth: 0
+
+      - name: Guard exact base
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$(git rev-parse HEAD)" = "$BASE_SHA"
+
+      - name: Fail closed on outbound backpressure
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 <<'PY'
+          from pathlib import Path
+
+          path = Path('platform/internal/harness/gateway/connection_directory.go')
+          text = path.read_text()
+          old = '''\t\tif current+length > maxConnectionQueueBytes {
+          \t\t\treturn errConnectionBackpressure
+          \t\t}
+'''
+          new = '''\t\tif current+length > maxConnectionQueueBytes {
+          \t\t\tconnection.close(websocket.CloseTryAgainLater, "connection send queue is full")
+          \t\t\treturn errConnectionBackpressure
+          \t\t}
+'''
+          if text.count(old) != 1:
+              raise SystemExit('queued-byte backpressure anchor changed')
+          text = text.replace(old, new)
+          old = '''\tdefault:
+          \t\tconnection.queuedBytes.Add(-length)
+          \t\treturn errConnectionBackpressure
+          \t}
+'''
+          new = '''\tdefault:
+          \t\tconnection.queuedBytes.Add(-length)
+          \t\tconnection.close(websocket.CloseTryAgainLater, "connection send queue is full")
+          \t\treturn errConnectionBackpressure
+          \t}
+'''
+          if text.count(old) != 1:
+              raise SystemExit('channel backpressure anchor changed')
+          path.write_text(text.replace(old, new))
+
+          test = Path('platform/internal/harness/gateway/connection_directory_test.go')
+          text = test.read_text()
+          old = '''\tif err := connection.enqueue([]byte{1}); !errors.Is(err, errConnectionBackpressure) {
+          \t\tt.Fatalf("full queue error=%v", err)
+          \t}
+          \tconnection.close(0, "test")
+'''
+          new = '''\tif err := connection.enqueue([]byte{1}); !errors.Is(err, errConnectionBackpressure) {
+          \t\tt.Fatalf("full queue error=%v", err)
+          \t}
+          \tselect {
+          \tcase <-connection.done:
+          \tdefault:
+          \t\tt.Fatal("backpressured connection remained open")
+          \t}
+          \tconnection.close(0, "test")
+'''
+          if text.count(old) != 1:
+              raise SystemExit('connection queue test anchor changed')
+          test.write_text(text.replace(old, new))
+          PY
+          gofmt -w platform/internal/harness/gateway/connection_directory.go platform/internal/harness/gateway/connection_directory_test.go
+          git diff --check
+
+      - name: Verify checkpoint
+        shell: bash
+        run: |
+          set -euo pipefail
+          cd platform
+          go test -count=1 ./internal/harness/gateway -run 'TestConnectionQueueIsBoundedAndCopiesPackets|TestConnectionDirectory'
+          go test -race -count=1 ./internal/harness/gateway
+          go test -count=1 ./...
+          go vet ./...
+
+      - name: Commit and push checkpoint
+        id: push
+        shell: bash
+        run: |
+          set -euo pipefail
+          git config user.name "OpenAI Codex"
+          git config user.email "codex@openai.com"
+          git add platform/internal/harness/gateway/connection_directory.go platform/internal/harness/gateway/connection_directory_test.go
+          git commit -m "fix(gateway): reconnect on outbound backpressure"
+          sha=$(git rev-parse HEAD)
+          git push origin HEAD:${TARGET_BRANCH}
+          echo "sha=$sha" >> "$GITHUB_OUTPUT"
+
+      - name: Wait for checkpoint CI
+        shell: bash
+        run: |
+          set -euo pipefail
+          sha='${{ steps.push.outputs.sha }}'
+          for attempt in $(seq 1 120); do
+            runs=$(gh api "repos/${REPO}/actions/runs?head_sha=${sha}&per_page=100")
+            push=$(jq -r '[.workflow_runs[] | select(.name == "Harness Platform CI" and .event == "push")][0].conclusion // ""' <<<"$runs")
+            pr=$(jq -r '[.workflow_runs[] | select(.name == "Harness Platform CI" and .event == "pull_request")][0].conclusion // ""' <<<"$runs")
+            if [[ "$push" == success && "$pr" == success ]]; then
+              gh pr comment 1 --repo "$REPO" --body "Review repair checkpoint passed: outbound queue backpressure now closes the target WSS and forces durable recovery at \`${sha}\`. Both push and PR CI succeeded."
+              exit 0
+            fi
+            if [[ "$push" =~ ^(failure|cancelled)$ || "$pr" =~ ^(failure|cancelled)$ ]]; then
+              echo "checkpoint CI failed: push=$push pr=$pr" >&2
+              exit 1
+            fi
+            sleep 15
+          done
+          echo "checkpoint CI did not finish" >&2
+          exit 1
