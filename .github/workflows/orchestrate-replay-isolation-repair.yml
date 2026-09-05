@@ -1,0 +1,395 @@
+name: Orchestrate Replay Isolation Repair
+
+on:
+  push:
+    branches:
+      - codex/review-repair-orchestrator-20260905
+
+permissions:
+  contents: write
+  pull-requests: write
+
+jobs:
+  repair:
+    if: github.event.head_commit.message == 'chore(ci): orchestrate replay isolation repair'
+    runs-on: ubuntu-latest
+    env:
+      TARGET_BRANCH: codex/bootstrap-harness-platform-foundation
+      REPO: mss-boot-ai/harness-platform-monorepo
+      GH_TOKEN: ${{ github.token }}
+    steps:
+      - name: Wait for HC outbox checkpoint
+        shell: bash
+        run: |
+          set -euo pipefail
+          wanted='fix(hc): persist encrypted outbox and scoped sequences'
+          for attempt in $(seq 1 140); do
+            sha=$(git ls-remote "https://x-access-token:${GH_TOKEN}@github.com/${REPO}.git" "refs/heads/${TARGET_BRANCH}" | awk '{print $1}')
+            message=$(gh api "repos/${REPO}/commits/${sha}" --jq '.commit.message | split("\n")[0]')
+            if [[ "$message" == "$wanted" ]]; then
+              runs=$(gh api "repos/${REPO}/actions/runs?head_sha=${sha}&per_page=100")
+              push=$(jq -r '[.workflow_runs[] | select(.name == "Harness Platform CI" and .event == "push")][0].conclusion // ""' <<<"$runs")
+              pr=$(jq -r '[.workflow_runs[] | select(.name == "Harness Platform CI" and .event == "pull_request")][0].conclusion // ""' <<<"$runs")
+              if [[ "$push" == success && "$pr" == success ]]; then
+                echo "BASE_SHA=$sha" >> "$GITHUB_ENV"
+                exit 0
+              fi
+              if [[ "$push" =~ ^(failure|cancelled)$ || "$pr" =~ ^(failure|cancelled)$ ]]; then
+                echo "previous checkpoint CI failed: push=$push pr=$pr" >&2
+                exit 1
+              fi
+            fi
+            sleep 15
+          done
+          echo "previous checkpoint did not reach successful CI" >&2
+          exit 1
+
+      - name: Checkout target branch
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          ref: ${{ env.TARGET_BRANCH }}
+          fetch-depth: 0
+
+      - name: Guard exact base
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$(git rev-parse HEAD)" = "$BASE_SHA"
+
+      - name: Isolate unknown sessions and permit durable replay
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 <<'PY'
+          from pathlib import Path
+
+          # ABA: unknown Session becomes a signed endpoint error, not a fatal client error.
+          path = Path('aba/src/gateway/control.rs')
+          text = path.read_text()
+          old = '''        let session = self
+            .sessions
+            .get_mut(&session_id)
+            .ok_or(GatewayError::Protocol)?;
+        let channel_id = session_channel_id(
+'''
+          new = '''        let message_id: [u8; 16] = frame
+            .message_id
+            .as_slice()
+            .try_into()
+            .map_err(|_| GatewayError::Protocol)?;
+        let Some(session) = self.sessions.get_mut(&session_id) else {
+            if frame.sender_endpoint_id.len() != 16
+                || frame.receiver_endpoint_id != endpoint_id
+                || frame.direction != WireDirection::HcToAba as i32
+            {
+                return Err(GatewayError::ProtocolStage("unknown session frame route"));
+            }
+            return Ok(vec![signed_session_not_found_error(message_id, identity)?]);
+        };
+        let channel_id = session_channel_id(
+'''
+          if text.count(old) != 1:
+              raise SystemExit('ABA unknown session anchor changed')
+          text = text.replace(old, new)
+
+          old = '''        let now_ms = unix_millis(now)?;
+        if frame.created_at_ms < now_ms - 300_000 || frame.created_at_ms > now_ms + 300_000 {
+            return Err(GatewayError::ProtocolStage("encrypted frame time"));
+        }
+        let aad = FrameAadV1 {'''
+          new = '''        let now_ms = unix_millis(now)?;
+        let aad = FrameAadV1 {'''
+          if text.count(old) != 1:
+              raise SystemExit('ABA frame freshness anchor changed')
+          text = text.replace(old, new)
+          old = '''        if intake == IntakeOutcome::New {
+            if frame.sequence != next_sequence {
+'''
+          new = '''        if intake == IntakeOutcome::New {
+            if !fresh_initial_frame(frame.created_at_ms, now_ms) {
+                return Err(GatewayError::ProtocolStage("encrypted frame time"));
+            }
+            if frame.sequence != next_sequence {
+'''
+          if text.count(old) != 1:
+              raise SystemExit('ABA new intake anchor changed')
+          text = text.replace(old, new)
+
+          marker = '''fn signed_uncertain_error(
+'''
+          addition = r'''fn signed_session_not_found_error(
+    related_message_id: [u8; 16],
+    identity: &EndpointIdentity,
+) -> Result<Vec<u8>, GatewayError> {
+    let mut frame = ErrorFrame {
+        error_id: random_array::<16>().to_vec(),
+        related_message_id: related_message_id.to_vec(),
+        code: ErrorCode::SessionNotFound as i32,
+        retryable: false,
+        retry_after_ms: 0,
+        safe_message: "Local ABA session is unavailable".to_owned(),
+        signature: Vec::new(),
+    };
+    sign_error_frame(&mut frame, identity.signing_key())?;
+    Ok(WirePacket {
+        wire_major: 1,
+        wire_minor: 0,
+        packet_id: random_array::<16>().to_vec(),
+        body: Some(wire_packet::Body::Error(frame)),
+    }
+    .encode_to_vec())
+}
+
+fn fresh_initial_frame(created_at_ms: i64, now_ms: i64) -> bool {
+    created_at_ms >= now_ms - 300_000 && created_at_ms <= now_ms + 300_000
+}
+
+'''
+          if text.count(marker) != 1:
+              raise SystemExit('ABA error helper anchor changed')
+          text = text.replace(marker, addition + marker)
+
+          # Add focused freshness test without changing cryptographic code paths.
+          test_marker = '''    #[test]
+    fn rejects_tampered_platform_control()'''
+          test_add = r'''    #[test]
+    fn initial_frames_require_fresh_time_but_replay_can_use_journal_state() {
+        let now_ms = 1_800_000_000_000_i64;
+        assert!(fresh_initial_frame(now_ms - 300_000, now_ms));
+        assert!(fresh_initial_frame(now_ms + 300_000, now_ms));
+        assert!(!fresh_initial_frame(now_ms - 300_001, now_ms));
+        assert!(!fresh_initial_frame(now_ms + 300_001, now_ms));
+    }
+
+'''
+          if text.count(test_marker) != 1:
+              raise SystemExit('ABA test insertion anchor changed')
+          path.write_text(text.replace(test_marker, test_add + test_marker))
+
+          # ABA reconnects after a peer protocol failure instead of terminating the process.
+          client = Path('aba/src/gateway/client.rs')
+          text = client.read_text()
+          old = '''            match ready.run_once(identity, config, &mut controls) {
+                Ok(()) | Err(GatewayError::WebSocket(_)) => {}
+                Err(error) => return Err(error),
+            }
+'''
+          new = '''            match ready.run_once(identity, config, &mut controls) {
+                Ok(())
+                | Err(GatewayError::WebSocket(_))
+                | Err(GatewayError::Protocol)
+                | Err(GatewayError::ProtocolStage(_)) => {}
+                Err(error) => return Err(error),
+            }
+'''
+          if text.count(old) != 1:
+              raise SystemExit('ABA reconnect classification anchor changed')
+          client.write_text(text.replace(old, new))
+
+          # Platform accepts the two bounded endpoint error contracts and updates state.
+          error_file = Path('platform/internal/harness/gateway/error_frame.go')
+          text = error_file.read_text()
+          text = text.replace(
+              'const uncertainSafeMessage = "Local agent dispatch result is uncertain"',
+              'const (\n\tuncertainSafeMessage = "Local agent dispatch result is uncertain"\n\tsessionMissingSafeMessage = "Local ABA session is unavailable"\n)',
+              1,
+          )
+          old = '''\tif endpoint.Type != domain.EndpointTypeABA || len(frame.GetErrorId()) != 16 ||
+          \t\tlen(frame.GetRelatedMessageId()) != 16 || len(frame.GetSignature()) != 64 ||
+          \t\tframe.GetCode() != awpv1.ErrorCode_ERROR_CODE_LOCAL_DISPATCH_UNCERTAIN ||
+          \t\tframe.GetRetryable() || frame.GetRetryAfterMs() != 0 || frame.GetSafeMessage() != uncertainSafeMessage {
+          \t\treturn domain.ID{}, errors.New("ErrorFrame fields are invalid")
+          \t}
+'''
+          new = '''\tif endpoint.Type != domain.EndpointTypeABA || len(frame.GetErrorId()) != 16 ||
+          \t\tlen(frame.GetRelatedMessageId()) != 16 || len(frame.GetSignature()) != 64 ||
+          \t\tframe.GetRetryable() || frame.GetRetryAfterMs() != 0 || !allowedEndpointError(frame) {
+          \t\treturn domain.ID{}, errors.New("ErrorFrame fields are invalid")
+          \t}
+'''
+          if text.count(old) != 1:
+              raise SystemExit('Platform endpoint error field anchor changed')
+          text = text.replace(old, new)
+          old = '''\tif session.Status == domain.SessionStatusActive {
+          \t\tif _, err := server.persistence.UpdateSession(ctx, session.ID, func(value *domain.Session) error {
+          \t\t\treturn value.MarkUncertain(now)
+          \t\t}); err != nil {
+          \t\t\treturn domain.ID{}, err
+          \t\t}
+          \t}
+          \treturn session.HCEndpointID, nil
+          }
+'''
+          new = '''\tswitch frame.GetCode() {
+          \tcase awpv1.ErrorCode_ERROR_CODE_LOCAL_DISPATCH_UNCERTAIN:
+          \t\tif session.Status == domain.SessionStatusActive {
+          \t\t\tif _, err := server.persistence.UpdateSession(ctx, session.ID, func(value *domain.Session) error {
+          \t\t\t\treturn value.MarkUncertain(now)
+          \t\t\t}); err != nil {
+          \t\t\t\treturn domain.ID{}, err
+          \t\t\t}
+          \t\t}
+          \tcase awpv1.ErrorCode_ERROR_CODE_SESSION_NOT_FOUND:
+          \t\tif session.Status == domain.SessionStatusActive || session.Status == domain.SessionStatusUncertain {
+          \t\t\tif _, err := server.persistence.UpdateSession(ctx, session.ID, func(value *domain.Session) error {
+          \t\t\t\treturn value.Fail(now)
+          \t\t\t}); err != nil {
+          \t\t\t\treturn domain.ID{}, err
+          \t\t\t}
+          \t\t}
+          \t}
+          \treturn session.HCEndpointID, nil
+          }
+
+          func allowedEndpointError(frame *awpv1.ErrorFrame) bool {
+          \tif frame == nil {
+          \t\treturn false
+          \t}
+          \tswitch frame.GetCode() {
+          \tcase awpv1.ErrorCode_ERROR_CODE_LOCAL_DISPATCH_UNCERTAIN:
+          \t\treturn frame.GetSafeMessage() == uncertainSafeMessage
+          \tcase awpv1.ErrorCode_ERROR_CODE_SESSION_NOT_FOUND:
+          \t\treturn frame.GetSafeMessage() == sessionMissingSafeMessage
+          \tdefault:
+          \t\treturn false
+          \t}
+          }
+'''
+          if text.count(old) != 1:
+              raise SystemExit('Platform endpoint error transition anchor changed')
+          error_file.write_text(text.replace(old, new))
+
+          # HC recognizes the signed terminal session error separately from UNCERTAIN.
+          frame = Path('hc/packages/core/src/frame.ts')
+          text = frame.read_text()
+          text = text.replace(
+              'export async function openABAUncertainErrorPacket(',
+              'export async function openABASessionErrorPacket(',
+              1,
+          )
+          text = text.replace(
+              "): Promise<{ readonly relatedMessageId: Uint8Array } | null> {",
+              "): Promise<{ readonly code: ErrorCode; readonly relatedMessageId: Uint8Array } | null> {",
+              1,
+          )
+          old = '''    frame.code !== ErrorCode.LOCAL_DISPATCH_UNCERTAIN || frame.retryable ||
+    frame.retryAfterMs !== 0 || frame.safeMessage !== 'Local agent dispatch result is uncertain' ||
+    frame.signature.length !== 64
+'''
+          new = '''    ![
+      ErrorCode.LOCAL_DISPATCH_UNCERTAIN,
+      ErrorCode.SESSION_NOT_FOUND,
+    ].includes(frame.code) || frame.retryable || frame.retryAfterMs !== 0 ||
+    (frame.code === ErrorCode.LOCAL_DISPATCH_UNCERTAIN && frame.safeMessage !== 'Local agent dispatch result is uncertain') ||
+    (frame.code === ErrorCode.SESSION_NOT_FOUND && frame.safeMessage !== 'Local ABA session is unavailable') ||
+    frame.signature.length !== 64
+'''
+          if text.count(old) != 1:
+              raise SystemExit('HC ErrorFrame validation anchor changed')
+          text = text.replace(old, new)
+          text = text.replace(
+              '  return { relatedMessageId: frame.relatedMessageId.slice() };',
+              '  return { code: frame.code, relatedMessageId: frame.relatedMessageId.slice() };',
+              1,
+          )
+          frame.write_text(text)
+
+          session = Path('hc/web/src/SessionSetup.tsx')
+          text = session.read_text()
+          text = text.replace('  openABAUncertainErrorPacket,\n', '  openABASessionErrorPacket,\n', 1)
+          old = '''      const uncertain = await openABAUncertainErrorPacket(aba.signingPublicJwk, encoded);
+      if (uncertain !== null) {
+        zeroOpenedPackage(openedPackage.current);
+        openedPackage.current = null;
+        setKeyReady(false);
+        setSession((current) => current === null ? null : { ...current, status: 'UNCERTAIN' });
+        setMessages((current) => [...current, 'SYSTEM: 本地 Agent 执行结果不确定，已禁止自动重试。']);
+        setError('Session 进入 UNCERTAIN；请检查本地 Workspace 后关闭 Session。');
+        return;
+      }
+'''
+          new = '''      const sessionError = await openABASessionErrorPacket(aba.signingPublicJwk, encoded);
+      if (sessionError !== null) {
+        zeroOpenedPackage(openedPackage.current);
+        openedPackage.current = null;
+        setKeyReady(false);
+        if (sessionError.code === ErrorCode.LOCAL_DISPATCH_UNCERTAIN) {
+          setSession((current) => current === null ? null : { ...current, status: 'UNCERTAIN' });
+          setMessages((current) => [...current, 'SYSTEM: 本地 Agent 执行结果不确定，已禁止自动重试。']);
+          setError('Session 进入 UNCERTAIN；请检查本地 Workspace 后关闭 Session。');
+        } else {
+          setSession((current) => current === null ? null : { ...current, status: 'FAILED' });
+          setMessages((current) => [...current, 'SYSTEM: 本地 ABA 已丢失该 Session，禁止继续发送。']);
+          setError('Session 已失效，请关闭后重新创建。');
+        }
+        return;
+      }
+'''
+          if text.count(old) != 1:
+              raise SystemExit('SessionSetup error handling anchor changed')
+          text = text.replace(old, new)
+          # ErrorCode is exported through hc-core generated protocol.
+          text = text.replace('  Direction,\n', '  Direction,\n  ErrorCode,\n', 1)
+          session.write_text(text)
+          PY
+          gofmt -w platform/internal/harness/gateway/error_frame.go
+          cargo fmt --manifest-path aba/Cargo.toml --all
+          git diff --check
+
+      - name: Verify checkpoint
+        shell: bash
+        run: |
+          set -euo pipefail
+          cd platform
+          go test -count=1 ./internal/harness/gateway
+          go test -race -count=1 ./internal/harness/gateway
+          go test -count=1 ./...
+          go vet ./...
+          cd ../aba
+          cargo fmt --all -- --check
+          cargo clippy --locked --workspace --all-targets --all-features -- -D warnings
+          cargo test --locked --workspace --all-targets
+          cd ../hc
+          corepack prepare pnpm@10.34.5 --activate
+          pnpm install --frozen-lockfile
+          pnpm lint
+          pnpm typecheck
+          pnpm test
+          pnpm build
+
+      - name: Commit and push checkpoint
+        id: push
+        shell: bash
+        run: |
+          set -euo pipefail
+          git config user.name "OpenAI Codex"
+          git config user.email "codex@openai.com"
+          git add aba/src/gateway/control.rs aba/src/gateway/client.rs \
+                  platform/internal/harness/gateway/error_frame.go \
+                  hc/packages/core/src/frame.ts hc/web/src/SessionSetup.tsx
+          git commit -m "fix(relay): isolate stale sessions and durable replay"
+          sha=$(git rev-parse HEAD)
+          git push origin HEAD:${TARGET_BRANCH}
+          echo "sha=$sha" >> "$GITHUB_OUTPUT"
+
+      - name: Wait for checkpoint CI
+        shell: bash
+        run: |
+          set -euo pipefail
+          sha='${{ steps.push.outputs.sha }}'
+          for attempt in $(seq 1 140); do
+            runs=$(gh api "repos/${REPO}/actions/runs?head_sha=${sha}&per_page=100")
+            push=$(jq -r '[.workflow_runs[] | select(.name == "Harness Platform CI" and .event == "push")][0].conclusion // ""' <<<"$runs")
+            pr=$(jq -r '[.workflow_runs[] | select(.name == "Harness Platform CI" and .event == "pull_request")][0].conclusion // ""' <<<"$runs")
+            if [[ "$push" == success && "$pr" == success ]]; then
+              gh pr comment 1 --repo "$REPO" --body "Review repair checkpoint passed: long-delay durable replay and signed stale-session isolation at \`${sha}\`. Both push and PR CI succeeded."
+              exit 0
+            fi
+            if [[ "$push" =~ ^(failure|cancelled)$ || "$pr" =~ ^(failure|cancelled)$ ]]; then
+              echo "checkpoint CI failed: push=$push pr=$pr" >&2
+              exit 1
+            fi
+            sleep 15
+          done
+          echo "checkpoint CI did not finish" >&2
+          exit 1
