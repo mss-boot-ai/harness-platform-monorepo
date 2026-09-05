@@ -14,9 +14,14 @@ import (
 
 const frameRetention = 24 * time.Hour
 
+type authorizedFramePersistence interface {
+	PutAuthorizedEndpointFrame(context.Context, string, string, domain.ID, domain.EncryptedFrame, time.Time) (bool, error)
+}
+
 func (server *Server) processEncryptedFrame(
 	ctx context.Context,
 	endpoint domain.Endpoint,
+	credential domain.EndpointCredential,
 	packet *awpv1.WirePacket,
 	encoded []byte,
 	now time.Time,
@@ -62,7 +67,7 @@ func (server *Server) processEncryptedFrame(
 		return errors.New("encrypted frame channel is invalid")
 	}
 	if frame.GetCryptoSuiteId() != 1 || frame.GetFrameType() != awpv1.FrameType_FRAME_TYPE_ACP_TRANSPORT_FRAME ||
-		frame.GetFlags()&0xffff0000 != 0 || frame.GetSequence() == 0 ||
+		frame.GetFlags() != 0 || frame.GetSequence() == 0 ||
 		len(frame.GetCiphertext()) < 16 || len(frame.GetCiphertext()) > maxWirePacketBytes || len(frame.GetSignature()) != 64 {
 		return errors.New("encrypted frame fields are invalid")
 	}
@@ -99,7 +104,13 @@ func (server *Server) processEncryptedFrame(
 		Signature: bytes.Clone(frame.GetSignature()), ContentHash: contentHashValue,
 		Status: domain.FrameStatusStored, ReceivedAt: now, ExpiresAt: now.Add(frameRetention),
 	}
-	if _, err := server.persistence.PutEndpointFrame(ctx, value); err != nil {
+	authorized, ok := server.persistence.(authorizedFramePersistence)
+	if !ok {
+		return errors.New("authorized frame persistence is unavailable")
+	}
+	if _, err := authorized.PutAuthorizedEndpointFrame(
+		ctx, endpoint.OwnerUserID, endpoint.TenantID, credential.ID, value, now,
+	); err != nil {
 		return err
 	}
 	if err := server.connections.send(receiverID, encoded); err != nil &&

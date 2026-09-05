@@ -33,7 +33,7 @@ func (server *Server) handleReadyPacket(
 		return errors.New("ready packet is not valid AWP protobuf")
 	}
 	if packet.GetEncrypted() != nil {
-		return server.processEncryptedFrame(ctx, endpoint, packet, encoded, now)
+		return server.processEncryptedFrame(ctx, endpoint, credential, packet, encoded, now)
 	}
 	if packet.GetAck() != nil {
 		receiverID, err := server.processAckFrame(ctx, endpoint, packet, now)
