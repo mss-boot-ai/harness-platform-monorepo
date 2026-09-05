@@ -89,7 +89,7 @@ func (server *Server) websocket(writer http.ResponseWriter, request *http.Reques
 		return
 	}
 	active := newActiveConnection(
-		endpoint.ID, authenticated.generation, authenticated.connectionID, connection,
+		endpoint.ID, authenticated.generation, authenticated.connectionID, authenticated.fencingToken, connection,
 	)
 	replaced, accepted := server.connections.activate(active)
 	if !accepted {
@@ -104,12 +104,14 @@ func (server *Server) websocket(writer http.ResponseWriter, request *http.Reques
 	go active.runWriter()
 	_ = connection.SetReadDeadline(time.Now().Add(2 * time.Duration(heartbeatIntervalMS) * time.Millisecond))
 	connection.SetPongHandler(func(string) error {
-		if _, _, err := server.persistence.GetEndpointCredential(
-			request.Context(), endpoint.ID, credential.ID, server.now().UTC(),
-		); err != nil {
-			return errors.New("endpoint credential is no longer available")
-		}
-		return connection.SetReadDeadline(time.Now().Add(2 * time.Duration(heartbeatIntervalMS) * time.Millisecond))
+		return server.connections.withCurrent(active, func() error {
+			if _, _, err := server.persistence.GetEndpointCredential(
+				request.Context(), endpoint.ID, credential.ID, server.now().UTC(),
+			); err != nil {
+				return errors.New("endpoint credential is no longer available")
+			}
+			return connection.SetReadDeadline(time.Now().Add(2 * time.Duration(heartbeatIntervalMS) * time.Millisecond))
+		})
 	})
 	for {
 		messageType, message, err := connection.ReadMessage()
@@ -120,13 +122,17 @@ func (server *Server) websocket(writer http.ResponseWriter, request *http.Reques
 			active.close(websocket.CloseUnsupportedData, "binary AWP packet required")
 			return
 		}
-		if _, _, err := server.persistence.GetEndpointCredential(
-			request.Context(), endpoint.ID, credential.ID, server.now().UTC(),
-		); err != nil {
-			active.close(websocket.ClosePolicyViolation, "endpoint credential unavailable")
-			return
-		}
-		if err := server.handleReadyPacket(request.Context(), active, endpoint, credential, message, server.now().UTC()); err != nil {
+		err = server.connections.withCurrent(active, func() error {
+			if _, _, err := server.persistence.GetEndpointCredential(
+				request.Context(), endpoint.ID, credential.ID, server.now().UTC(),
+			); err != nil {
+				return errors.New("endpoint credential unavailable")
+			}
+			return server.handleReadyPacket(
+				request.Context(), active, endpoint, credential, message, server.now().UTC(),
+			)
+		})
+		if err != nil {
 			active.close(websocket.ClosePolicyViolation, "AWP packet rejected")
 			return
 		}
@@ -147,6 +153,7 @@ func (server *Server) validTicketRequest(ticket domain.WSTicket, request *http.R
 
 type authenticatedConnection struct {
 	connectionID [16]byte
+	fencingToken [32]byte
 	generation   uint64
 }
 
@@ -266,6 +273,7 @@ func (server *Server) performChallenge(
 		return err
 	}
 	copy(authenticated.connectionID[:], connectionID)
+	copy(authenticated.fencingToken[:], fencingToken)
 	authenticated.generation = generation
 	return nil
 }

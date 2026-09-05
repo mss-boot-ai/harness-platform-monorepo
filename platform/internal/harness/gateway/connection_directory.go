@@ -15,6 +15,7 @@ const maxConnectionQueueBytes = 8 << 20
 var (
 	errConnectionOffline      = errors.New("endpoint connection is offline")
 	errConnectionBackpressure = errors.New("endpoint connection send queue is full")
+	errConnectionFenced       = errors.New("endpoint connection was fenced by a newer generation")
 )
 
 type connectionDirectory interface {
@@ -23,53 +24,81 @@ type connectionDirectory interface {
 	send(domain.ID, []byte) error
 	sendNextControl(domain.ID, func(uint64) ([]byte, error)) error
 	online(domain.ID) bool
+	withCurrent(*activeConnection, func() error) error
 }
 
 type memoryConnectionDirectory struct {
 	mu       sync.RWMutex
-	byTarget map[domain.ID]*activeConnection
+	byTarget map[domain.ID]*connectionLane
+}
+
+type connectionLane struct {
+	mu      sync.Mutex
+	current atomic.Pointer[activeConnection]
 }
 
 type activeConnection struct {
 	endpointID             domain.ID
 	generation             uint64
 	connectionID           [16]byte
+	fencingToken           [32]byte
 	socket                 *websocket.Conn
 	outbound               chan []byte
 	done                   chan struct{}
 	queuedBytes            atomic.Int64
 	controlSequence        atomic.Uint64
+	controlMu              sync.Mutex
 	inboundControlSequence atomic.Uint64
 	closeOnce              sync.Once
 }
 
 func newMemoryConnectionDirectory() *memoryConnectionDirectory {
-	return &memoryConnectionDirectory{byTarget: make(map[domain.ID]*activeConnection)}
+	return &memoryConnectionDirectory{byTarget: make(map[domain.ID]*connectionLane)}
 }
 
 func newActiveConnection(
 	endpointID domain.ID,
 	generation uint64,
 	connectionID [16]byte,
+	fencingToken [32]byte,
 	socket *websocket.Conn,
 ) *activeConnection {
 	return &activeConnection{
-		endpointID: endpointID, generation: generation, connectionID: connectionID, socket: socket,
+		endpointID: endpointID, generation: generation, connectionID: connectionID,
+		fencingToken: fencingToken, socket: socket,
 		outbound: make(chan []byte, maxInflightFrames), done: make(chan struct{}),
 	}
+}
+
+func (directory *memoryConnectionDirectory) lane(endpointID domain.ID, create bool) *connectionLane {
+	directory.mu.RLock()
+	lane := directory.byTarget[endpointID]
+	directory.mu.RUnlock()
+	if lane != nil || !create {
+		return lane
+	}
+	directory.mu.Lock()
+	defer directory.mu.Unlock()
+	lane = directory.byTarget[endpointID]
+	if lane == nil {
+		lane = new(connectionLane)
+		directory.byTarget[endpointID] = lane
+	}
+	return lane
 }
 
 func (directory *memoryConnectionDirectory) activate(candidate *activeConnection) (*activeConnection, bool) {
 	if candidate == nil || candidate.endpointID.IsZero() || candidate.generation == 0 {
 		return nil, false
 	}
-	directory.mu.Lock()
-	defer directory.mu.Unlock()
-	current := directory.byTarget[candidate.endpointID]
+	lane := directory.lane(candidate.endpointID, true)
+	lane.mu.Lock()
+	defer lane.mu.Unlock()
+	current := lane.current.Load()
 	if current != nil && current.generation >= candidate.generation {
 		return current, false
 	}
-	directory.byTarget[candidate.endpointID] = candidate
+	lane.current.Store(candidate)
 	return current, true
 }
 
@@ -77,18 +106,39 @@ func (directory *memoryConnectionDirectory) remove(candidate *activeConnection) 
 	if candidate == nil {
 		return
 	}
-	directory.mu.Lock()
-	defer directory.mu.Unlock()
-	current := directory.byTarget[candidate.endpointID]
-	if current == candidate {
-		delete(directory.byTarget, candidate.endpointID)
+	lane := directory.lane(candidate.endpointID, false)
+	if lane == nil {
+		return
+	}
+	lane.mu.Lock()
+	defer lane.mu.Unlock()
+	if lane.current.Load() == candidate {
+		lane.current.Store(nil)
 	}
 }
 
+func (directory *memoryConnectionDirectory) withCurrent(candidate *activeConnection, operation func() error) error {
+	if candidate == nil || operation == nil {
+		return errConnectionFenced
+	}
+	lane := directory.lane(candidate.endpointID, false)
+	if lane == nil {
+		return errConnectionFenced
+	}
+	lane.mu.Lock()
+	defer lane.mu.Unlock()
+	if lane.current.Load() != candidate {
+		return errConnectionFenced
+	}
+	return operation()
+}
+
 func (directory *memoryConnectionDirectory) send(endpointID domain.ID, packet []byte) error {
-	directory.mu.RLock()
-	connection := directory.byTarget[endpointID]
-	directory.mu.RUnlock()
+	lane := directory.lane(endpointID, false)
+	if lane == nil {
+		return errConnectionOffline
+	}
+	connection := lane.current.Load()
 	if connection == nil {
 		return errConnectionOffline
 	}
@@ -102,24 +152,35 @@ func (directory *memoryConnectionDirectory) sendNextControl(
 	if build == nil {
 		return errConnectionBackpressure
 	}
-	directory.mu.RLock()
-	connection := directory.byTarget[endpointID]
-	directory.mu.RUnlock()
+	lane := directory.lane(endpointID, false)
+	if lane == nil {
+		return errConnectionOffline
+	}
+	connection := lane.current.Load()
 	if connection == nil {
 		return errConnectionOffline
 	}
-	sequence := connection.controlSequence.Add(1)
+	connection.controlMu.Lock()
+	defer connection.controlMu.Unlock()
+	current := connection.controlSequence.Load()
+	if current == ^uint64(0) {
+		return errConnectionBackpressure
+	}
+	sequence := current + 1
 	packet, err := build(sequence)
 	if err != nil {
 		return err
 	}
-	return connection.enqueue(packet)
+	if err := connection.enqueue(packet); err != nil {
+		return err
+	}
+	connection.controlSequence.Store(sequence)
+	return nil
 }
 
 func (directory *memoryConnectionDirectory) online(endpointID domain.ID) bool {
-	directory.mu.RLock()
-	defer directory.mu.RUnlock()
-	return directory.byTarget[endpointID] != nil
+	lane := directory.lane(endpointID, false)
+	return lane != nil && lane.current.Load() != nil
 }
 
 func (connection *activeConnection) enqueue(packet []byte) error {
