@@ -1,0 +1,239 @@
+name: Orchestrate Session Idempotency Repair
+
+on:
+  push:
+    branches:
+      - codex/review-repair-orchestrator-20260905
+
+permissions:
+  contents: write
+  pull-requests: write
+
+jobs:
+  repair:
+    if: github.event.head_commit.message == 'chore(ci): orchestrate session idempotency repair'
+    runs-on: ubuntu-latest
+    env:
+      TARGET_BRANCH: codex/bootstrap-harness-platform-foundation
+      REPO: mss-boot-ai/harness-platform-monorepo
+      GH_TOKEN: ${{ github.token }}
+    steps:
+      - name: Wait for schema checkpoint and its CI
+        shell: bash
+        run: |
+          set -euo pipefail
+          for attempt in $(seq 1 80); do
+            sha=$(git ls-remote "https://x-access-token:${GH_TOKEN}@github.com/${REPO}.git" "refs/heads/${TARGET_BRANCH}" | awk '{print $1}')
+            message=$(gh api "repos/${REPO}/commits/${sha}" --jq '.commit.message | split("\n")[0]')
+            if [[ "$message" == "fix(store): verify critical unique index contracts" ]]; then
+              runs=$(gh api "repos/${REPO}/actions/runs?head_sha=${sha}&per_page=100")
+              push=$(jq -r '[.workflow_runs[] | select(.name == "Harness Platform CI" and .event == "push")][0].conclusion // ""' <<<"$runs")
+              pr=$(jq -r '[.workflow_runs[] | select(.name == "Harness Platform CI" and .event == "pull_request")][0].conclusion // ""' <<<"$runs")
+              if [[ "$push" == success && "$pr" == success ]]; then
+                echo "SCHEMA_SHA=$sha" >> "$GITHUB_ENV"
+                exit 0
+              fi
+              if [[ "$push" == failure || "$pr" == failure || "$push" == cancelled || "$pr" == cancelled ]]; then
+                echo "schema checkpoint CI failed: push=$push pr=$pr" >&2
+                exit 1
+              fi
+            fi
+            sleep 15
+          done
+          echo "schema checkpoint did not reach successful CI" >&2
+          exit 1
+
+      - name: Checkout target branch
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          ref: ${{ env.TARGET_BRANCH }}
+          fetch-depth: 0
+
+      - name: Guard exact schema head
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$(git rev-parse HEAD)" = "$SCHEMA_SHA"
+          test "$(git log -1 --format=%s)" = "fix(store): verify critical unique index contracts"
+
+      - name: Make session create idempotency authoritative
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 <<'PY'
+          from pathlib import Path
+
+          path = Path('platform/internal/harness/gateway/session.go')
+          text = path.read_text()
+          offline = '''\tif !server.connections.online(abaID) {
+          \t\twriteGatewayError(writer, http.StatusServiceUnavailable, "ABA_OFFLINE", "selected ABA endpoint is offline")
+          \t\treturn
+          \t}
+'''
+          if text.count(offline) != 1:
+              raise SystemExit('ABA online precheck anchor changed')
+          text = text.replace(offline, '')
+
+          old = '''\tif replayed {
+          \t\twriter.Header().Set("Idempotency-Replayed", "true")
+          \t\twriteRawJSON(writer, http.StatusCreated, storedJSON)
+          \t\treturn
+          \t}
+          \tif err := server.sendOpenTunnelRequest(session, endpoint, now); err != nil {
+          \t\t_, _ = server.persistence.UpdateSession(request.Context(), session.ID, func(value *domain.Session) error {
+          \t\t\treturn value.Fail(server.now().UTC())
+          \t\t})
+          \t\twriteGatewayError(writer, http.StatusServiceUnavailable, "ABA_DELIVERY_UNAVAILABLE", "session was created but ABA delivery failed")
+          \t\treturn
+          \t}
+          \twriteRawJSON(writer, http.StatusCreated, storedJSON)
+'''
+          new = '''\tif replayed {
+          \t\twriter.Header().Set("Idempotency-Replayed", "true")
+          \t} else if err := server.sendOpenTunnelRequest(session, endpoint, now); err != nil {
+          \t\t// Session creation is the durable, idempotent operation. Immediate ABA
+          \t\t// delivery is an optimization and must never rewrite the stored 201
+          \t\t// result into a contradictory 503/FAILED outcome.
+          \t\twriter.Header().Set("Harness-Open-Delivery", "pending")
+          \t}
+          \twriteRawJSON(writer, http.StatusCreated, storedJSON)
+'''
+          if text.count(old) != 1:
+              raise SystemExit('session delivery/idempotency anchor changed')
+          path.write_text(text.replace(old, new))
+
+          Path('platform/internal/harness/gateway/session_idempotency_delivery_test.go').write_text(r'''package gateway
+
+import (
+    "bytes"
+    "crypto/sha256"
+    "encoding/base64"
+    "encoding/json"
+    "net/http"
+    "net/http/httptest"
+    "strings"
+    "testing"
+    "time"
+
+    "github.com/mss-boot-ai/harness-platform-monorepo/platform/internal/harness/domain"
+)
+
+func TestSessionCreateKeepsOneIdempotentResultWhenABAIsOffline(t *testing.T) {
+    now := time.Unix(1_800_000_000, 0).UTC()
+    persistence, abaEndpoint, _, _, _, _, _ := abaGatewayFixture(t, now)
+    hcEndpointID := gatewayID(1)
+    hcAccessToken := base64.RawURLEncoding.EncodeToString(bytes.Repeat([]byte{9}, 32))
+    hcPublicJWK, hcSigningKey := gatewaySigningKey(1)
+    trust, err := NewEphemeralTrust(deterministicGatewayBytes(512), now)
+    if err != nil {
+        t.Fatalf("NewEphemeralTrust: %v", err)
+    }
+    handler, err := NewHandler(Config{
+        AllowedOrigin: "http://127.0.0.1:8001", ExternalOrigin: "http://127.0.0.1:8082", Trust: trust,
+    }, persistence, deterministicGatewayBytes(8192), func() time.Time { return now })
+    if err != nil {
+        t.Fatalf("NewHandler: %v", err)
+    }
+
+    requestBody, err := json.Marshal(map[string]any{
+        "abaEndpointId": abaEndpoint.ID.String(), "runtimeProfileId": "test-agent",
+        "workspaceId": "fixture", "requestedCapabilities": []string{"session", "prompt"},
+    })
+    if err != nil {
+        t.Fatalf("marshal session request: %v", err)
+    }
+    perform := func(jti string) *httptest.ResponseRecorder {
+        t.Helper()
+        challenge := httptest.NewRecorder()
+        handler.ServeHTTP(challenge, gatewaySessionRequest(hcAccessToken, "offline-session-key-0001", requestBody, ""))
+        nonce := challenge.Header().Get("DPoP-Nonce")
+        if challenge.Code != http.StatusUnauthorized || nonce == "" {
+            t.Fatalf("nonce status=%d headers=%v body=%s", challenge.Code, challenge.Header(), challenge.Body.String())
+        }
+        proof := signDPoPForPath(t, hcSigningKey, hcPublicJWK, hcAccessToken, nonce, now, jti, "/gateway/v1/sessions")
+        result := httptest.NewRecorder()
+        handler.ServeHTTP(result, gatewaySessionRequest(hcAccessToken, "offline-session-key-0001", requestBody, proof))
+        return result
+    }
+
+    first := perform("00000000-0000-4000-8000-000000000501")
+    if first.Code != http.StatusCreated || first.Header().Get("Harness-Open-Delivery") != "pending" {
+        t.Fatalf("first status=%d headers=%v body=%s", first.Code, first.Header(), first.Body.String())
+    }
+    second := perform("00000000-0000-4000-8000-000000000502")
+    if second.Code != http.StatusCreated || second.Header().Get("Idempotency-Replayed") != "true" {
+        t.Fatalf("replay status=%d headers=%v body=%s", second.Code, second.Header(), second.Body.String())
+    }
+    if first.Body.String() != second.Body.String() {
+        t.Fatalf("idempotent body changed: first=%s second=%s", first.Body.String(), second.Body.String())
+    }
+
+    var response endpointSessionResponse
+    if err := json.Unmarshal(first.Body.Bytes(), &response); err != nil {
+        t.Fatalf("decode response: %v", err)
+    }
+    sessionID, err := domain.ParseID(response.SessionID)
+    if err != nil {
+        t.Fatalf("parse session ID: %v", err)
+    }
+    session, err := persistence.GetSession(t.Context(), sessionID)
+    if err != nil {
+        t.Fatalf("GetSession: %v", err)
+    }
+    if session.Status != domain.SessionStatusCreating || session.HCEndpointID != hcEndpointID {
+        t.Fatalf("stored session=%#v", session)
+    }
+    digest := sha256.Sum256(requestBody)
+    if strings.Contains(first.Body.String(), base64.RawURLEncoding.EncodeToString(digest[:])) {
+        t.Fatal("response exposed request digest")
+    }
+}
+''')
+          PY
+          gofmt -w platform/internal/harness/gateway/session.go platform/internal/harness/gateway/session_idempotency_delivery_test.go
+          git diff --check
+
+      - name: Verify checkpoint
+        shell: bash
+        run: |
+          set -euo pipefail
+          cd platform
+          go test -count=1 ./internal/harness/gateway -run 'TestSessionCreateKeepsOneIdempotentResultWhenABAIsOffline|TestHCSessionCreateIsIdempotentAndDeliversSignedOpenTunnel'
+          go test -race -count=1 ./internal/harness/gateway
+          go test -count=1 ./...
+          go vet ./...
+
+      - name: Commit and push checkpoint
+        id: push
+        shell: bash
+        run: |
+          set -euo pipefail
+          git config user.name "OpenAI Codex"
+          git config user.email "codex@openai.com"
+          git add platform/internal/harness/gateway/session.go platform/internal/harness/gateway/session_idempotency_delivery_test.go
+          git commit -m "fix(gateway): keep session creation idempotency authoritative"
+          sha=$(git rev-parse HEAD)
+          git push origin HEAD:${TARGET_BRANCH}
+          echo "sha=$sha" >> "$GITHUB_OUTPUT"
+
+      - name: Wait for checkpoint CI
+        shell: bash
+        run: |
+          set -euo pipefail
+          sha='${{ steps.push.outputs.sha }}'
+          for attempt in $(seq 1 80); do
+            runs=$(gh api "repos/${REPO}/actions/runs?head_sha=${sha}&per_page=100")
+            push=$(jq -r '[.workflow_runs[] | select(.name == "Harness Platform CI" and .event == "push")][0].conclusion // ""' <<<"$runs")
+            pr=$(jq -r '[.workflow_runs[] | select(.name == "Harness Platform CI" and .event == "pull_request")][0].conclusion // ""' <<<"$runs")
+            if [[ "$push" == success && "$pr" == success ]]; then
+              gh pr comment 1 --repo "$REPO" --body "Review repair checkpoint passed: session creation idempotency is authoritative at \`${sha}\`. Both push and PR CI succeeded."
+              exit 0
+            fi
+            if [[ "$push" == failure || "$pr" == failure || "$push" == cancelled || "$pr" == cancelled ]]; then
+              echo "checkpoint CI failed: push=$push pr=$pr" >&2
+              exit 1
+            fi
+            sleep 15
+          done
+          echo "checkpoint CI did not finish" >&2
+          exit 1
