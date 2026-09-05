@@ -21,12 +21,12 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          tar --exclude=.git --exclude=review-worktree.tar.gz -czf review-worktree.tar.gz .
+          tar --exclude=.git -czf "$RUNNER_TEMP/review-worktree.tar.gz" .
 
       - name: Upload review worktree
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
         with:
           name: review-worktree-${{ github.sha }}
-          path: review-worktree.tar.gz
+          path: ${{ runner.temp }}/review-worktree.tar.gz
           if-no-files-found: error
           retention-days: 1
