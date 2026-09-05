@@ -12,18 +12,19 @@ permissions:
 
 jobs:
   apply:
-    if: github.event.head_commit.message == 'chore(ci): stage review reliability group 1'
+    if: >-
+      github.event.head_commit.message == 'fix(ci): quote review reliability workflow condition'
     runs-on: ubuntu-24.04
     timeout-minutes: 30
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
         with:
           fetch-depth: 0
-      - name: Guard reviewed parent
+      - name: Guard reviewed ancestry
         shell: bash
         run: |
           set -Eeuo pipefail
-          test "$(git rev-parse HEAD^)" = "9fc7a0c05354d0058d7c9292ebadf0cf0b844160"
+          git merge-base --is-ancestor 9fc7a0c05354d0058d7c9292ebadf0cf0b844160 HEAD
           test -z "$(git status --porcelain)"
       - name: Apply reviewed files
         shell: bash
