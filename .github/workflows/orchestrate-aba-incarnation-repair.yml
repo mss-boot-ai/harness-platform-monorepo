@@ -1,0 +1,488 @@
+name: Orchestrate ABA Incarnation Repair
+
+on:
+  push:
+    branches:
+      - codex/review-repair-orchestrator-20260905
+
+permissions:
+  contents: write
+  pull-requests: write
+
+jobs:
+  repair:
+    if: github.event.head_commit.message == 'chore(ci): orchestrate ABA incarnation repair'
+    runs-on: ubuntu-latest
+    env:
+      TARGET_BRANCH: codex/bootstrap-harness-platform-foundation
+      REPO: mss-boot-ai/harness-platform-monorepo
+      GH_TOKEN: ${{ github.token }}
+    steps:
+      - name: Wait for WAITING_KEY recovery checkpoint
+        shell: bash
+        run: |
+          set -euo pipefail
+          wanted='fix(relay): recover waiting key sessions from either endpoint'
+          for attempt in $(seq 1 220); do
+            sha=$(git ls-remote "https://x-access-token:${GH_TOKEN}@github.com/${REPO}.git" "refs/heads/${TARGET_BRANCH}" | awk '{print $1}')
+            message=$(gh api "repos/${REPO}/commits/${sha}" --jq '.commit.message | split("\n")[0]')
+            if [[ "$message" == "$wanted" ]]; then
+              runs=$(gh api "repos/${REPO}/actions/runs?head_sha=${sha}&per_page=100")
+              push=$(jq -r '[.workflow_runs[] | select(.name == "Harness Platform CI" and .event == "push")][0].conclusion // ""' <<<"$runs")
+              pr=$(jq -r '[.workflow_runs[] | select(.name == "Harness Platform CI" and .event == "pull_request")][0].conclusion // ""' <<<"$runs")
+              if [[ "$push" == success && "$pr" == success ]]; then
+                echo "BASE_SHA=$sha" >> "$GITHUB_ENV"
+                exit 0
+              fi
+              if [[ "$push" =~ ^(failure|cancelled)$ || "$pr" =~ ^(failure|cancelled)$ ]]; then
+                echo "previous checkpoint CI failed: push=$push pr=$pr" >&2
+                exit 1
+              fi
+            fi
+            sleep 15
+          done
+          echo "previous checkpoint did not reach successful CI" >&2
+          exit 1
+
+      - name: Checkout target branch
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          ref: ${{ env.TARGET_BRANCH }}
+          fetch-depth: 0
+
+      - name: Guard exact base
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$(git rev-parse HEAD)" = "$BASE_SHA"
+
+      - name: Add process incarnation fencing
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 <<'PY'
+          from pathlib import Path
+
+          server = Path('platform/internal/harness/gateway/server.go')
+          text = server.read_text()
+          if '"sync"' not in text:
+              text = text.replace('"strings"\n', '"strings"\n\t"sync"\n', 1)
+          old = '''\tUseDPoPReplay(context.Context, string, string, time.Time, time.Time, int64) error
+          }
+'''
+          new = '''\tUseDPoPReplay(context.Context, string, string, time.Time, time.Time, int64) error
+          \tFailSessionsForABAProcessRestart(context.Context, domain.Endpoint, time.Time) (int64, error)
+          }
+'''
+          if text.count(old) != 1:
+              raise SystemExit('Persistence tail anchor changed')
+          text = text.replace(old, new)
+          old = '''\ttrust       *TrustBundle
+          \tconnections connectionDirectory
+          }
+'''
+          new = '''\ttrust                  *TrustBundle
+          \tconnections            connectionDirectory
+          \tprocessMu              sync.Mutex
+          \tabaProcessIncarnations map[domain.ID][16]byte
+          }
+'''
+          if text.count(old) != 1:
+              raise SystemExit('Server fields anchor changed')
+          text = text.replace(old, new)
+          old = '''\t\tconfig: config, persistence: persistence, random: random, now: now,
+          \t\ttrust: config.Trust, connections: newMemoryConnectionDirectory(),
+          \t}
+'''
+          new = '''\t\tconfig: config, persistence: persistence, random: random, now: now,
+          \t\ttrust: config.Trust, connections: newMemoryConnectionDirectory(),
+          \t\tabaProcessIncarnations: make(map[domain.ID][16]byte),
+          \t}
+'''
+          if text.count(old) != 1:
+              raise SystemExit('Server initializer anchor changed')
+          server.write_text(text.replace(old, new))
+
+          websocket = Path('platform/internal/harness/gateway/websocket.go')
+          text = websocket.read_text()
+          if 'const abaProcessIncarnationHeader' not in text:
+              text = text.replace(
+                  'const (\n\tmaxWirePacketBytes',
+                  'const (\n\tabaProcessIncarnationHeader = "X-MSS-ABA-Process-Incarnation"\n\tmaxWirePacketBytes',
+                  1,
+              )
+          anchor = '''\tendpoint, credential, err := server.persistence.GetEndpointCredential(request.Context(), ticket.EndpointID, ticket.CredentialID, now)
+          \tif err != nil {
+          \t\twriteDomainError(writer, err)
+          \t\treturn
+          \t}
+'''
+          replacement = '''\tendpoint, credential, err := server.persistence.GetEndpointCredential(request.Context(), ticket.EndpointID, ticket.CredentialID, now)
+          \tif err != nil {
+          \t\twriteDomainError(writer, err)
+          \t\treturn
+          \t}
+          \tprocessIncarnation, err := parseProcessIncarnation(request, endpoint.Type)
+          \tif err != nil {
+          \t\twriteGatewayError(writer, http.StatusUnauthorized, "PROCESS_INCARCERATION_INVALID", "ABA process incarnation is invalid")
+          \t\treturn
+          \t}
+'''
+          if text.count(anchor) != 1:
+              raise SystemExit('websocket endpoint credential anchor changed')
+          text = text.replace(anchor, replacement)
+          anchor = '''\tif err := server.persistence.MarkEndpointSeen(request.Context(), endpoint.ID, server.now().UTC()); err != nil {
+          \t\t_ = connection.WriteControl(
+'''
+          replacement = '''\tif err := server.persistence.MarkEndpointSeen(request.Context(), endpoint.ID, server.now().UTC()); err != nil {
+          \t\t_ = connection.WriteControl(
+'''
+          if text.count(anchor) != 1:
+              raise SystemExit('MarkEndpointSeen anchor changed')
+          # Insert restart handling after the complete presence error block.
+          block = '''\tif err := server.persistence.MarkEndpointSeen(request.Context(), endpoint.ID, server.now().UTC()); err != nil {
+          \t\t_ = connection.WriteControl(
+          \t\t\twebsocket.CloseMessage,
+          \t\t\twebsocket.FormatCloseMessage(websocket.ClosePolicyViolation, "endpoint presence rejected"),
+          \t\t\ttime.Now().Add(time.Second),
+          \t\t)
+          \t\treturn
+          \t}
+'''
+          insertion = block + '''\tif endpoint.Type == domain.EndpointTypeABA && server.recordABAProcessIncarnation(endpoint.ID, processIncarnation) {
+          \t\tif _, err := server.persistence.FailSessionsForABAProcessRestart(request.Context(), endpoint, server.now().UTC()); err != nil {
+          \t\t\t_ = connection.WriteControl(
+          \t\t\t\twebsocket.CloseMessage,
+          \t\t\t\twebsocket.FormatCloseMessage(websocket.CloseInternalServerErr, "ABA restart fencing failed"),
+          \t\t\t\ttime.Now().Add(time.Second),
+          \t\t\t)
+          \t\t\treturn
+          \t\t}
+          \t}
+'''
+          if text.count(block) != 1:
+              raise SystemExit('presence block changed')
+          text = text.replace(block, insertion)
+          helper_marker = '\nfunc (server *Server) validTicketRequest('
+          helper = r'''
+
+func parseProcessIncarnation(request *http.Request, endpointType domain.EndpointType) ([16]byte, error) {
+	var result [16]byte
+	values := request.Header.Values(abaProcessIncarnationHeader)
+	if endpointType != domain.EndpointTypeABA {
+		if len(values) != 0 {
+			return result, errors.New("HC cannot send ABA process incarnation")
+		}
+		return result, nil
+	}
+	if len(values) != 1 {
+		return result, errors.New("exactly one ABA process incarnation is required")
+	}
+	decoded, err := base64.RawURLEncoding.Strict().DecodeString(strings.TrimSpace(values[0]))
+	if err != nil || len(decoded) != len(result) {
+		return result, errors.New("ABA process incarnation encoding is invalid")
+	}
+	copy(result[:], decoded)
+	if subtle.ConstantTimeCompare(result[:], make([]byte, len(result))) == 1 {
+		return result, errors.New("ABA process incarnation is zero")
+	}
+	return result, nil
+}
+
+func (server *Server) recordABAProcessIncarnation(endpointID domain.ID, incarnation [16]byte) bool {
+	server.processMu.Lock()
+	defer server.processMu.Unlock()
+	previous, exists := server.abaProcessIncarnations[endpointID]
+	server.abaProcessIncarnations[endpointID] = incarnation
+	return exists && previous != incarnation
+}
+'''
+          if text.count(helper_marker) != 1:
+              raise SystemExit('websocket helper insertion anchor changed')
+          websocket.write_text(text.replace(helper_marker, helper + helper_marker))
+
+          Path('platform/internal/harness/store/process_incarnation.go').write_text(r'''package store
+
+import (
+    "context"
+    "time"
+
+    "github.com/mss-boot-ai/harness-platform-monorepo/platform/internal/harness/domain"
+    "gorm.io/gorm"
+    "gorm.io/gorm/clause"
+)
+
+func (store *Store) FailSessionsForABAProcessRestart(
+    ctx context.Context,
+    endpoint domain.Endpoint,
+    now time.Time,
+) (int64, error) {
+    if err := requireStore(store, ctx); err != nil {
+        return 0, err
+    }
+    if endpoint.ID.IsZero() || endpoint.Type != domain.EndpointTypeABA || endpoint.OwnerUserID == "" || now.IsZero() {
+        return 0, domain.NewProblem(domain.CodeInvalidArgument, "ABA restart scope is invalid", nil)
+    }
+    var affected int64
+    err := store.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
+        var row endpointRow
+        if err := tx.Clauses(clause.Locking{Strength: "UPDATE"}).Where(
+            "id = ? AND owner_user_id = ? AND tenant_id = ? AND type = ? AND status = ?",
+            endpoint.ID.String(), endpoint.OwnerUserID, endpoint.TenantID,
+            string(domain.EndpointTypeABA), string(domain.EndpointStatusActive),
+        ).First(&row).Error; err != nil {
+            return notFoundOr("lock ABA endpoint for process restart", "ABA endpoint was not found", err)
+        }
+        result := tx.Model(new(sessionRow)).Where(
+            "aba_endpoint_id = ? AND owner_user_id = ? AND tenant_id = ? AND status IN ?",
+            endpoint.ID.String(), endpoint.OwnerUserID, endpoint.TenantID,
+            []string{
+                string(domain.SessionStatusCreating),
+                string(domain.SessionStatusWaitingKey),
+                string(domain.SessionStatusActive),
+                string(domain.SessionStatusRekeyRequired),
+                string(domain.SessionStatusDraining),
+                string(domain.SessionStatusUncertain),
+            },
+        ).Updates(map[string]any{
+            "status": string(domain.SessionStatusFailed),
+            "closed_at": now,
+            "updated_at": now,
+            "row_version": gorm.Expr("row_version + 1"),
+        })
+        if result.Error != nil {
+            return classifyPersistence(result.Error, "fail sessions after ABA process restart")
+        }
+        affected = result.RowsAffected
+        return nil
+    })
+    return affected, err
+}
+''')
+
+          Path('platform/internal/harness/gateway/process_incarnation_test.go').write_text(r'''package gateway
+
+import (
+    "encoding/base64"
+    "net/http/httptest"
+    "testing"
+
+    "github.com/mss-boot-ai/harness-platform-monorepo/platform/internal/harness/domain"
+)
+
+func TestABAProcessIncarnationChangesOnlyAcrossProcessRestart(t *testing.T) {
+    server := &Server{abaProcessIncarnations: make(map[domain.ID][16]byte)}
+    endpointID := gatewayID(141)
+    first := [16]byte{1}
+    second := [16]byte{2}
+    if server.recordABAProcessIncarnation(endpointID, first) {
+        t.Fatal("first process incarnation was treated as a restart")
+    }
+    if server.recordABAProcessIncarnation(endpointID, first) {
+        t.Fatal("network reconnect with same process incarnation was treated as restart")
+    }
+    if !server.recordABAProcessIncarnation(endpointID, second) {
+        t.Fatal("new process incarnation was not detected")
+    }
+}
+
+func TestParseProcessIncarnationFailsClosed(t *testing.T) {
+    request := httptest.NewRequest("GET", "http://example.test/gateway/v1/ws", nil)
+    if _, err := parseProcessIncarnation(request, domain.EndpointTypeABA); err == nil {
+        t.Fatal("ABA without process incarnation was accepted")
+    }
+    request.Header.Set(abaProcessIncarnationHeader, base64.RawURLEncoding.EncodeToString([]byte{1, 2, 3}))
+    if _, err := parseProcessIncarnation(request, domain.EndpointTypeABA); err == nil {
+        t.Fatal("short process incarnation was accepted")
+    }
+    request.Header.Set(abaProcessIncarnationHeader, base64.RawURLEncoding.EncodeToString(make([]byte, 16)))
+    if _, err := parseProcessIncarnation(request, domain.EndpointTypeABA); err == nil {
+        t.Fatal("zero process incarnation was accepted")
+    }
+    value := [16]byte{9}
+    request.Header.Set(abaProcessIncarnationHeader, base64.RawURLEncoding.EncodeToString(value[:]))
+    parsed, err := parseProcessIncarnation(request, domain.EndpointTypeABA)
+    if err != nil || parsed != value {
+        t.Fatalf("parse valid incarnation=%x error=%v", parsed, err)
+    }
+    if _, err := parseProcessIncarnation(request, domain.EndpointTypeHCWeb); err == nil {
+        t.Fatal("HC request carrying ABA process incarnation was accepted")
+    }
+}
+''')
+
+          Path('platform/internal/harness/store/process_incarnation_test.go').write_text(r'''package store
+
+import (
+    "testing"
+    "time"
+
+    "github.com/mss-boot-ai/harness-platform-monorepo/platform/internal/harness/domain"
+)
+
+func TestFailSessionsForABAProcessRestartIsScopedAndTerminal(t *testing.T) {
+    persistence := newTestStore(t)
+    now := time.Unix(1_800_000_000, 0).UTC()
+    aba := endpoint(151, 152, 153, domain.EndpointTypeABA, "owner", now)
+    aba.TenantID = "tenant-a"
+    hc := endpoint(154, 155, 156, domain.EndpointTypeHCWeb, "owner", now)
+    hc.TenantID = "tenant-a"
+    otherHC := endpoint(157, 158, 159, domain.EndpointTypeHCWeb, "owner", now)
+    otherHC.TenantID = "tenant-b"
+    for _, value := range []domain.Endpoint{aba, hc, otherHC} {
+        if err := persistence.CreateEndpoint(t.Context(), value); err != nil {
+            t.Fatalf("CreateEndpoint: %v", err)
+        }
+    }
+    active := session(160, aba.ID, hc.ID, "owner", now)
+    active.TenantID = "tenant-a"
+    active.Status = domain.SessionStatusActive
+    active.CurrentKeyGeneration = 1
+    closed := session(161, aba.ID, hc.ID, "owner", now)
+    closed.TenantID = "tenant-a"
+    closed.Status = domain.SessionStatusClosed
+    closedAt := now
+    closed.ClosedAt = &closedAt
+    otherTenant := session(162, aba.ID, otherHC.ID, "owner", now)
+    otherTenant.TenantID = "tenant-b"
+    otherTenant.Status = domain.SessionStatusActive
+    otherTenant.CurrentKeyGeneration = 1
+    for _, value := range []domain.Session{active, closed, otherTenant} {
+        if err := persistence.CreateSession(t.Context(), value); err != nil {
+            t.Fatalf("CreateSession: %v", err)
+        }
+    }
+    affected, err := persistence.FailSessionsForABAProcessRestart(t.Context(), aba, now.Add(time.Minute))
+    if err != nil {
+        t.Fatalf("FailSessionsForABAProcessRestart: %v", err)
+    }
+    if affected != 1 {
+        t.Fatalf("affected=%d, want 1", affected)
+    }
+    updated, err := persistence.GetSession(t.Context(), active.ID)
+    if err != nil || updated.Status != domain.SessionStatusFailed || updated.ClosedAt == nil {
+        t.Fatalf("active session after restart=%#v error=%v", updated, err)
+    }
+    unchanged, _ := persistence.GetSession(t.Context(), closed.ID)
+    if unchanged.Status != domain.SessionStatusClosed {
+        t.Fatalf("closed session changed to %s", unchanged.Status)
+    }
+    crossTenant, _ := persistence.GetSession(t.Context(), otherTenant.ID)
+    if crossTenant.Status != domain.SessionStatusActive {
+        t.Fatalf("cross-tenant session changed to %s", crossTenant.Status)
+    }
+}
+''')
+
+          # ABA creates one process incarnation and reuses it across network reconnects.
+          client = Path('aba/src/gateway/client.rs')
+          text = client.read_text()
+          text = text.replace(
+              'use tungstenite::http::header::SEC_WEBSOCKET_PROTOCOL;',
+              'use tungstenite::http::header::{HeaderName, SEC_WEBSOCKET_PROTOCOL};',
+              1,
+          )
+          old = '''pub struct GatewayClient {
+    base: Url,
+    http: Client,
+}
+'''
+          new = '''pub struct GatewayClient {
+    base: Url,
+    http: Client,
+    process_incarnation: [u8; 16],
+}
+'''
+          if text.count(old) != 1:
+              raise SystemExit('GatewayClient fields anchor changed')
+          text = text.replace(old, new)
+          old = '''        Ok(Self { base, http })
+'''
+          new = '''        Ok(Self {
+            base,
+            http,
+            process_incarnation: random_array::<16>(),
+        })
+'''
+          if text.count(old) != 1:
+              raise SystemExit('GatewayClient constructor anchor changed')
+          text = text.replace(old, new)
+          anchor = '''        request
+            .headers_mut()
+            .insert(SEC_WEBSOCKET_PROTOCOL, protocols);
+'''
+          replacement = '''        request
+            .headers_mut()
+            .insert(SEC_WEBSOCKET_PROTOCOL, protocols);
+        request.headers_mut().insert(
+            HeaderName::from_static("x-mss-aba-process-incarnation"),
+            HeaderValue::from_str(&URL_SAFE_NO_PAD.encode(self.process_incarnation))
+                .map_err(|_| GatewayError::InvalidResponse)?,
+        );
+'''
+          if text.count(anchor) != 1:
+              raise SystemExit('ABA websocket header anchor changed')
+          client.write_text(text.replace(anchor, replacement))
+          PY
+          gofmt -w \
+            platform/internal/harness/gateway/server.go \
+            platform/internal/harness/gateway/websocket.go \
+            platform/internal/harness/gateway/process_incarnation_test.go \
+            platform/internal/harness/store/process_incarnation.go \
+            platform/internal/harness/store/process_incarnation_test.go
+          cargo fmt --manifest-path aba/Cargo.toml --all
+          git diff --check
+
+      - name: Verify checkpoint
+        shell: bash
+        run: |
+          set -euo pipefail
+          cd platform
+          go test -count=1 ./internal/harness/gateway ./internal/harness/store
+          go test -race -count=1 ./internal/harness/gateway ./internal/harness/store
+          go test -count=1 ./...
+          go vet ./...
+          cd ../aba
+          cargo fmt --all -- --check
+          cargo clippy --locked --workspace --all-targets --all-features -- -D warnings
+          cargo test --locked --workspace --all-targets
+
+      - name: Commit and push checkpoint
+        id: push
+        shell: bash
+        run: |
+          set -euo pipefail
+          git config user.name "OpenAI Codex"
+          git config user.email "codex@openai.com"
+          git add platform/internal/harness/gateway/server.go \
+                  platform/internal/harness/gateway/websocket.go \
+                  platform/internal/harness/gateway/process_incarnation_test.go \
+                  platform/internal/harness/store/process_incarnation.go \
+                  platform/internal/harness/store/process_incarnation_test.go \
+                  aba/src/gateway/client.rs
+          git commit -m "fix(relay): fence ABA process incarnation changes"
+          sha=$(git rev-parse HEAD)
+          git push origin HEAD:${TARGET_BRANCH}
+          echo "sha=$sha" >> "$GITHUB_OUTPUT"
+
+      - name: Wait for checkpoint CI
+        shell: bash
+        run: |
+          set -euo pipefail
+          sha='${{ steps.push.outputs.sha }}'
+          for attempt in $(seq 1 160); do
+            runs=$(gh api "repos/${REPO}/actions/runs?head_sha=${sha}&per_page=100")
+            push=$(jq -r '[.workflow_runs[] | select(.name == "Harness Platform CI" and .event == "push")][0].conclusion // ""' <<<"$runs")
+            pr=$(jq -r '[.workflow_runs[] | select(.name == "Harness Platform CI" and .event == "pull_request")][0].conclusion // ""' <<<"$runs")
+            if [[ "$push" == success && "$pr" == success ]]; then
+              gh pr comment 1 --repo "$REPO" --body "Review repair checkpoint passed: ABA process-incarnation fencing terminates stale local Sessions before recovery at \`${sha}\`. Both push and PR CI succeeded."
+              exit 0
+            fi
+            if [[ "$push" =~ ^(failure|cancelled)$ || "$pr" =~ ^(failure|cancelled)$ ]]; then
+              echo "checkpoint CI failed: push=$push pr=$pr" >&2
+              exit 1
+            fi
+            sleep 15
+          done
+          echo "checkpoint CI did not finish" >&2
+          exit 1
