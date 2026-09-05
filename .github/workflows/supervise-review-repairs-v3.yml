@@ -1,0 +1,413 @@
+name: Complete Serialized Review Repair Supervision
+
+on:
+  push:
+    branches:
+      - codex/review-repair-orchestrator-20260905
+
+permissions:
+  actions: write
+  contents: write
+  pull-requests: write
+
+jobs:
+  repair:
+    if: github.event.head_commit.message == 'chore(ci): complete serialized repair supervision'
+    runs-on: ubuntu-latest
+    timeout-minutes: 330
+    env:
+      TARGET_BRANCH: codex/bootstrap-harness-platform-foundation
+      ORCHESTRATOR_BRANCH: codex/review-repair-orchestrator-20260905
+      REPO: mss-boot-ai/harness-platform-monorepo
+      GH_TOKEN: ${{ github.token }}
+    steps:
+      - name: Wait for prior supervisor to finish
+        shell: bash
+        run: |
+          set -euo pipefail
+          for attempt in $(seq 1 280); do
+            response=$(gh api "repos/${REPO}/actions/workflows/supervise-review-repairs-v2.yml/runs?branch=${ORCHESTRATOR_BRANCH}&per_page=5")
+            status=$(jq -r '.workflow_runs[0].status // ""' <<<"$response")
+            if [[ "$status" == completed ]]; then
+              echo "PRIOR_SUPERVISOR_RUN=$(jq -r '.workflow_runs[0].id' <<<"$response")" >> "$GITHUB_ENV"
+              echo "PRIOR_SUPERVISOR_CONCLUSION=$(jq -r '.workflow_runs[0].conclusion // ""' <<<"$response")" >> "$GITHUB_ENV"
+              exit 0
+            fi
+            sleep 15
+          done
+          echo "prior supervisor did not complete" >&2
+          exit 1
+
+      - name: Cancel obsolete orchestrator jobs
+        shell: bash
+        run: |
+          set -euo pipefail
+          current="$GITHUB_RUN_ID"
+          gh api "repos/${REPO}/actions/runs?branch=${ORCHESTRATOR_BRANCH}&per_page=100" --jq '.workflow_runs[] | [.id,.status,.name] | @tsv' |
+          while IFS=$'\t' read -r run status name; do
+            [[ "$run" == "$current" || "$status" == completed ]] && continue
+            gh api -X POST "repos/${REPO}/actions/runs/${run}/cancel" >/dev/null 2>&1 || true
+          done
+          sleep 20
+
+      - name: Checkout target branch
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          ref: ${{ env.TARGET_BRANCH }}
+          fetch-depth: 0
+
+      - name: Load serialized repair helpers
+        shell: bash
+        run: |
+          set -euo pipefail
+          git fetch origin "${ORCHESTRATOR_BRANCH}:refs/remotes/origin/${ORCHESTRATOR_BRANCH}"
+          git show "origin/${ORCHESTRATOR_BRANCH}:.github/workflows/supervise-review-repairs.yml" > /tmp/supervisor.yml
+          python3 <<'PY'
+          from pathlib import Path
+          lines = Path('/tmp/supervisor.yml').read_text().splitlines()
+          marker = '- name: Fetch repair scripts and establish helpers'
+          start = next(i for i, line in enumerate(lines) if line.strip() == marker)
+          run = next(i for i in range(start + 1, len(lines)) if lines[i].strip() == 'run: |') + 1
+          end = next((i for i in range(run, len(lines)) if lines[i].startswith('      - name: ')), len(lines))
+          body = lines[run:end]
+          indent = min(len(line) - len(line.lstrip()) for line in body if line.strip())
+          Path('/tmp/load-repair-lib.sh').write_text('\n'.join(line[indent:] for line in body) + '\n')
+          PY
+          chmod +x /tmp/load-repair-lib.sh
+          /tmp/load-repair-lib.sh
+          cat >> /tmp/repair-lib.sh <<'SH'
+
+          checkpoint_sha() {
+            git log --format='%H%x09%s' | awk -F '\t' -v wanted="$1" '$2 == wanted {print $1; exit}'
+          }
+
+          ensure_checkpoint_ci() {
+            local message="$1" sha
+            sha=$(checkpoint_sha "$message")
+            if [[ -z "$sha" ]]; then
+              return 1
+            fi
+            wait_ci "$sha"
+          }
+
+          run_supervisor_step() {
+            local step_name="$1" output=/tmp/reused-supervisor-step.sh
+            python3 - "$step_name" "$output" <<'PY'
+          from pathlib import Path
+          import sys
+          name, output = sys.argv[1], Path(sys.argv[2])
+          lines = Path('/tmp/supervisor.yml').read_text().splitlines()
+          marker = f'- name: {name}'
+          start = next(i for i, line in enumerate(lines) if line.strip() == marker)
+          run = next(i for i in range(start + 1, len(lines)) if lines[i].strip() == 'run: |') + 1
+          end = next((i for i in range(run, len(lines)) if lines[i].startswith('      - name: ')), len(lines))
+          body = lines[run:end]
+          indent = min(len(line) - len(line.lstrip()) for line in body if line.strip())
+          output.write_text('\n'.join(line[indent:] for line in body) + '\n')
+          PY
+            chmod +x "$output"
+            "$output"
+          }
+          SH
+
+      - name: Resume all checkpoints through WAITING_KEY recovery
+        shell: bash
+        run: |
+          set -euo pipefail
+          git show "origin/${ORCHESTRATOR_BRANCH}:.github/workflows/supervise-review-repairs-v2.yml" > /tmp/supervisor-v2.yml
+          python3 <<'PY'
+          from pathlib import Path
+          lines = Path('/tmp/supervisor-v2.yml').read_text().splitlines()
+          marker = '- name: Verify or apply checkpoints through WAITING_KEY recovery'
+          start = next(i for i, line in enumerate(lines) if line.strip() == marker)
+          run = next(i for i in range(start + 1, len(lines)) if lines[i].strip() == 'run: |') + 1
+          end = next((i for i in range(run, len(lines)) if lines[i].startswith('      - name: ')), len(lines))
+          body = lines[run:end]
+          indent = min(len(line) - len(line.lstrip()) for line in body if line.strip())
+          Path('/tmp/resume-through-waiting-key.sh').write_text('\n'.join(line[indent:] for line in body) + '\n')
+          PY
+          chmod +x /tmp/resume-through-waiting-key.sh
+          /tmp/resume-through-waiting-key.sh
+          git fetch origin "$TARGET_BRANCH"
+          test "$(git rev-parse HEAD)" = "$(git rev-parse origin/${TARGET_BRANCH})"
+
+      - name: Complete ABA process-incarnation fencing
+        shell: bash
+        run: |
+          source /tmp/repair-lib.sh
+          message='fix(relay): fence ABA process incarnation changes'
+          if has_commit "$message"; then
+            ensure_checkpoint_ci "$message"
+            exit 0
+          fi
+
+          extract_step orchestrate-aba-incarnation-repair.yml 'Add process incarnation fencing' /tmp/apply-process-incarnation.sh
+          /tmp/apply-process-incarnation.sh
+          sed -i 's/PROCESS_INCARCERATION_INVALID/PROCESS_INCARNATION_INVALID/g' platform/internal/harness/gateway/websocket.go
+
+          python3 <<'PY'
+          from pathlib import Path
+          import re
+
+          path = Path('platform/internal/harness/store/process_incarnation_test.go')
+          text = path.read_text()
+          pattern = re.compile(
+              r'\n\s*for _, value := range \[\]domain\.Session\{active, closed, otherTenant\} \{.*?\n\s*\}\n\s*affected, err :=',
+              re.S,
+          )
+          replacement = r'''
+	for _, desired := range []domain.Session{active, closed, otherTenant} {
+		value := desired
+		value.Status = domain.SessionStatusCreating
+		value.CurrentKeyGeneration = 0
+		value.ClosedAt = nil
+		if err := persistence.CreateSession(t.Context(), value); err != nil {
+			t.Fatalf("CreateSession: %v", err)
+		}
+		updates := map[string]any{
+			"status":                 string(desired.Status),
+			"current_key_generation": desired.CurrentKeyGeneration,
+			"updated_at":             now,
+		}
+		if desired.ClosedAt != nil {
+			updates["closed_at"] = *desired.ClosedAt
+		}
+		if err := persistence.db.Model(new(sessionRow)).Where("id = ?", desired.ID.String()).Updates(updates).Error; err != nil {
+			t.Fatalf("set session status %s: %v", desired.Status, err)
+		}
+	}
+	affected, err :='''
+          updated, count = pattern.subn(replacement, text, count=1)
+          if count != 1:
+              raise SystemExit('process-incarnation test state setup anchor changed')
+          path.write_text(updated)
+
+          helper = Path('platform/internal/harness/gateway/process_incarnation_test_helpers_test.go')
+          helper.write_text(r'''package gateway
+
+import (
+	"encoding/base64"
+	"net/http"
+)
+
+func abaProcessHeader(seed byte) http.Header {
+	value := [16]byte{seed}
+	return http.Header{
+		abaProcessIncarnationHeader: []string{base64.RawURLEncoding.EncodeToString(value[:])},
+	}
+}
+''')
+
+          replacements = 0
+          dial_pattern = re.compile(r'(\.Dial\([^,\n]+,\s*)nil(\s*\))')
+          for test in Path('platform/internal/harness/gateway').glob('*_test.go'):
+              source = test.read_text()
+              changed, count = dial_pattern.subn(r'\1abaProcessHeader(1)\2', source)
+              if count:
+                  test.write_text(changed)
+                  replacements += count
+          if replacements == 0:
+              raise SystemExit('no nil WebSocket Dial headers were found for ABA process-incarnation tests')
+          print(f'updated {replacements} WebSocket test dials')
+          PY
+
+          gofmt -w \
+            platform/internal/harness/gateway/server.go \
+            platform/internal/harness/gateway/websocket.go \
+            platform/internal/harness/gateway/process_incarnation_test.go \
+            platform/internal/harness/gateway/process_incarnation_test_helpers_test.go \
+            platform/internal/harness/store/process_incarnation.go \
+            platform/internal/harness/store/process_incarnation_test.go \
+            platform/internal/harness/gateway/*_test.go
+          cargo fmt --manifest-path aba/Cargo.toml --all
+          git diff --check
+
+          (
+            cd platform
+            go test -count=1 ./internal/harness/gateway ./internal/harness/store
+            go test -race -count=1 ./internal/harness/gateway ./internal/harness/store
+            go test -count=1 ./...
+            go vet ./...
+          )
+          (
+            cd aba
+            cargo fmt --all -- --check
+            cargo clippy --locked --workspace --all-targets --all-features -- -D warnings
+            cargo test --locked --workspace --all-targets
+          )
+          commit_checkpoint "$message"
+
+      - name: Commit inbound control sequence only after signature verification
+        shell: bash
+        run: |
+          source /tmp/repair-lib.sh
+          message='fix(gateway): commit inbound control sequence after signature'
+          if has_commit "$message"; then
+            ensure_checkpoint_ci "$message"
+            exit 0
+          fi
+
+          python3 <<'PY'
+          from pathlib import Path
+
+          path = Path('platform/internal/harness/gateway/connection_directory.go')
+          text = path.read_text()
+          start = text.index('func (connection *activeConnection) acceptInboundControlSequence(')
+          end = text.index('\nfunc (connection *activeConnection) close(', start)
+          replacement = r'''func inboundControlSequenceScope(receiver []byte) ([16]byte, bool) {
+	var scope [16]byte
+	if len(receiver) != len(scope) {
+		return scope, false
+	}
+	copy(scope[:], receiver)
+	return scope, true
+}
+
+func (connection *activeConnection) inboundControlSequenceNewer(receiver []byte, sequence uint64) bool {
+	scope, ok := inboundControlSequenceScope(receiver)
+	if !ok || sequence == 0 {
+		return false
+	}
+	connection.inboundControlMu.Lock()
+	defer connection.inboundControlMu.Unlock()
+	current, exists := connection.inboundControlSequences[scope]
+	return !exists || sequence > current
+}
+
+func (connection *activeConnection) commitInboundControlSequence(receiver []byte, sequence uint64) bool {
+	scope, ok := inboundControlSequenceScope(receiver)
+	if !ok || sequence == 0 {
+		return false
+	}
+	connection.inboundControlMu.Lock()
+	defer connection.inboundControlMu.Unlock()
+	current, exists := connection.inboundControlSequences[scope]
+	if exists && sequence <= current {
+		return false
+	}
+	connection.inboundControlSequences[scope] = sequence
+	return true
+}
+'''
+          text = text[:start] + replacement + text[end:]
+          path.write_text(text)
+
+          ready = Path('platform/internal/harness/gateway/ready_packet.go')
+          text = ready.read_text()
+          old = '!connection.acceptInboundControlSequence(control.GetReceiverEndpointId(), control.GetControlSequence())'
+          new = '!connection.inboundControlSequenceNewer(control.GetReceiverEndpointId(), control.GetControlSequence())'
+          if text.count(old) != 1:
+              raise SystemExit('ready-packet pre-signature sequence anchor changed')
+          text = text.replace(old, new)
+          anchor = '''\tif err != nil || !awpcrypto.VerifyP1363LowS(publicKey, transcript, control.GetSignature()) {
+          \t\treturn errors.New("control frame signature is invalid")
+          \t}
+          \tif control.GetType() == awpv1.ControlType_CONTROL_TYPE_RESUME_STATE {
+'''
+          replacement = '''\tif err != nil || !awpcrypto.VerifyP1363LowS(publicKey, transcript, control.GetSignature()) {
+          \t\treturn errors.New("control frame signature is invalid")
+          \t}
+          \tif !connection.commitInboundControlSequence(control.GetReceiverEndpointId(), control.GetControlSequence()) {
+          \t\treturn errors.New("control frame sequence changed concurrently")
+          \t}
+          \tif control.GetType() == awpv1.ControlType_CONTROL_TYPE_RESUME_STATE {
+'''
+          if text.count(anchor) != 1:
+              raise SystemExit('ready-packet post-signature anchor changed')
+          ready.write_text(text.replace(anchor, replacement))
+
+          test = Path('platform/internal/harness/gateway/connection_directory_test.go')
+          text = test.read_text()
+          text = text.replace('connection.acceptInboundControlSequence(', 'connection.commitInboundControlSequence(')
+          text += r'''
+
+func TestInboundControlSequencePreflightDoesNotCommitUnverifiedValue(t *testing.T) {
+	connection := newActiveConnection(domain.ID{5}, 1, [16]byte{1}, [32]byte{}, nil)
+	receiver := make([]byte, 16)
+	receiver[0] = 7
+	if !connection.inboundControlSequenceNewer(receiver, 100) {
+		t.Fatal("unverified high sequence did not pass non-mutating preflight")
+	}
+	// Simulate signature verification failure by deliberately not committing 100.
+	if !connection.inboundControlSequenceNewer(receiver, 1) {
+		t.Fatal("preflight mutated the sequence cursor before signature verification")
+	}
+	if !connection.commitInboundControlSequence(receiver, 1) {
+		t.Fatal("verified sequence could not be committed")
+	}
+	if connection.inboundControlSequenceNewer(receiver, 1) || connection.commitInboundControlSequence(receiver, 1) {
+		t.Fatal("verified sequence replay was accepted")
+	}
+	if !connection.inboundControlSequenceNewer(receiver, 2) || !connection.commitInboundControlSequence(receiver, 2) {
+		t.Fatal("next verified sequence was rejected")
+	}
+}
+'''
+          test.write_text(text)
+          PY
+
+          gofmt -w \
+            platform/internal/harness/gateway/connection_directory.go \
+            platform/internal/harness/gateway/connection_directory_test.go \
+            platform/internal/harness/gateway/ready_packet.go
+          git diff --check
+          (
+            cd platform
+            go test -count=1 ./internal/harness/gateway
+            go test -race -count=1 ./internal/harness/gateway
+            go test -count=1 ./...
+            go vet ./...
+          )
+          commit_checkpoint "$message"
+
+      - name: Verify complete required checkpoint chain
+        shell: bash
+        run: |
+          source /tmp/repair-lib.sh
+          required=(
+            'fix(gateway): fence replaced connections and preserve control sequence'
+            'fix(relay): authorize encrypted frame persistence atomically'
+            'fix(store): verify critical unique index contracts'
+            'fix(gateway): keep session creation idempotency authoritative'
+            'fix(relay): recover pending session controls'
+            'fix(hc): persist encrypted outbox and scoped sequences'
+            'fix(relay): isolate stale sessions and durable replay'
+            'fix(gateway): reconnect on outbound backpressure'
+            'fix(aba): accept delayed platform frame replay'
+            'fix(relay): recover waiting key sessions from either endpoint'
+            'fix(relay): fence ABA process incarnation changes'
+            'fix(gateway): commit inbound control sequence after signature'
+          )
+          : > /tmp/review-repair-final-chain.tsv
+          for message in "${required[@]}"; do
+            sha=$(checkpoint_sha "$message")
+            [[ -n "$sha" ]] || { echo "missing checkpoint: $message" >&2; exit 1; }
+            wait_ci "$sha"
+            printf '%s\t%s\n' "$sha" "$message" >> /tmp/review-repair-final-chain.tsv
+          done
+          git fetch origin "$TARGET_BRANCH"
+          test "$(git rev-parse HEAD)" = "$(git rev-parse origin/${TARGET_BRANCH})"
+          pr=$(gh api "repos/${REPO}/pulls/1")
+          test "$(jq -r .draft <<<"$pr")" = true
+          test "$(jq -r .merged <<<"$pr")" = false
+          test "$(jq -r .head.sha <<<"$pr")" = "$(git rev-parse HEAD)"
+
+      - name: Publish supervisor result
+        shell: bash
+        run: |
+          set -euo pipefail
+          final=$(git rev-parse HEAD)
+          {
+            echo 'Complete serialized review repair supervision succeeded.'
+            echo
+            echo "Business HEAD: \`${final}\`"
+            echo "Prior supervisor: \`${PRIOR_SUPERVISOR_RUN}\` / \`${PRIOR_SUPERVISOR_CONCLUSION}\`"
+            echo
+            echo 'Verified checkpoint chain:'
+            while IFS=$'\t' read -r sha message; do
+              echo "- \`${sha}\` — ${message}"
+            done < /tmp/review-repair-final-chain.tsv
+            echo
+            echo 'Each checkpoint is present on the Draft PR branch and has successful push and pull_request Harness Platform CI. No force-push, rebase, amend, merge, or M2 work was performed by this supervisor.'
+          } > /tmp/review-supervisor-comment.md
+          gh pr comment 1 --repo "$REPO" --body-file /tmp/review-supervisor-comment.md
