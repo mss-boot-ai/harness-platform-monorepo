@@ -1,0 +1,175 @@
+name: Finalize Hardened Review Repairs
+
+on:
+  push:
+    branches:
+      - codex/review-repair-orchestrator-20260905
+
+permissions:
+  actions: read
+  contents: write
+  pull-requests: write
+
+jobs:
+  finalize:
+    if: github.event.head_commit.message == 'chore(ci): finalize hardened review repairs'
+    runs-on: ubuntu-latest
+    timeout-minutes: 210
+    env:
+      TARGET_BRANCH: codex/bootstrap-harness-platform-foundation
+      ORCHESTRATOR_BRANCH: codex/review-repair-orchestrator-20260905
+      REPO: mss-boot-ai/harness-platform-monorepo
+      GH_TOKEN: ${{ github.token }}
+    steps:
+      - name: Wait for hardened supervisor success
+        shell: bash
+        run: |
+          set -euo pipefail
+          for attempt in $(seq 1 300); do
+            response=$(gh api "repos/${REPO}/actions/workflows/supervise-review-repairs-v2.yml/runs?branch=${ORCHESTRATOR_BRANCH}&per_page=5")
+            run=$(jq -c '[.workflow_runs[] | select(.name == "Hardened Serialized Review Repair Supervisor")][0] // {}' <<<"$response")
+            status=$(jq -r '.status // ""' <<<"$run")
+            conclusion=$(jq -r '.conclusion // ""' <<<"$run")
+            if [[ "$status" == completed ]]; then
+              if [[ "$conclusion" != success ]]; then
+                echo "hardened review repair supervisor failed: ${conclusion}" >&2
+                exit 1
+              fi
+              echo "SUPERVISOR_RUN=$(jq -r '.id' <<<"$run")" >> "$GITHUB_ENV"
+              exit 0
+            fi
+            sleep 15
+          done
+          echo "hardened supervisor did not complete" >&2
+          exit 1
+
+      - name: Checkout repaired target branch
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          ref: ${{ env.TARGET_BRANCH }}
+          fetch-depth: 0
+
+      - name: Load finalizer step extractor
+        shell: bash
+        run: |
+          set -euo pipefail
+          git fetch origin "${ORCHESTRATOR_BRANCH}:refs/remotes/origin/${ORCHESTRATOR_BRANCH}"
+          git show "origin/${ORCHESTRATOR_BRANCH}:.github/workflows/finalize-review-repairs.yml" > /tmp/finalizer.yml
+          cat > /tmp/run-finalizer-step.sh <<'SH'
+          #!/usr/bin/env bash
+          set -euo pipefail
+          name="$1"
+          python3 - "$name" <<'PY'
+          from pathlib import Path
+          import sys
+          name = sys.argv[1]
+          lines = Path('/tmp/finalizer.yml').read_text().splitlines()
+          marker = f'- name: {name}'
+          start = next(i for i, line in enumerate(lines) if line.strip() == marker)
+          run = next(i for i in range(start + 1, len(lines)) if lines[i].strip() == 'run: |') + 1
+          end = next((i for i in range(run, len(lines)) if lines[i].startswith('      - name: ')), len(lines))
+          body = lines[run:end]
+          indent = min(len(line) - len(line.lstrip()) for line in body if line.strip())
+          Path('/tmp/finalizer-step.sh').write_text('\n'.join(line[indent:] for line in body) + '\n')
+          PY
+          chmod +x /tmp/finalizer-step.sh
+          /tmp/finalizer-step.sh
+          SH
+          chmod +x /tmp/run-finalizer-step.sh
+
+      - name: Assert all review checkpoints exist
+        shell: bash
+        run: /tmp/run-finalizer-step.sh 'Assert all review checkpoints exist'
+
+      - name: Remove temporary target workflows
+        shell: bash
+        run: /tmp/run-finalizer-step.sh 'Remove temporary target-branch repair workflows'
+
+      - name: Wait for cleanup CI
+        shell: bash
+        run: /tmp/run-finalizer-step.sh 'Wait for cleanup CI'
+
+      - name: Run full verification
+        shell: bash
+        run: /tmp/run-finalizer-step.sh 'Run full review-repair verification'
+
+      - name: Write durable report and work log
+        shell: bash
+        run: /tmp/run-finalizer-step.sh 'Write durable verification report and work log'
+
+      - name: Commit verification closure
+        shell: bash
+        run: |
+          set -euo pipefail
+          git config user.name "OpenAI Codex"
+          git config user.email "codex@openai.com"
+          git add docs/roadmap/verification/2026-09-05-review-repairs.md docs/memory/work-log.md
+          git commit -m "docs: record PR review repair verification"
+          sha=$(git rev-parse HEAD)
+          git push origin "HEAD:${TARGET_BRANCH}"
+          echo "REPORT_SHA=$sha" >> "$GITHUB_ENV"
+
+      - name: Wait for final report CI
+        shell: bash
+        run: |
+          set -euo pipefail
+          for attempt in $(seq 1 200); do
+            runs=$(gh api "repos/${REPO}/actions/runs?head_sha=${REPORT_SHA}&per_page=100")
+            push=$(jq -r '[.workflow_runs[] | select(.name == "Harness Platform CI" and .event == "push")][0].conclusion // ""' <<<"$runs")
+            pr=$(jq -r '[.workflow_runs[] | select(.name == "Harness Platform CI" and .event == "pull_request")][0].conclusion // ""' <<<"$runs")
+            if [[ "$push" == success && "$pr" == success ]]; then
+              echo "FINAL_PUSH_RUN=$(jq -r '[.workflow_runs[] | select(.name == "Harness Platform CI" and .event == "push")][0].id' <<<"$runs")" >> "$GITHUB_ENV"
+              echo "FINAL_PR_RUN=$(jq -r '[.workflow_runs[] | select(.name == "Harness Platform CI" and .event == "pull_request")][0].id' <<<"$runs")" >> "$GITHUB_ENV"
+              exit 0
+            fi
+            if [[ "$push" =~ ^(failure|cancelled)$ || "$pr" =~ ^(failure|cancelled)$ ]]; then
+              echo "final report CI failed: push=$push pr=$pr" >&2
+              exit 1
+            fi
+            sleep 15
+          done
+          exit 1
+
+      - name: Update Draft PR and publish closure
+        shell: bash
+        run: |
+          set -euo pipefail
+          cat > /tmp/pr-body.md <<EOF
+          ## 状态
+
+          本 PR 当前 Head：\`${REPORT_SHA}\`。PR 保持 **Draft**，未合并。
+
+          - push CI \`${FINAL_PUSH_RUN}\`: success
+          - PR CI \`${FINAL_PR_RUN}\`: success
+          - Review 修复报告：\`docs/roadmap/verification/2026-09-05-review-repairs.md\`
+          - 原本地 MVP 报告：\`docs/roadmap/verification/2026-09-05-mvp-final.md\`
+
+          ## 本轮 Review 修复
+
+          - 服务端替换连接 Fencing，旧 Generation 已读未提交的数据不能跨过新连接激活。
+          - EncryptedFrame 的 Session、Endpoint、Credential、Generation、owner/tenant 在一个事务中复核并写入。
+          - Session 创建幂等结果不再因即时 ABA 交付失败变成矛盾的 503/FAILED。
+          - CREATING/WAITING_KEY/CLOSED 控制意图支持重连恢复，ABA 对同一 Session 幂等返回并重发待确认 Key Package。
+          - HC 使用 IndexedDB 加密 Outbox，验证 ABA ACK 后删除，重连按序重发原始密文包。
+          - HC Control Sequence 按接收方作用域持久化并单调递增，Platform/ABA 拒绝回退。
+          - ABA 对未知 Session 返回签名 SESSION_NOT_FOUND；延迟原密文投递不再被五分钟窗口误杀。
+          - 目标 WSS 队列背压会关闭连接触发恢复，不再静默丢包。
+          - ABA Process Incarnation 变化会在单实例 Platform 中先终止旧进程 Session。
+          - 基础 Frame/Endpoint 安全关键唯一索引验证唯一性和准确列顺序。
+
+          ## 当前仍保持 Draft 的原因
+
+          - 本轮代码修改后的真实内置浏览器四进程 E2E 尚未重新执行；自动测试和构建不能替代浏览器证据。
+          - 固定上游 \`@mss-boot-io/admin-web@1.3.7\` 的 production dependency audit 仍有已记录的高危/严重项。
+          - 生产 KMS/OS Keyring、TLS/WSS、外部数据库、跨实例 Connection Directory/Kick、完整容量、故障和长稳验证尚未完成。
+
+          ## 安全边界
+
+          本轮没有引入任意远程命令入口。Runtime command、args、env 与 Workspace path 仍只来自 ABA 本地配置；Platform/HC 只传稳定 ID。
+          EOF
+          gh pr edit 1 --repo "$REPO" --body-file /tmp/pr-body.md
+          pr=$(gh api "repos/${REPO}/pulls/1")
+          test "$(jq -r .draft <<<"$pr")" = true
+          test "$(jq -r .merged <<<"$pr")" = false
+          test "$(jq -r .head.sha <<<"$pr")" = "$REPORT_SHA"
+          gh pr comment 1 --repo "$REPO" --body "Hardened review repair closure passed at \`${REPORT_SHA}\`; push CI \`${FINAL_PUSH_RUN}\` and PR CI \`${FINAL_PR_RUN}\` succeeded. PR remains Draft and unmerged."
