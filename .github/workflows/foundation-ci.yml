@@ -1,0 +1,124 @@
+name: Harness Platform CI
+
+on:
+  push:
+    branches:
+      - codex/bootstrap-harness-platform-foundation
+  pull_request:
+    branches:
+      - main
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: harness-ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  documentation:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - name: Check documentation structure and baselines
+        run: ./scripts/check-docs.sh
+
+  platform-import:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - name: Wait for generated Thin Host checkpoint when migration is pending
+        id: thin-host
+        shell: bash
+        run: |
+          if [[ -f platform/.thin-host-ready ]]; then
+            echo 'ready=true' >> "${GITHUB_OUTPUT}"
+          else
+            echo 'ready=false' >> "${GITHUB_OUTPUT}"
+            echo 'Thin Host generator will push the replacement checkpoint.'
+          fi
+      - name: Verify import boundary
+        if: steps.thin-host.outputs.ready == 'true'
+        run: ./scripts/verify-platform-import.sh
+      - name: Set up Go from Thin Host
+        if: steps.thin-host.outputs.ready == 'true'
+        uses: actions/setup-go@v6
+        with:
+          go-version-file: platform/go.mod
+          cache-dependency-path: platform/go.sum
+      - name: Test Platform backend
+        if: steps.thin-host.outputs.ready == 'true'
+        working-directory: platform
+        run: |
+          go test -count=1 ./...
+          go vet ./...
+      - name: Set up Node 24
+        if: steps.thin-host.outputs.ready == 'true'
+        uses: actions/setup-node@v6
+        with:
+          node-version: '24'
+      - name: Activate pinned pnpm
+        if: steps.thin-host.outputs.ready == 'true'
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          corepack enable
+          corepack prepare pnpm@10.34.5 --activate
+          pnpm --version | grep -Fx '10.34.5'
+      - name: Test Platform Admin Web extension
+        if: steps.thin-host.outputs.ready == 'true'
+        working-directory: platform/web
+        run: |
+          pnpm install --frozen-lockfile
+          pnpm lint
+          pnpm test
+          pnpm build
+
+  protocol:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - name: Install protobuf compiler
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends protobuf-compiler
+      - name: Compile AWP v1 schema
+        run: ./scripts/check-protocol.sh
+
+  aba-rust:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - name: Validate locked Rust workspace
+        run: |
+          rustup toolchain install 1.88.0 --profile minimal --component rustfmt,clippy
+          cd aba
+          cargo +1.88.0 metadata --locked --format-version 1 --no-deps > /dev/null
+          cargo +1.88.0 fmt --all -- --check
+          cargo +1.88.0 clippy --locked --workspace --all-targets --all-features -- -D warnings
+          cargo +1.88.0 test --locked --workspace --all-targets
+
+  hc-typescript:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - name: Check HC workspace when present
+        run: |
+          if [[ ! -f hc/package.json ]]; then
+            echo 'HC package workspace is not initialized in this checkpoint.'
+            exit 0
+          fi
+          corepack enable
+          corepack prepare pnpm@10.34.5 --activate
+          cd hc
+          pnpm install --frozen-lockfile
+          pnpm lint
+          pnpm typecheck
+          pnpm test
+          pnpm build

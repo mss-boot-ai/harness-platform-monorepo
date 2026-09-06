@@ -83,6 +83,7 @@ assurance_level   determined by storage and platform proof
 
 - 使用 Platform 现有安全 Browser Session Cookie。
 - 不把登录 Access Token放在 Local Storage。
+- Human-bound Challenge/Register 走 Cookie Path 内的 `/admin/api/harness/v1/hc/*`；注册后的数据面才走 `/gateway/v1/*`。
 - 所有改变状态的 API 要求可信 Origin、CSRF/当前 Browser Session 策略和 HC DPoP。
 - 登录后仍需注册或解锁 HC Endpoint，不能把浏览器 Session 当作 Endpoint Identity。
 

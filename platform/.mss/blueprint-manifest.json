@@ -1,0 +1,311 @@
+{
+  "apiVersion": "mss.io/v1alpha2",
+  "kind": "BlueprintManifest",
+  "metadata": {
+    "project": "harness-platform",
+    "module": "github.com/mss-boot-ai/harness-platform-monorepo/platform",
+    "repository": "mss-boot-ai/harness-platform-monorepo",
+    "blueprint": "management-system",
+    "blueprintVersion": "0.6.1",
+    "foundationRepository": "mss-boot-io/mss-boot-admin",
+    "foundationCommit": "77b53d41092741eac62fa6418c0bdbf87413c7cd",
+    "foundationTimestamp": "2026-08-31T07:57:13+08:00",
+    "generatorVersion": "v1.3.7",
+    "generatorCommit": "77b53d41092741eac62fa6418c0bdbf87413c7cd"
+  },
+  "distribution": {
+    "name": "mss-boot-admin",
+    "version": "v1.3.7",
+    "backend": {
+      "module": "github.com/mss-boot-io/mss-boot-admin/admin",
+      "version": "v1.3.7"
+    },
+    "frontend": {
+      "package": "@mss-boot-io/admin-web",
+      "version": "1.3.7"
+    }
+  },
+  "identities": {
+    "foundation": {
+      "repository": "mss-boot-io/mss-boot-admin",
+      "version": "1.3.7",
+      "commit": "77b53d41092741eac62fa6418c0bdbf87413c7cd",
+      "timestamp": "2026-08-31T07:57:13+08:00",
+      "channel": "stable",
+      "source": ".mss/release-policy.yaml"
+    },
+    "blueprint": {
+      "name": "management-system",
+      "version": "0.6.1",
+      "sha256": "d0593b44d6032a234fc0b7abfdf7532716861599ab4530188dcb00a9fd3b42f9"
+    },
+    "generator": {
+      "tool": "mss",
+      "version": "v1.3.7",
+      "commit": "77b53d41092741eac62fa6418c0bdbf87413c7cd"
+    },
+    "snapshot": {
+      "project": "harness-platform",
+      "module": "github.com/mss-boot-ai/harness-platform-monorepo/platform",
+      "repository": "mss-boot-ai/harness-platform-monorepo",
+      "sha256": "a7eefb00cbffdfbad59c498f10781ca3877cea5f9f4b0d23c5f292a4adc1a7d5"
+    }
+  },
+  "records": {
+    "lockPath": ".mss/lock.yaml",
+    "manifestPath": ".mss/blueprint-manifest.json",
+    "lockSha256": "ab981fd1b5358869d61e80b6bc93f018fc04ee63d901e2a7b8d43d9f46c96b8d"
+  },
+  "files": {
+    ".agents/skills/mss-add-field/SKILL.md": {
+      "sha256": "8b11fdab2556a87a3fbb706478ead073c52a343c9a27fa9090e66a0b19b6217c",
+      "mode": 420,
+      "size": 1669
+    },
+    ".agents/skills/mss-add-module/SKILL.md": {
+      "sha256": "296ab335b35ddc5cf355cf8d97229a64c90ed00bbebf7dd5c064ae86155fe80a",
+      "mode": 420,
+      "size": 2200
+    },
+    ".agents/skills/mss-add-permission/SKILL.md": {
+      "sha256": "fee5d74ab48f75e058bbd51f05746f5e8841e2aed1fa795cd94cd10bef5db934",
+      "mode": 420,
+      "size": 1588
+    },
+    ".agents/skills/mss-debug-fullstack/SKILL.md": {
+      "sha256": "23e1d02b7e80eee92ff4890e68fb0123e8885de0d67df19b771abef93f3ddee8",
+      "mode": 420,
+      "size": 1332
+    },
+    ".agents/skills/mss-review-change/SKILL.md": {
+      "sha256": "838ef56e3bdafa32307b2e3bc4fd1c338978f8e06b1787d4869d57055ea51672",
+      "mode": 420,
+      "size": 1599
+    },
+    ".agents/skills/mss-thin-host/SKILL.md": {
+      "sha256": "413d9f1babc2e9c2a8b96a1829bb52d4ee29ed9cc6236767d82a8b106f370ea4",
+      "mode": 420,
+      "size": 1636
+    },
+    ".agents/skills/mss-upgrade-foundation/SKILL.md": {
+      "sha256": "afdf762decf096109c9c78ccab04cc06d624fec3c8393e500a77b4249db3f518",
+      "mode": 420,
+      "size": 1797
+    },
+    ".dockerignore": {
+      "sha256": "734c668eaa77b691d9a2149c219f88c487912b98cdfbeab9137e7a446f7edc0c",
+      "mode": 420,
+      "size": 261
+    },
+    ".github/workflows/ci.yml": {
+      "sha256": "7de2f744cdb7264f67f109e97344ddb8aced9e15a7a433fd3b242e60ecd88e7a",
+      "mode": 420,
+      "size": 2136
+    },
+    ".gitignore": {
+      "sha256": "b64f5578f0865cc2ef570859be69bd15369f326cae4b00170a993b01640d1ef9",
+      "mode": 420,
+      "size": 250
+    },
+    ".mss/admin-presentation-snapshot.json": {
+      "sha256": "b297edd08e0b7ab034c403be7a93f2d032329d95d3bd1ccd06603309941c1f6f",
+      "mode": 420,
+      "size": 49237
+    },
+    ".mss/capabilities.yaml": {
+      "sha256": "fc52181327d40bcd70cb5a8a353e5a05a4374f6f0b4a6e2151603484261c1599",
+      "mode": 420,
+      "size": 765
+    },
+    ".mss/commands.yaml": {
+      "sha256": "b2b553974999e937631833021087e3ec98fef8ffd68f018199229ba37aa66f7e",
+      "mode": 420,
+      "size": 2454
+    },
+    ".mss/dev.yaml": {
+      "sha256": "81212365273091390e644ec72b100d8c5229d5a4156add1654fb3bd363cce346",
+      "mode": 420,
+      "size": 946
+    },
+    ".mss/evals/catalog.yaml": {
+      "sha256": "b60df9f3eb0c2351881a66937ba7316c76349bbbd8242a211cf18ebd28ce560d",
+      "mode": 420,
+      "size": 130
+    },
+    ".mss/features/README.md": {
+      "sha256": "2e5586f278f95a0a4633ae0605e34e8d0eb2d5f28bf04c922cdfd12ca950057d",
+      "mode": 420,
+      "size": 178
+    },
+    ".mss/modules/README.md": {
+      "sha256": "d3debb9c81227a7c38f9e6ebee542ba584a1f460133652342c4056cd03611f6a",
+      "mode": 420,
+      "size": 862
+    },
+    ".mss/project.yaml": {
+      "sha256": "aca7ea5e7b64955900f621a2dfea0f1157eea94ecb985f0a1570be8f8da09d42",
+      "mode": 420,
+      "size": 2319
+    },
+    "AGENTS.md": {
+      "sha256": "e4045228b37e1b0fadd658fdcf924bf18cb8dcf70a2d16c822166e5981263c02",
+      "mode": 420,
+      "size": 3544
+    },
+    "Dockerfile": {
+      "sha256": "d1d44bf33155463d749e21cdf34f6f44678ac05578faf1f1fbdcd7b199cd17c1",
+      "mode": 420,
+      "size": 1289
+    },
+    "Makefile": {
+      "sha256": "f1ed5b8ae7fc547e24ad7ddfa0ccba418b1e3ad5074a4aa2d5bd8bbad653976b",
+      "mode": 420,
+      "size": 538
+    },
+    "README.md": {
+      "sha256": "187ab2664c647ea60256973d680dbc5fa332739d577ae21931dbc54ae812d86d",
+      "mode": 420,
+      "size": 5311
+    },
+    "cmd/server/main.go": {
+      "sha256": "8dee8bb7e3baccac88b93f01d74c3184e76da68ca4a21abc66d3a76c1652e855",
+      "mode": 420,
+      "size": 417
+    },
+    "config/README.md": {
+      "sha256": "01a01d10b47e77f80502671a1fb3c00e63da1aa62f032ed39b7b1ab7cda34064",
+      "mode": 420,
+      "size": 671
+    },
+    "go.mod": {
+      "sha256": "b9c57f82aa36f9a869d7a1ffd93e33aeb62af5d777722b58c26bf44e8f703f78",
+      "mode": 420,
+      "size": 13135
+    },
+    "go.sum": {
+      "sha256": "f8059d613f8df2a665e57b722d495793ada5cde6e4a08326a22d44f0e7aff5b5",
+      "mode": 420,
+      "size": 85345
+    },
+    "internal/modules/all/generated.go": {
+      "sha256": "280f3ce289e7ec49b14d0236c07706ccc79cadd4170d0fc0928162d1827843ae",
+      "mode": 420,
+      "size": 370
+    },
+    "internal/modules/custom/modules.go": {
+      "sha256": "e45bdf8c26509378548b6aa81f6068c8f8f7e140d50345ebdf097ec35c9dfe09",
+      "mode": 420,
+      "size": 424
+    },
+    "internal/modules/registry.go": {
+      "sha256": "60bc94550147221abeafc118f3e07e8a97e4b1970b0a7eac85004291c39d2abd",
+      "mode": 420,
+      "size": 562
+    },
+    "web/.npmrc": {
+      "sha256": "4cd9ea74786f3e56d83450d07f1f413787207b45ae82d217f77aedcd253b8226",
+      "mode": 420,
+      "size": 53
+    },
+    "web/config/business-routes.generated.ts": {
+      "sha256": "45d90341825bc54e3092c006b7eaa402331c53ccc08472c24e88d1d566816aa4",
+      "mode": 420,
+      "size": 87
+    },
+    "web/config/business-routes.ts": {
+      "sha256": "846f7419259d5b06df44add94800ca85a7e4c8b987b095d1bbae0dce2a22dc26",
+      "mode": 420,
+      "size": 409
+    },
+    "web/config/config.ts": {
+      "sha256": "b5d958d967a4bf9b7c83a617fee0c96ee73ac3025fca0a6bc3978696bb7e2b4d",
+      "mode": 420,
+      "size": 254
+    },
+    "web/mss-admin.config.ts": {
+      "sha256": "3ee51c870d3c8aa2ee177a0b64a5a6ecc533bb3f32c2b805d3c8a3b1d5bb36b2",
+      "mode": 420,
+      "size": 43
+    },
+    "web/package.json": {
+      "sha256": "e5e0444bea8befa889406b8dacfe25b043e5fb3b44da0e874b144c2222e0efdc",
+      "mode": 420,
+      "size": 1007
+    },
+    "web/pnpm-lock.yaml": {
+      "sha256": "99c06087c5ad09fb559b16f322efd4c93a3c07109372b355a0b4c9ed498689eb",
+      "mode": 420,
+      "size": 487801
+    },
+    "web/src/access.ts": {
+      "sha256": "f208d72920e351349b0e79484a651ee3d29252f2650b8133c35c1b4a68ca1d27",
+      "mode": 420,
+      "size": 65
+    },
+    "web/src/app.tsx": {
+      "sha256": "4ae3aa26df8a9fa05aa98c34f365387939185465750b1de598c8633230ecfb3a",
+      "mode": 420,
+      "size": 111
+    },
+    "web/src/business/README.md": {
+      "sha256": "1f59ebcdf842da049ec60e4c67a8bc336a4327dd1c652f431c5cc1fd4bb47ce4",
+      "mode": 420,
+      "size": 1037
+    },
+    "web/src/business/locales/en-US.ts": {
+      "sha256": "46340e500ee2e4cc8630b4f9b1258f4c43fdfd01fbf490c2ef4fb6d5aa7ff7ac",
+      "mode": 420,
+      "size": 208
+    },
+    "web/src/business/locales/zh-CN.ts": {
+      "sha256": "b99717f7f3979908d8d9beced346b3bed8d0ef65bd15980d32b32d1ccc764ff2",
+      "mode": 420,
+      "size": 219
+    },
+    "web/src/business/route-registrations.ts": {
+      "sha256": "5636341011adcd4afde1621152b9a0f31aa61cc25d71aef0376d3e0fdd03fafb",
+      "mode": 420,
+      "size": 331
+    },
+    "web/src/business/routes.config.ts": {
+      "sha256": "07f5626c7b707be4f201321d18563e5707377d61f73c397536a6b2d1758b3701",
+      "mode": 420,
+      "size": 316
+    },
+    "web/src/generated/locales/en-US.ts": {
+      "sha256": "870141f7f2767ccd60e7cc2ac1301f56b30ba220946671929e221949e1372361",
+      "mode": 420,
+      "size": 87
+    },
+    "web/src/generated/locales/zh-CN.ts": {
+      "sha256": "870141f7f2767ccd60e7cc2ac1301f56b30ba220946671929e221949e1372361",
+      "mode": 420,
+      "size": 87
+    },
+    "web/src/generated/routes.ts": {
+      "sha256": "d5dab27f71bde1b8834aaf0d91f69a0d01b92a3a2e627b36c0278e0b15c12895",
+      "mode": 420,
+      "size": 96
+    },
+    "web/src/locales/en-US.ts": {
+      "sha256": "439d6503e53b929e934dff3bbb426ae787f4e1508bb3e9f586473551ec078a5b",
+      "mode": 420,
+      "size": 342
+    },
+    "web/src/locales/zh-CN.ts": {
+      "sha256": "72e538e449866552c3e9db2736bfac4705a2cda448a4d046928cceed5ce5469c",
+      "mode": 420,
+      "size": 342
+    },
+    "web/src/route-registrations.ts": {
+      "sha256": "39ba6e8a25a794329e926a1035a82255f2651a0e6f572a43584eca584a670bf1",
+      "mode": 420,
+      "size": 1109
+    },
+    "web/tsconfig.json": {
+      "sha256": "51d1640d6427b414265daacd7dc77fb5a90c0f6020375a16eecac82e485cb2a1",
+      "mode": 420,
+      "size": 532
+    }
+  }
+}

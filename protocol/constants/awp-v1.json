@@ -1,0 +1,36 @@
+{
+  "wire": {
+    "major": 1,
+    "minor": 0,
+    "websocket_subprotocol": "mss.awp.v1"
+  },
+  "crypto": {
+    "suite_id": 1,
+    "suite_name": "MSS-AWP-SUITE-0001",
+    "hpke_kem_id": 16,
+    "hpke_kdf_id": 1,
+    "hpke_aead_id": 2,
+    "hpke_enc_length": 65,
+    "aad_v1_length": 148,
+    "id_length": 16,
+    "nonce_prefix_length": 4,
+    "nonce_length": 12,
+    "signature_length": 64,
+    "server_nonce_length": 32,
+    "client_nonce_length": 32,
+    "fencing_token_length": 32,
+    "key_length": 32
+  },
+  "limits": {
+    "max_wire_packet_bytes": 1048576,
+    "max_control_payload_bytes": 65536,
+    "max_ack_ranges": 32,
+    "max_resume_cursors": 256,
+    "max_inflight_per_channel": 1024
+  },
+  "flags": {
+    "acp_batch": 1,
+    "reserved_non_critical_mask": 65534,
+    "critical_mask": 4294901760
+  }
+}

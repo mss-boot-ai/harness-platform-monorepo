@@ -1,0 +1,57 @@
+# Secrets and local environment
+.env
+.env.*
+!.env.example
+*.pem
+*.key
+*.p12
+*.pfx
+*.jks
+*.keystore
+secrets/
+
+# IDE / OS
+.DS_Store
+.idea/
+.vscode/
+*.swp
+*.swo
+
+# Rust
+/target/
+**/target/
+aba/.aba-dev/
+
+# Go
+*.test
+*.out
+coverage*.txt
+coverage*.html
+
+# Node / frontend
+node_modules/
+.pnpm-store/
+dist/
+build/
+coverage/
+*.tsbuildinfo
+
+# Embedded state and local databases
+*.db
+*.db-shm
+*.db-wal
+*.sqlite
+*.sqlite3
+
+# Logs and temporary files
+*.log
+.tmp/
+tmp/
+.cache/
+
+# Platform upstream import scratch space
+.platform-upstream/
+platform/.upstream/tmp/
+
+# Generated protocol output is written only to explicit tracked directories
+protocol/.generated-tmp/

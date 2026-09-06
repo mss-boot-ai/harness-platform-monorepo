@@ -1,0 +1,86 @@
+name: Bootstrap Platform Thin Host
+
+on:
+  push:
+    branches:
+      - codex/bootstrap-harness-platform-foundation
+    paths:
+      - .github/workflows/bootstrap-thin-host.yml
+
+permissions:
+  contents: write
+
+concurrency:
+  group: bootstrap-platform-thin-host
+  cancel-in-progress: false
+
+jobs:
+  generate:
+    if: github.actor != 'github-actions[bot]'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 25
+    steps:
+      - name: Check out correction checkpoint
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+
+      - name: Verify branch and clean starting point
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          test "${GITHUB_REF_NAME}" = "codex/bootstrap-harness-platform-foundation"
+          test -z "$(git status --porcelain)"
+
+      - name: Install official mss v1.3.7 tools
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          curl --fail --location --retry 5 --retry-all-errors \
+            --output /tmp/install-mss.sh \
+            https://github.com/mss-boot-io/mss-boot-admin/releases/download/v1.3.7/install-mss.sh
+          bash /tmp/install-mss.sh --version v1.3.7
+          echo "${HOME}/.local/bin" >> "${GITHUB_PATH}"
+
+      - name: Verify installed release identity
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          mss --version | tee /tmp/mss-version.txt
+          mss-mcp --version | tee /tmp/mss-mcp-version.txt
+          grep -F 'v1.3.7' /tmp/mss-version.txt
+          grep -F 'v1.3.7' /tmp/mss-mcp-version.txt
+
+      - name: Generate clean Thin Host
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          rm -rf .generated-platform
+          mss new app harness-platform \
+            --module github.com/mss-boot-ai/harness-platform-monorepo/platform \
+            --destination .generated-platform \
+            --write
+          test -s .generated-platform/.mss/blueprint-manifest.json
+          rm -rf platform
+          mv .generated-platform platform
+          printf '%s\n' \
+            'generated_by=mss v1.3.7' \
+            'distribution=mss-boot-admin v1.3.7' \
+            'ownership=thin-host-business-only' \
+            > platform/.thin-host-ready
+          ./scripts/verify-platform-import.sh
+
+      - name: Commit generated Thin Host before full verification
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add --all platform
+          git diff --cached --check
+          if git diff --cached --quiet; then
+            echo 'Thin Host is already current.'
+            exit 0
+          fi
+          git commit -m 'refactor(platform): replace vendored source with v1.3.7 thin host'
+          git push origin "HEAD:${GITHUB_REF_NAME}"

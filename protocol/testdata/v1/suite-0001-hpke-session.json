@@ -1,0 +1,47 @@
+{
+  "fixtureUse": "TEST ONLY - fixed Suite 0001 HPKE and session KDF interoperability fixture",
+  "suiteId": 1,
+  "hpke": {
+    "kemId": 16,
+    "kdfId": 1,
+    "aeadId": 2
+  },
+  "recipient": {
+    "publicJwk": {
+      "crv": "P-256",
+      "kty": "EC",
+      "x": "axfR8uEsQkf4vOblY6RA8ncDfYEt6zOg9KE5RdiYwpY",
+      "y": "T-NC4v4af5uO5-tKfA-eFivOM1drMV7Oy7ZAaDe_UfU"
+    },
+    "privateD": "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAE"
+  },
+  "context": {
+    "sessionIdHex": "01010101010101010101010101010101",
+    "generation": 1,
+    "senderAbaEndpointIdHex": "02020202020202020202020202020202",
+    "recipientHcEndpointIdHex": "03030303030303030303030303030303",
+    "policyRevision": 1
+  },
+  "material": {
+    "keyIdBase64Url": "CAgICAgICAgICAgICAgICA",
+    "srkBase64Url": "BAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQ",
+    "sessionNonceBase64Url": "BQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQU",
+    "hcToAbaNoncePrefixBase64Url": "BgYGBg",
+    "abaToHcNoncePrefixBase64Url": "BwcHBw",
+    "notBeforeMs": 1800000000000,
+    "expiresAtMs": 1800003600000
+  },
+  "infoBase64Url": "bXNzLWtleS1wYWNrYWdlLXYxAQEBAQEBAQEBAQEBAQEBAQAAAAAAAAABAgICAgICAgICAgICAgICAgMDAwMDAwMDAwMDAwMDAwMAAQAAAAAAAAAB",
+  "plaintextBase64Url": "bXNzLWtleS1wYWNrYWdlLXBsYWludGV4dC12MQEBAQEBAQEBAQEBAQEBAQEAAAAAAAAAAQgICAgICAgICAgICAgICAgEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBgYGBgcHBwcAAAGjGFxQAAAAAaMYkz6AAQ",
+  "encBase64Url": "BHs4RX2EfVr3w1UyV9Z79SLGdzRiOmfF_4Y0iZ_ZTFci54Hp062gc3DHPpQ9jTQ1Q5D-nkdlJcun9MZjC1ABNsI",
+  "ciphertextBase64Url": "_t9VZBst7cVvG__gBmHmogrkTOkiYnPBcaa6nAqtr5oU_AmJFn0JLRYKGsC_0Sqyye_sKmedNKJimKyJ6z_jRa0xU3I2giQnJa5U9-bCyC3C8sdREpkRgJnyJt870lkZDkXB2TtSuvbLFSUl5M-3ha-QMOh7uB3uv2j9KPG11oM9YudTFo0RyycjaT72YTytlvqwQl583n1dXrMgmGZYn_F4U8sqQTPwxoElqBw",
+  "contextHashBase64Url": "UeeR43e5rsEoyV620sB5UEfrCc1nOx7nqp6OTrgY0kU",
+  "directionKeys": {
+    "hcToAbaBase64Url": "sCDmkPL0sWVOTUhd-DxLzLGT-xB8Wy1w3PFIiNEiWEk",
+    "abaToHcBase64Url": "Yd0Iy3m4qLOU3CSkdKK1TSW_0J1z1TIE80V0EPOryC8"
+  },
+  "nonces": {
+    "hcToAbaSequence1Base64Url": "BgYGBgAAAAAAAAAB",
+    "abaToHcSequence1Base64Url": "BwcHBwAAAAAAAAAB"
+  }
+}

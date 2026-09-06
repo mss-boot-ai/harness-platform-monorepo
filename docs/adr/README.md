@@ -16,6 +16,8 @@
 - [ADR-0001：Platform、ABA 与 HC 三角色架构](0001-platform-aba-hc-architecture.md)
 - [ADR-0002：Platform 固定基于 mss-boot-admin v1.3.7](0002-platform-mss-boot-admin-1.3.7.md)
 - [ADR-0003：默认 Opaque 加密与独立 AWP](0003-opaque-encryption-and-awp.md)
+- [ADR-0004：Platform 使用 mss-boot-admin v1.3.7 Thin Host import 模式](0004-platform-thin-host-import-mode.md)
+- [ADR-0005：HC 注册使用 Admin Browser Session 边界](0005-hc-registration-admin-session-boundary.md)
 
 ## 模板
 

@@ -58,6 +58,17 @@ Ticket 原子单次消费。服务端选择 `mss.awp.v1` 作为响应子协议�
 - Sequence 从 1 开始；0 表示未分配/不适用。
 - 全零 16 字节 ID 只允许在协议明确标记为“不适用”的连接级消息中出现。
 
+MVP 单 Participant 的 `channel_id` 使用以下确定性值，双方不通过明文控制面另行协商：
+
+```text
+channel_id = first_16_bytes(SHA256(
+  utf8("mss-awp-channel-v1")
+  || session_id[16]
+  || aba_endpoint_id[16]
+  || hc_endpoint_id[16]
+))
+```
+
 ## 4. 顶层 Packet
 
 Schema 以 Protobuf 3 定义，逻辑结构：
@@ -176,6 +187,20 @@ message ConnectionReady {
 }
 ```
 
+服务端签名 Transcript：
+
+```text
+"mss-awp-connection-ready-v1"
+|| connection_id
+|| u64be(connection_generation)
+|| fencing_token
+|| i64be(ready_at_ms)
+|| u32be(max_packet_bytes)
+|| u32be(max_inflight_frames)
+|| u32be(heartbeat_interval_ms)
+|| endpoint_id_from_ticket
+```
+
 同一 Endpoint 的新 READY 连接创建更高 `connection_generation`。Platform 标记旧连接 DRAINING，并拒绝旧连接产生新的控制动作。数据 Frame 可以按原始字节在新连接重放，但发送端不能让两个连接并行分配新 Sequence。
 
 ## 6. 控制 Frame
@@ -246,10 +271,14 @@ message OpenTunnelRequest {
   uint64 requested_key_generation = 6;
   repeated string requested_acp_capabilities = 7;
   int64 expires_at_ms = 8;
+  bytes hc_kem_public_key = 9; // SEC1 uncompressed P-256, 65 bytes.
+  string hc_kem_jkt = 10;
+  bytes hc_signing_public_key = 11; // SEC1 uncompressed P-256, 65 bytes.
+  string hc_signing_jkt = 12;
 }
 ```
 
-协议层禁止包含 `command`、`args`、`cwd`、`env`、脚本、二进制或任意路径。ABA 只按本地配置映射两个 ID。
+协议层禁止包含 `command`、`args`、`cwd`、`env`、脚本、可执行二进制或任意路径。HC KEM/Signing Public Key 是已授权 Endpoint 的公开身份材料，只能用于当前 Session Key Package 与 ACK 验证，ABA 必须验证各自 JKT。ABA 只按本地配置映射两个 ID。
 
 ### 6.3 OpenTunnelResult
 
@@ -280,10 +309,13 @@ message SessionKeyPackage {
   int64 not_before_ms = 8;
   int64 expires_at_ms = 9;
   bytes issuer_signature = 10;
+  bytes key_package_id = 11;
+  bytes issuer_credential_id = 12;
+  uint64 policy_revision = 13;
 }
 ```
 
-`hpke_ciphertext` 的明文由安全文档定义。Platform 可以保存、路由、验证 ABA 签名，但不能解封。
+`hpke_ciphertext` 的 HPKE Suite、`info`/`aad`、157-byte 明文和 Envelope Signature Transcript 由安全文档精确定义。Platform 可以保存、路由、验证 ABA 签名，但不能解封。
 
 ### 6.5 ResumeState
 
@@ -392,6 +424,8 @@ offset size field
 
 AAD 不包含 Signature 和 Ciphertext 本身，但包含 Ciphertext Length。
 
+Platform 的不可变 Frame `content_hash` 固定为 `SHA256(canonical_aad_v1 || ciphertext || signature)`，只用于存储幂等/冲突比较，不替代 Endpoint Signature。
+
 ## 9. AEAD 与签名
 
 ### 9.1 Nonce
@@ -499,6 +533,26 @@ message SequenceRange {
 - 最多 32 个 Range。
 - ACK 只能单调前进；回退值忽略并记录。
 - ACK Signature Transcript 包含所有字段的固定编码和 Range 列表。
+
+ACK Signature Transcript 使用以下唯一编码；所有整数均为大端，`created_at_ms` 按
+`i64` 的二进制补码写入对应 8 字节，签名算法仍为 Suite 0001 ES256 P1363 low-S：
+
+```text
+ASCII "mss-awp-ack-v1"
+ack_id[16]
+channel_id[16]
+session_id[16]
+endpoint_id[16]
+acknowledged_direction u8
+reserved zero[7]
+highest_contiguous_sequence u64be
+key_generation u64be
+created_at_ms i64be
+range_count u32be
+repeat range_count times:
+  start u64be
+  end u64be
+```
 
 ### 12.1 ACK 时机
 
@@ -630,6 +684,24 @@ INTERNAL_TEMPORARY
 ```
 
 `safe_message` 不包含内部堆栈、路径、SQL、密钥或 Payload。客户端逻辑依赖 ErrorCode，不解析文字。
+
+ErrorFrame Signature Transcript 使用以下唯一编码；整数均为大端，`retryable` 只允许
+`0` 或 `1`，保留字节必须为零：
+
+```text
+ASCII "mss-awp-error-v1"
+error_id[16]
+related_message_id[16]
+code u32be
+retryable u8
+reserved zero[3]
+retry_after_ms u32be
+safe_message_length u32be
+safe_message UTF-8 bytes
+```
+
+Suite 0001 对以上字节执行 ES256 P1363 low-S 签名。`safe_message` 最多 256
+字节且不得包含控制字符；`retryable=false` 时 `retry_after_ms` 必须为零。
 
 ## 19. Session 状态机
 

@@ -1,12 +1,13 @@
 # Harness Platform 决策台账
 
 - **状态**：Canonical decision register
-- **最后更新**：2026-09-03
-- **规则**：状态为 `Accepted` 的决策不得被实现代码或后续代理静默推翻。重大变更必须新增 ADR，并把原决策标记为 `Superseded`。
+- **最后更新**：2026-09-04
+- **规则**：状态为 `Accepted` 的决策不得被实现代码或后续代理静默推翻。重大变更必须新增 ADR，并把原决策标记为 `Superseded`；不得删除历史。
 
 ## 状态说明
 
 - `Accepted`：已经确定，当前实施必须遵守。
+- `Accepted for initial implementation`：首版冻结，后续变化仍需 ADR。
 - `Proposed`：有方向但尚未冻结，不能作为稳定契约。
 - `Superseded`：已被后续 ADR 取代。
 - `Rejected`：明确不采用，避免后续重复讨论。
@@ -164,7 +165,7 @@
 
 - **状态**：Accepted for initial implementation
 - **决定**：首发采用 SHA-256、P-256/ES256、RFC 7638、HPKE P-256/HKDF-SHA256/AES-256-GCM、Payload AES-256-GCM。
-- **原因**：Rust、浏览器 WebCrypto和小程序可移植性优先。
+- **原因**：Rust、浏览器 WebCrypto 和小程序可移植性优先。
 - **影响**：Suite 有显式 ID，未来算法迁移不得静默替换。
 
 ### D-023：Canonical AAD 为固定 148 字节
@@ -239,10 +240,12 @@
 
 ### D-033：Platform 首选 vendored upstream
 
-- **状态**：Accepted as preferred implementation path
-- **决定**：mss-boot-admin 精确源树首选以 vendored/subtree-style 导入 `platform/`，并通过锁文件记录来源；不把 Git Submodule 作为默认开发体验。
-- **原因**：本项目需要直接修改 Platform、统一 checkout/commit/CI 和离线可构建。
-- **影响**：首次导入应单独提交；若工具环境暂时无法批量导入，先提供可重现脚本和锁，但不得声称源码已导入。
+- **状态**：Superseded by ADR-0004 and D-036
+- **原决定**：mss-boot-admin 精确源树首选以 vendored/subtree-style 导入 `platform/`，并通过锁文件记录来源；不把 Git Submodule 作为默认开发体验。
+- **原原因**：本项目需要直接修改 Platform、统一 checkout/commit/CI 和离线可构建。
+- **原影响**：首次导入应单独提交；若工具环境暂时无法批量导入，先提供可重现脚本和锁，但不得声称源码已导入。
+- **取代原因**：v1.3.7 已提供正式 Thin Host/versioned import 和可保留业务文件的升级流程；复制 Foundation 会扩大维护与审查面并损失升级能力。
+- **迁移结果**：开发分支已使用官方 v1.3.7 Thin Host；实际完成和验证状态继续以远端文件、`work-log.md` 和 CI 为准。
 
 ### D-034：不默认压缩 ACP Payload
 
@@ -257,6 +260,20 @@
 - **决定**：同一 Web HC Endpoint Key 不能被多个标签页并行分配 Sequence；使用 Leader Election/浏览器锁或创建独立临时 Endpoint。
 - **原因**：防止同一 Direction Key 下 Sequence/Nonce 冲突。
 - **影响**：前端 Session Core 必须有明确连接所有权。
+
+### D-036：Platform 使用 Thin Host/versioned import
+
+- **状态**：Accepted
+- **决定**：Platform 由官方 `mss v1.3.7` 生成；后端导入 `github.com/mss-boot-io/mss-boot-admin/admin@v1.3.7`，前端导入 `@mss-boot-io/admin-web@1.3.7`；仓库只拥有 Harness 业务，不复制 Foundation 核心源码，不使用本地 `replace`、临时制品或浮动依赖。
+- **原因**：v1.3.7 已提供正式业务扩展接缝和 `mss upgrade admin` 三方升级流程，能够保持 Foundation 与 Harness 所有权清晰并持续升级。
+- **影响**：D-033 被取代；扩展点不足时先向 Foundation 增加正式接口；升级必须先只读计划、Review、显式 apply、完整验证并要求最终 no-op。
+
+### D-037：HC 注册使用 Admin Browser Session 边界
+
+- **状态**：Accepted
+- **决定**：HC Web 的 Human-bound Challenge/Register 位于 `/admin/api/harness/v1/hc/*`，复用 v1.3.7 Browser Session、CSRF、可信 Origin 和当前 RBAC；注册完成后 `/gateway/v1/*` 只接受 Endpoint Token + DPoP。
+- **原因**：Admin HttpOnly Session Cookie 固定 Path 为 `/admin/api`；让 Gateway 接受 Admin Cookie、扩大 Cookie Path 或返回浏览器可读 Admin Token都会破坏 Thin Host 与身份隔离。
+- **影响**：取代 MVP PRD 早期列出的 `/gateway/v1/hc/challenges` 和 `/gateway/v1/hc/endpoints`；H5 使用同源代理；Gateway 永不把 Admin Cookie 当 Endpoint 身份。详见 ADR-0005。
 
 ## Proposed 决策
 
@@ -322,6 +339,6 @@
 
 1. 重大架构/安全变更先写 ADR。
 2. 在本文件新增编号或把旧项标记 Superseded，并引用 ADR。
-3. 同步 PRD、架构、协议、实现计划和 Agent 契约。
+3. 同步 PRD、架构、协议、实施计划和 Agent 契约。
 4. 在工作日志记录提交、验证和迁移影响。
 5. 不删除历史决策，以便理解为什么当前设计存在。
