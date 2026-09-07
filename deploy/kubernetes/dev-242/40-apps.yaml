@@ -1,0 +1,396 @@
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: harness-gateway-trust
+  namespace: harness-dev
+  labels:
+    app.kubernetes.io/name: harness-gateway
+    app.kubernetes.io/part-of: harness-platform
+spec:
+  storageClassName: HARNESS_STORAGE_CLASS
+  accessModes: ["ReadWriteOnce"]
+  resources:
+    requests:
+      storage: 1Gi
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: harness-platform-api
+  namespace: harness-dev
+  labels:
+    app.kubernetes.io/name: harness-platform
+    app.kubernetes.io/part-of: harness-platform
+    app.kubernetes.io/component: api
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: harness-platform
+      app.kubernetes.io/component: api
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: harness-platform
+        app.kubernetes.io/part-of: harness-platform
+        app.kubernetes.io/component: api
+    spec:
+      automountServiceAccountToken: false
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 65532
+        runAsGroup: 65532
+        seccompProfile:
+          type: RuntimeDefault
+      containers:
+        - name: platform-api
+          image: harness-platform-api:dev
+          imagePullPolicy: IfNotPresent
+          args: ["server"]
+          env:
+            - name: CONFIG_PROVIDER
+              value: local
+            - name: STAGE
+              value: dev-242
+            - name: HARNESS_DATABASE_DSN
+              valueFrom:
+                secretKeyRef:
+                  name: harness-database
+                  key: HARNESS_DATABASE_DSN
+            - name: HARNESS_ADMIN_AUTH_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: harness-platform-runtime
+                  key: HARNESS_ADMIN_AUTH_KEY
+            - name: HARNESS_ADMIN_IDENTITY_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: harness-platform-runtime
+                  key: HARNESS_ADMIN_IDENTITY_KEY
+          ports:
+            - name: http
+              containerPort: 8080
+          startupProbe:
+            httpGet:
+              path: /healthz
+              port: http
+            periodSeconds: 3
+            failureThreshold: 40
+          readinessProbe:
+            httpGet:
+              path: /readyz
+              port: http
+            periodSeconds: 5
+            timeoutSeconds: 3
+          livenessProbe:
+            httpGet:
+              path: /healthz
+              port: http
+            periodSeconds: 10
+            timeoutSeconds: 3
+          resources:
+            requests:
+              cpu: 100m
+              memory: 128Mi
+            limits:
+              cpu: "1"
+              memory: 512Mi
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop: ["ALL"]
+          volumeMounts:
+            - name: config
+              mountPath: /app/config/application.yml
+              subPath: application.yml
+              readOnly: true
+            - name: tmp
+              mountPath: /tmp
+      volumes:
+        - name: config
+          configMap:
+            name: harness-platform-config
+        - name: tmp
+          emptyDir:
+            sizeLimit: 64Mi
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: harness-platform-api
+  namespace: harness-dev
+spec:
+  selector:
+    app.kubernetes.io/name: harness-platform
+    app.kubernetes.io/component: api
+  ports:
+    - name: http
+      port: 8080
+      targetPort: http
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: harness-platform-web
+  namespace: harness-dev
+  labels:
+    app.kubernetes.io/name: harness-platform
+    app.kubernetes.io/part-of: harness-platform
+    app.kubernetes.io/component: web
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: harness-platform
+      app.kubernetes.io/component: web
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: harness-platform
+        app.kubernetes.io/part-of: harness-platform
+        app.kubernetes.io/component: web
+    spec:
+      automountServiceAccountToken: false
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 101
+        runAsGroup: 101
+        seccompProfile:
+          type: RuntimeDefault
+      containers:
+        - name: platform-web
+          image: harness-platform-web:dev
+          imagePullPolicy: IfNotPresent
+          ports:
+            - name: http
+              containerPort: 8080
+          readinessProbe:
+            httpGet:
+              path: /healthz
+              port: http
+          livenessProbe:
+            httpGet:
+              path: /healthz
+              port: http
+          resources:
+            requests:
+              cpu: 25m
+              memory: 32Mi
+            limits:
+              cpu: 250m
+              memory: 128Mi
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop: ["ALL"]
+          volumeMounts:
+            - name: tmp
+              mountPath: /tmp
+      volumes:
+        - name: tmp
+          emptyDir:
+            sizeLimit: 64Mi
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: harness-platform-web
+  namespace: harness-dev
+spec:
+  selector:
+    app.kubernetes.io/name: harness-platform
+    app.kubernetes.io/component: web
+  ports:
+    - name: http
+      port: 8080
+      targetPort: http
+---
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  name: harness-gateway
+  namespace: harness-dev
+  labels:
+    app.kubernetes.io/name: harness-gateway
+    app.kubernetes.io/part-of: harness-platform
+spec:
+  serviceName: harness-gateway
+  replicas: 1
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: harness-gateway
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: harness-gateway
+        app.kubernetes.io/part-of: harness-platform
+        app.kubernetes.io/component: gateway
+    spec:
+      automountServiceAccountToken: false
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 65532
+        runAsGroup: 65532
+        fsGroup: 65532
+        fsGroupChangePolicy: OnRootMismatch
+        seccompProfile:
+          type: RuntimeDefault
+      containers:
+        - name: gateway
+          image: harness-gateway:dev
+          imagePullPolicy: IfNotPresent
+          env:
+            - name: HARNESS_GATEWAY_ADDR
+              value: 0.0.0.0:8082
+            - name: HARNESS_GATEWAY_DB_DRIVER
+              value: postgres
+            - name: HARNESS_GATEWAY_DB_DSN
+              valueFrom:
+                secretKeyRef:
+                  name: harness-database
+                  key: HARNESS_DATABASE_DSN
+            - name: HARNESS_GATEWAY_ALLOWED_ORIGIN
+              value: https://hc-dev.mss-boot-io.top
+            - name: HARNESS_GATEWAY_EXTERNAL_ORIGIN
+              value: https://hc-dev.mss-boot-io.top
+            - name: HARNESS_GATEWAY_NATIVE_EXTERNAL_ORIGIN
+              value: http://127.0.0.1:18082
+            - name: HARNESS_GATEWAY_VERIFICATION_URI
+              value: https://platform-dev.mss-boot-io.top/harness/enrollments
+            - name: HARNESS_GATEWAY_TRUST_FILE
+              value: /var/lib/harness-gateway/private/gateway-trust.json
+          ports:
+            - name: http
+              containerPort: 8082
+          startupProbe:
+            httpGet:
+              path: /gateway/v1/ready
+              port: http
+            periodSeconds: 3
+            failureThreshold: 40
+          readinessProbe:
+            httpGet:
+              path: /gateway/v1/ready
+              port: http
+            periodSeconds: 5
+            timeoutSeconds: 3
+          livenessProbe:
+            httpGet:
+              path: /gateway/v1/health
+              port: http
+            periodSeconds: 10
+            timeoutSeconds: 3
+          resources:
+            requests:
+              cpu: 100m
+              memory: 128Mi
+            limits:
+              cpu: "1"
+              memory: 512Mi
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop: ["ALL"]
+          volumeMounts:
+            - name: trust
+              mountPath: /var/lib/harness-gateway
+            - name: tmp
+              mountPath: /tmp
+      volumes:
+        - name: trust
+          persistentVolumeClaim:
+            claimName: harness-gateway-trust
+        - name: tmp
+          emptyDir:
+            sizeLimit: 64Mi
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: harness-gateway
+  namespace: harness-dev
+spec:
+  selector:
+    app.kubernetes.io/name: harness-gateway
+  ports:
+    - name: http
+      port: 8082
+      targetPort: http
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: harness-hc-web
+  namespace: harness-dev
+  labels:
+    app.kubernetes.io/name: harness-hc-web
+    app.kubernetes.io/part-of: harness-platform
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: harness-hc-web
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: harness-hc-web
+        app.kubernetes.io/part-of: harness-platform
+        app.kubernetes.io/component: hc-web
+    spec:
+      automountServiceAccountToken: false
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 101
+        runAsGroup: 101
+        seccompProfile:
+          type: RuntimeDefault
+      containers:
+        - name: hc-web
+          image: harness-hc-web:dev
+          imagePullPolicy: IfNotPresent
+          ports:
+            - name: http
+              containerPort: 8080
+          readinessProbe:
+            httpGet:
+              path: /healthz
+              port: http
+          livenessProbe:
+            httpGet:
+              path: /healthz
+              port: http
+          resources:
+            requests:
+              cpu: 25m
+              memory: 32Mi
+            limits:
+              cpu: 250m
+              memory: 128Mi
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop: ["ALL"]
+          volumeMounts:
+            - name: tmp
+              mountPath: /tmp
+      volumes:
+        - name: tmp
+          emptyDir:
+            sizeLimit: 64Mi
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: harness-hc-web
+  namespace: harness-dev
+spec:
+  selector:
+    app.kubernetes.io/name: harness-hc-web
+  ports:
+    - name: http
+      port: 8080
+      targetPort: http

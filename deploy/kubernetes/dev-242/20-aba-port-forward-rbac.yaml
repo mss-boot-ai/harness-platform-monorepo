@@ -1,0 +1,56 @@
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: harness-aba-port-forward
+  namespace: harness-dev
+  labels:
+    app.kubernetes.io/name: harness-aba
+    app.kubernetes.io/part-of: harness-platform
+automountServiceAccountToken: false
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: harness-aba-port-forward
+  namespace: harness-dev
+  labels:
+    app.kubernetes.io/name: harness-aba
+    app.kubernetes.io/part-of: harness-platform
+rules:
+  - apiGroups: [""]
+    resources: ["pods"]
+    resourceNames: ["harness-gateway-0"]
+    verbs: ["get"]
+  - apiGroups: [""]
+    resources: ["pods/portforward"]
+    resourceNames: ["harness-gateway-0"]
+    verbs: ["create"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: harness-aba-port-forward
+  namespace: harness-dev
+  labels:
+    app.kubernetes.io/name: harness-aba
+    app.kubernetes.io/part-of: harness-platform
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
+  name: harness-aba-port-forward
+subjects:
+  - kind: ServiceAccount
+    name: harness-aba-port-forward
+    namespace: harness-dev
+---
+apiVersion: v1
+kind: Secret
+metadata:
+  name: harness-aba-port-forward-token
+  namespace: harness-dev
+  labels:
+    app.kubernetes.io/name: harness-aba
+    app.kubernetes.io/part-of: harness-platform
+  annotations:
+    kubernetes.io/service-account.name: harness-aba-port-forward
+type: kubernetes.io/service-account-token
