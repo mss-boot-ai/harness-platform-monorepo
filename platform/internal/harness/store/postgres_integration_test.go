@@ -68,6 +68,21 @@ func TestPostgresSchemaMigrationContract(t *testing.T) {
 	if err := VerifyAllSchema(db); err != nil {
 		t.Fatalf("VerifyAllSchema on TimescaleDB: %v", err)
 	}
+	if err := db.Exec(`DROP INDEX "ux_harness_endpoint_owner_sign"`).Error; err != nil {
+		t.Fatalf("drop PostgreSQL security index for partial-index negative test: %v", err)
+	}
+	if err := db.Exec(`CREATE UNIQUE INDEX "ux_harness_endpoint_owner_sign" ON "harness_endpoints"("owner_user_id", "signing_jkt") WHERE "owner_user_id" <> ''`).Error; err != nil {
+		t.Fatalf("create partial PostgreSQL security index: %v", err)
+	}
+	if err := VerifyAllSchema(db); err == nil {
+		t.Fatal("VerifyAllSchema accepted a partial PostgreSQL security index")
+	}
+	if err := CreateAllSchema(db); err != nil {
+		t.Fatalf("repair partial PostgreSQL security index: %v", err)
+	}
+	if err := VerifyAllSchema(db); err != nil {
+		t.Fatalf("VerifyAllSchema after partial-index repair: %v", err)
+	}
 	exercisePostgresAuthorizedFrames(t, db)
 	exercisePostgresRefreshRevocationLocks(t, db)
 }

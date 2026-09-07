@@ -54,12 +54,14 @@ func verifyPostgresUniqueIndexContract(db *gorm.DB, contract uniqueIndexContract
 		ColumnName string `gorm:"column:column_name"`
 		Unique     bool   `gorm:"column:is_unique"`
 		Valid      bool   `gorm:"column:is_valid"`
+		Ready      bool   `gorm:"column:is_ready"`
 	}
 	var rows []indexColumn
 	if err := db.Raw(`
 SELECT attribute.attname AS column_name,
        pg_idx.indisunique AS is_unique,
-       pg_idx.indisvalid AS is_valid
+       pg_idx.indisvalid AS is_valid,
+       pg_idx.indisready AS is_ready
 FROM pg_index AS pg_idx
 JOIN pg_class AS relation ON relation.oid = pg_idx.indrelid
 JOIN pg_namespace AS namespace ON namespace.oid = relation.relnamespace
@@ -71,6 +73,8 @@ JOIN pg_attribute AS attribute
 WHERE namespace.nspname = CURRENT_SCHEMA()
   AND relation.relname = ?
   AND index_relation.relname = ?
+  AND pg_idx.indpred IS NULL
+  AND pg_idx.indexprs IS NULL
   AND index_key.ordinal <= pg_idx.indnkeyatts
 ORDER BY index_key.ordinal`, table, contract.name).Scan(&rows).Error; err != nil {
 		return fmt.Errorf("inspect Harness index %s: %w", contract.name, err)
@@ -80,8 +84,8 @@ ORDER BY index_key.ordinal`, table, contract.name).Scan(&rows).Error; err != nil
 	}
 	columns := make([]string, 0, len(rows))
 	for _, row := range rows {
-		if !row.Unique || !row.Valid {
-			return fmt.Errorf("Harness index %s must be unique and valid", contract.name)
+		if !row.Unique || !row.Valid || !row.Ready {
+			return fmt.Errorf("Harness index %s must be unique, valid, and ready", contract.name)
 		}
 		columns = append(columns, row.ColumnName)
 	}
@@ -107,20 +111,6 @@ func ensureUniqueIndexContract(db *gorm.DB, contract uniqueIndexContract) error 
 	if err := verifyUniqueIndexContract(db, contract); err == nil {
 		return nil
 	}
-	if db.Migrator().HasIndex(contract.model, contract.name) {
-		var statement string
-		switch db.Dialector.Name() {
-		case "postgres", "sqlite":
-			statement = fmt.Sprintf("DROP INDEX IF EXISTS %s", quotedName)
-		case "mysql":
-			statement = fmt.Sprintf("DROP INDEX %s ON %s", quotedName, quotedTable)
-		default:
-			return fmt.Errorf("drop malformed Harness index %s: unsupported database dialect %q", contract.name, db.Dialector.Name())
-		}
-		if err := db.Exec(statement).Error; err != nil {
-			return fmt.Errorf("drop malformed Harness index %s: %w", contract.name, err)
-		}
-	}
 	quoted := make([]string, 0, len(contract.columns))
 	for _, column := range contract.columns {
 		quotedColumn, err := quoteSQLIdentifier(db, column)
@@ -129,11 +119,39 @@ func ensureUniqueIndexContract(db *gorm.DB, contract uniqueIndexContract) error 
 		}
 		quoted = append(quoted, quotedColumn)
 	}
-	statement := fmt.Sprintf("CREATE UNIQUE INDEX %s ON %s(%s)", quotedName, quotedTable, strings.Join(quoted, ","))
-	if err := db.Exec(statement).Error; err != nil {
-		return fmt.Errorf("create Harness unique index %s: %w", contract.name, err)
-	}
-	return verifyUniqueIndexContract(db, contract)
+	return db.Transaction(func(tx *gorm.DB) error {
+		var duplicateGroups int64
+		duplicateStatement := fmt.Sprintf(
+			"SELECT COUNT(*) FROM (SELECT 1 FROM %s GROUP BY %s HAVING COUNT(*) > 1 LIMIT 1) AS harness_duplicate_groups",
+			quotedTable,
+			strings.Join(quoted, ","),
+		)
+		if err := tx.Raw(duplicateStatement).Scan(&duplicateGroups).Error; err != nil {
+			return fmt.Errorf("inspect Harness index %s duplicates: %w", contract.name, err)
+		}
+		if duplicateGroups != 0 {
+			return fmt.Errorf("repair Harness index %s: duplicate rows violate the required unique contract", contract.name)
+		}
+		if tx.Migrator().HasIndex(contract.model, contract.name) {
+			var dropStatement string
+			switch tx.Dialector.Name() {
+			case "postgres", "sqlite":
+				dropStatement = fmt.Sprintf("DROP INDEX IF EXISTS %s", quotedName)
+			case "mysql":
+				dropStatement = fmt.Sprintf("DROP INDEX %s ON %s", quotedName, quotedTable)
+			default:
+				return fmt.Errorf("drop malformed Harness index %s: unsupported database dialect %q", contract.name, tx.Dialector.Name())
+			}
+			if err := tx.Exec(dropStatement).Error; err != nil {
+				return fmt.Errorf("drop malformed Harness index %s: %w", contract.name, err)
+			}
+		}
+		createStatement := fmt.Sprintf("CREATE UNIQUE INDEX %s ON %s(%s)", quotedName, quotedTable, strings.Join(quoted, ","))
+		if err := tx.Exec(createStatement).Error; err != nil {
+			return fmt.Errorf("create Harness unique index %s: %w", contract.name, err)
+		}
+		return verifyUniqueIndexContract(tx, contract)
+	})
 }
 
 func quoteSQLIdentifier(db *gorm.DB, value string) (string, error) {
