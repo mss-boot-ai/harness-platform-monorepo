@@ -11,6 +11,7 @@ import (
 	"io"
 	"net/http"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/mss-boot-ai/harness-platform-monorepo/platform/internal/harness/domain"
@@ -19,12 +20,14 @@ import (
 )
 
 const (
-	protocolName     = "mss.awp.v1"
-	ticketPurpose    = "awp-connect"
-	nativeABAOrigin  = "app://aba"
-	defaultNonceTTL  = 2 * time.Minute
-	defaultTicketTTL = 30 * time.Second
-	defaultReplayMax = 100_000
+	protocolName                 = "mss.awp.v1"
+	ticketPurpose                = "awp-connect"
+	nativeABAOrigin              = "app://aba"
+	defaultNonceTTL              = 2 * time.Minute
+	defaultTicketTTL             = 30 * time.Second
+	defaultReplayMax             = 100_000
+	trustManifestRefreshInterval = 12 * time.Hour
+	trustManifestRetryInterval   = time.Minute
 )
 
 type Persistence interface {
@@ -57,6 +60,10 @@ type Persistence interface {
 	UseDPoPReplay(context.Context, string, string, time.Time, time.Time, int64) error
 }
 
+type persistencePinger interface {
+	Ping(context.Context) error
+}
+
 type Config struct {
 	AllowedOrigin        string
 	ExternalOrigin       string
@@ -71,12 +78,15 @@ type Config struct {
 }
 
 type Server struct {
-	config      Config
-	persistence Persistence
-	random      io.Reader
-	now         func() time.Time
-	trust       *TrustBundle
-	connections connectionDirectory
+	config                 Config
+	persistence            Persistence
+	random                 io.Reader
+	now                    func() time.Time
+	trust                  *TrustBundle
+	connections            connectionDirectory
+	manifestMu             sync.Mutex
+	cachedTrustManifest    TrustManifest
+	trustManifestRefreshAt time.Time
 }
 
 func NewHandler(config Config, persistence Persistence, random io.Reader, now func() time.Time) (http.Handler, error) {
@@ -131,15 +141,20 @@ func NewHandler(config Config, persistence Persistence, random io.Reader, now fu
 			return nil, err
 		}
 	}
-	if _, err := config.Trust.Manifest(); err != nil {
+	initialNow := now().UTC()
+	initialManifest, err := config.Trust.ManifestAt(initialNow)
+	if err != nil {
 		return nil, err
 	}
 	server := &Server{
 		config: config, persistence: persistence, random: random, now: now,
 		trust: config.Trust, connections: newMemoryConnectionDirectory(),
+		cachedTrustManifest:    initialManifest,
+		trustManifestRefreshAt: initialNow.Add(trustManifestRefreshInterval),
 	}
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET /gateway/v1/health", server.health)
+	mux.HandleFunc("GET /gateway/v1/ready", server.readiness)
 	mux.HandleFunc("GET /gateway/v1/trust-manifest", server.trustManifest)
 	mux.HandleFunc("GET /gateway/v1/ws", server.websocket)
 	mux.HandleFunc("POST /gateway/v1/enrollments", server.startEnrollment)
@@ -159,12 +174,31 @@ func NewHandler(config Config, persistence Persistence, random io.Reader, now fu
 }
 
 func (server *Server) trustManifest(writer http.ResponseWriter, _ *http.Request) {
-	manifest, err := server.trust.Manifest()
+	manifest, err := server.currentTrustManifest(server.now().UTC())
 	if err != nil {
 		writeGatewayError(writer, http.StatusServiceUnavailable, "TRUST_MANIFEST_UNAVAILABLE", "trust manifest is unavailable")
 		return
 	}
 	writeJSON(writer, http.StatusOK, manifest)
+}
+
+func (server *Server) currentTrustManifest(now time.Time) (TrustManifest, error) {
+	server.manifestMu.Lock()
+	defer server.manifestMu.Unlock()
+	if now.Before(server.trustManifestRefreshAt) && !server.cachedTrustManifest.ExpiresAt.IsZero() {
+		return server.cachedTrustManifest, nil
+	}
+	manifest, err := server.trust.ManifestAt(now)
+	if err != nil {
+		if now.Before(server.cachedTrustManifest.ExpiresAt) {
+			server.trustManifestRefreshAt = now.Add(trustManifestRetryInterval)
+			return server.cachedTrustManifest, nil
+		}
+		return TrustManifest{}, err
+	}
+	server.cachedTrustManifest = manifest
+	server.trustManifestRefreshAt = now.Add(trustManifestRefreshInterval)
+	return manifest, nil
 }
 
 func (server *Server) refreshToken(writer http.ResponseWriter, request *http.Request) {
@@ -303,6 +337,24 @@ func (server *Server) refreshToken(writer http.ResponseWriter, request *http.Req
 }
 
 func (server *Server) health(writer http.ResponseWriter, _ *http.Request) {
+	writeJSON(writer, http.StatusOK, map[string]any{"status": "live", "protocol": protocolName})
+}
+
+func (server *Server) readiness(writer http.ResponseWriter, request *http.Request) {
+	ctx, cancel := context.WithTimeout(request.Context(), 2*time.Second)
+	defer cancel()
+	if pinger, ok := server.persistence.(persistencePinger); ok {
+		if err := pinger.Ping(ctx); err != nil {
+			writeGatewayError(writer, http.StatusServiceUnavailable, "GATEWAY_DATABASE_UNAVAILABLE", "Gateway persistence is unavailable")
+			return
+		}
+	}
+	now := server.now().UTC()
+	manifest, err := server.currentTrustManifest(now)
+	if err != nil || !now.Before(manifest.ExpiresAt) {
+		writeGatewayError(writer, http.StatusServiceUnavailable, "TRUST_MANIFEST_UNAVAILABLE", "trust manifest is unavailable")
+		return
+	}
 	writeJSON(writer, http.StatusOK, map[string]any{"status": "ready", "protocol": protocolName})
 }
 

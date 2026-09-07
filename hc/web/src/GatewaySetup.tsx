@@ -43,7 +43,12 @@ export function GatewaySetup({
       if (globalThis.indexedDB === undefined) {
         throw new Error('Gateway trust pin storage is unavailable');
       }
-      await new IndexedDbSecureStore(globalThis.indexedDB).pinTrustRoot(trust.rootJkt, trust.revision);
+      await new IndexedDbSecureStore(globalThis.indexedDB).pinTrustRoot(
+        trust.rootJkt,
+        trust.revision,
+        trust.onlineJkt,
+        trust.expiresAt,
+      );
       const ready = await connectGateway(identity, {
         credentialId: activeRegistration.credentialId,
         endpointId: activeRegistration.endpointId,
@@ -65,7 +70,7 @@ export function GatewaySetup({
       if (cause instanceof HcApiError) {
         setError(`${cause.message}（${cause.code}）`);
       } else {
-        setError('Gateway Ticket 获取失败，请确认本地 Gateway 已启动。');
+        setError('Gateway Ticket 获取失败，请确认 Gateway 服务与网络状态。');
       }
     } finally {
       setBusy(false);

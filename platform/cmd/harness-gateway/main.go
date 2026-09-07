@@ -29,7 +29,10 @@ func main() {
 
 func run() error {
 	driver := environment("HARNESS_GATEWAY_DB_DRIVER", "sqlite")
-	dsn := environment("HARNESS_GATEWAY_DB_DSN", "file:mss-boot-admin-local.db?_pragma=busy_timeout(5000)")
+	dsn := strings.TrimSpace(os.Getenv("HARNESS_GATEWAY_DB_DSN"))
+	if dsn == "" && strings.EqualFold(strings.TrimSpace(driver), "sqlite") {
+		dsn = "file:mss-boot-admin-local.db?_pragma=busy_timeout(5000)"
+	}
 	dialector, err := gatewayDatabaseDialector(driver, dsn)
 	if err != nil {
 		return err
@@ -38,6 +41,15 @@ func run() error {
 	if err != nil {
 		return errors.New("open Gateway persistence")
 	}
+	sqlDB, err := db.DB()
+	if err != nil {
+		return errors.New("own Gateway persistence pool")
+	}
+	sqlDB.SetMaxOpenConns(20)
+	sqlDB.SetMaxIdleConns(5)
+	sqlDB.SetConnMaxIdleTime(5 * time.Minute)
+	sqlDB.SetConnMaxLifetime(30 * time.Minute)
+	defer sqlDB.Close()
 	if err := store.VerifyAllSchema(db); err != nil {
 		return errors.New("Gateway persistence is not ready")
 	}

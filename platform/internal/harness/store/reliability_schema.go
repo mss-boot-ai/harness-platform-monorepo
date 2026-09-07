@@ -45,7 +45,7 @@ func RegisterReliabilityMigration(runner *migration.Migration) error {
 	if runner == nil {
 		return errors.New("harness reliability migration runner is required")
 	}
-	return runner.Register(ReliabilityMigrationID, func(db *gorm.DB, version string) error {
+	if err := runner.Register(ReliabilityMigrationID, func(db *gorm.DB, version string) error {
 		if version != ReliabilityMigrationID.String() {
 			return errors.New("harness reliability migration version mismatch")
 		}
@@ -53,7 +53,10 @@ func RegisterReliabilityMigration(runner *migration.Migration) error {
 			return err
 		}
 		return runner.CreateVersion(db, version)
-	})
+	}); err != nil {
+		return err
+	}
+	return RegisterPortableBinaryMigration(runner)
 }
 
 func CreateReliabilitySchema(db *gorm.DB) error {

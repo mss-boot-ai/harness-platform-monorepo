@@ -29,6 +29,20 @@ func New(db *gorm.DB) (*Store, error) {
 	return &Store{db: db}, nil
 }
 
+func (store *Store) Ping(ctx context.Context) error {
+	if err := requireStore(store, ctx); err != nil {
+		return err
+	}
+	sqlDB, err := store.db.DB()
+	if err != nil {
+		return errors.New("access Harness database pool")
+	}
+	if err := sqlDB.PingContext(ctx); err != nil {
+		return errors.New("Harness database is unavailable")
+	}
+	return nil
+}
+
 type endpointRow struct {
 	ID                 string     `gorm:"column:id;type:char(32);primaryKey"`
 	OwnerUserID        string     `gorm:"column:owner_user_id;size:128;not null;uniqueIndex:ux_harness_endpoint_owner_sign,priority:1;uniqueIndex:ux_harness_endpoint_owner_kem,priority:1;index:idx_harness_endpoint_owner_status,priority:1"`

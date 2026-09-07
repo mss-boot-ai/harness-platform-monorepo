@@ -142,7 +142,10 @@ func CreateAllSchema(db *gorm.DB) error {
 	if err := CreateM2ConnectionSchema(db); err != nil {
 		return err
 	}
-	return CreateReliabilitySchema(db)
+	if err := CreateReliabilitySchema(db); err != nil {
+		return err
+	}
+	return CreatePortableBinarySchema(db)
 }
 
 func CreateM1Schema(db *gorm.DB) error {
@@ -182,7 +185,10 @@ func VerifyAllSchema(db *gorm.DB) error {
 	if err := VerifyM2ConnectionSchema(db); err != nil {
 		return err
 	}
-	return VerifyReliabilitySchema(db)
+	if err := VerifyReliabilitySchema(db); err != nil {
+		return err
+	}
+	return VerifyPortableBinarySchema(db)
 }
 
 func VerifyM1Schema(db *gorm.DB) error {

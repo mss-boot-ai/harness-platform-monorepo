@@ -347,7 +347,11 @@ GET  /gateway/v1/sessions/{id}
 GET  /gateway/v1/key-packages
 POST /gateway/v1/key-packages/{id}/ack
 GET  /gateway/v1/health
+GET  /gateway/v1/ready
 ```
+
+`health` 仅表示进程存活；`ready` 同时验证数据库连通和当前 Trust Manifest 可用，
+Ingress 与 Kubernetes readiness 必须使用后者。
 
 HC Web 首次注册使用受 Admin Browser Session、CSRF、可信 Origin 和 `harness:operate` 保护的 Human API：
 

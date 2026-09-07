@@ -58,6 +58,8 @@ pub struct EndpointCredentials {
 struct TrustPin {
     root_jkt: String,
     revision: u64,
+    #[serde(default)]
+    expires_at_ms: i64,
     online_curve: String,
     online_key_type: String,
     online_x: String,
@@ -185,11 +187,13 @@ impl DevFileKeyStore {
         &self,
         root_jkt: &str,
         revision: u64,
+        expires_at_ms: i64,
         online: &P256PublicJwk,
     ) -> Result<(), KeyStoreError> {
         validate_private_file(&self.path)?;
         if decode_base64_fixed(root_jkt, 32).is_err()
             || revision == 0
+            || expires_at_ms <= 0
             || online.verifying_key().is_err()
         {
             return Err(KeyStoreError::Trust);
@@ -199,7 +203,8 @@ impl DevFileKeyStore {
             && (current.root_jkt != root_jkt
                 || revision < current.revision
                 || (revision == current.revision
-                    && (current.online_curve != online.curve
+                    && (expires_at_ms < current.expires_at_ms
+                        || current.online_curve != online.curve
                         || current.online_key_type != online.key_type
                         || current.online_x != online.x
                         || current.online_y != online.y)))
@@ -209,6 +214,7 @@ impl DevFileKeyStore {
         state.trust = Some(TrustPin {
             root_jkt: root_jkt.to_owned(),
             revision,
+            expires_at_ms,
             online_curve: online.curve.clone(),
             online_key_type: online.key_type.clone(),
             online_x: online.x.clone(),
@@ -485,14 +491,24 @@ mod tests {
 
         let online = store.load()?.signing_public_jwk()?;
         let root = URL_SAFE_NO_PAD.encode([9_u8; 32]);
-        store.pin_gateway_trust(&root, 3, &online)?;
-        store.pin_gateway_trust(&root, 4, &online)?;
+        store.pin_gateway_trust(&root, 3, 1_800_000_000_000, &online)?;
+        store.pin_gateway_trust(&root, 3, 1_800_000_001_000, &online)?;
         assert!(matches!(
-            store.pin_gateway_trust(&root, 3, &online),
+            store.pin_gateway_trust(&root, 3, 1_800_000_000_999, &online),
+            Err(KeyStoreError::Trust)
+        ));
+        store.pin_gateway_trust(&root, 4, 1_800_000_002_000, &online)?;
+        assert!(matches!(
+            store.pin_gateway_trust(&root, 3, 1_800_000_003_000, &online),
             Err(KeyStoreError::Trust)
         ));
         assert!(matches!(
-            store.pin_gateway_trust(&URL_SAFE_NO_PAD.encode([8_u8; 32]), 5, &online),
+            store.pin_gateway_trust(
+                &URL_SAFE_NO_PAD.encode([8_u8; 32]),
+                5,
+                1_800_000_004_000,
+                &online
+            ),
             Err(KeyStoreError::Trust)
         ));
         Ok(())

@@ -8,6 +8,7 @@ import (
 	"crypto/sha256"
 	"encoding/base64"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"math/big"
 	"net/http"
@@ -23,6 +24,46 @@ import (
 	"gorm.io/gorm"
 	"gorm.io/gorm/logger"
 )
+
+type gatewayHealthPersistence struct {
+	Persistence
+	pingErr error
+}
+
+func (p gatewayHealthPersistence) Ping(context.Context) error { return p.pingErr }
+
+func TestGatewaySeparatesLivenessFromPersistenceReadiness(t *testing.T) {
+	now := time.Unix(1_800_000_000, 0).UTC()
+	persistence, _, _, _, _, _, _ := gatewayFixture(t, now)
+	newHandler := func(pingErr error) http.Handler {
+		handler, err := NewHandler(Config{
+			AllowedOrigin: "http://127.0.0.1:8001", ExternalOrigin: "http://127.0.0.1:8082",
+		}, gatewayHealthPersistence{Persistence: persistence, pingErr: pingErr}, deterministicGatewayBytes(512), func() time.Time { return now })
+		if err != nil {
+			t.Fatalf("NewHandler: %v", err)
+		}
+		return handler
+	}
+
+	unavailable := newHandler(errors.New("database unavailable"))
+	readyResponse := httptest.NewRecorder()
+	unavailable.ServeHTTP(readyResponse, httptest.NewRequest(http.MethodGet, "/gateway/v1/ready", nil))
+	if readyResponse.Code != http.StatusServiceUnavailable || !strings.Contains(readyResponse.Body.String(), "GATEWAY_DATABASE_UNAVAILABLE") {
+		t.Fatalf("readiness status=%d body=%s", readyResponse.Code, readyResponse.Body.String())
+	}
+	liveResponse := httptest.NewRecorder()
+	unavailable.ServeHTTP(liveResponse, httptest.NewRequest(http.MethodGet, "/gateway/v1/health", nil))
+	if liveResponse.Code != http.StatusOK || !strings.Contains(liveResponse.Body.String(), `"status":"live"`) {
+		t.Fatalf("liveness status=%d body=%s", liveResponse.Code, liveResponse.Body.String())
+	}
+
+	ready := newHandler(nil)
+	readyResponse = httptest.NewRecorder()
+	ready.ServeHTTP(readyResponse, httptest.NewRequest(http.MethodGet, "/gateway/v1/ready", nil))
+	if readyResponse.Code != http.StatusOK || !strings.Contains(readyResponse.Body.String(), `"status":"ready"`) {
+		t.Fatalf("ready status=%d body=%s", readyResponse.Code, readyResponse.Body.String())
+	}
+}
 
 func TestTicketEndpointRequiresNonceBoundDPoPAndCreatesSingleUseTicket(t *testing.T) {
 	now := time.Unix(1_800_000_000, 0).UTC()

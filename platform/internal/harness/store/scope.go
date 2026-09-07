@@ -2,9 +2,11 @@ package store
 
 import (
 	"context"
+	"errors"
 	"strings"
 	"time"
 
+	"github.com/jackc/pgx/v5/pgconn"
 	"github.com/mss-boot-ai/harness-platform-monorepo/platform/internal/harness/domain"
 )
 
@@ -22,10 +24,18 @@ func normalizeConcurrencyError(message string, err error) error {
 	if err == nil {
 		return nil
 	}
-	if isSQLiteConcurrencyError(err) {
+	if isSQLiteConcurrencyError(err) || isPostgresConcurrencyError(err) {
 		return domain.NewProblem(domain.CodeConflict, message, err)
 	}
 	return err
+}
+
+func isPostgresConcurrencyError(err error) bool {
+	var postgresError *pgconn.PgError
+	if !errors.As(err, &postgresError) {
+		return false
+	}
+	return postgresError.Code == "40P01" || postgresError.Code == "40001"
 }
 
 func isSQLiteConcurrencyError(err error) bool {

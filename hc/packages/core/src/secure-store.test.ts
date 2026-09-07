@@ -28,10 +28,22 @@ describe('IndexedDbSecureStore', () => {
   it('pins the first Gateway root and rejects replacement or revision rollback', async () => {
     const store = new IndexedDbSecureStore(new IDBFactory(), `hc-trust-${crypto.randomUUID()}`);
     const root = 'A'.repeat(43);
-    await store.pinTrustRoot(root, 1n);
-    await store.pinTrustRoot(root, 2n);
-    await expect(store.pinTrustRoot(root, 1n)).rejects.toThrow('rolled back');
-    await expect(store.pinTrustRoot('B'.repeat(43), 3n)).rejects.toThrow('changed unexpectedly');
+    const online = 'B'.repeat(43);
+    await store.pinTrustRoot(root, 1n, online, new Date('2030-01-01T00:00:00Z'));
+    await store.pinTrustRoot(root, 1n, online, new Date('2030-01-02T00:00:00Z'));
+    await expect(
+      store.pinTrustRoot(root, 1n, online, new Date('2030-01-01T12:00:00Z')),
+    ).rejects.toThrow('changed within one revision');
+    await expect(
+      store.pinTrustRoot(root, 1n, 'C'.repeat(43), new Date('2030-01-03T00:00:00Z')),
+    ).rejects.toThrow('changed within one revision');
+    await store.pinTrustRoot(root, 2n, 'C'.repeat(43), new Date('2030-01-03T00:00:00Z'));
+    await expect(
+      store.pinTrustRoot(root, 1n, 'C'.repeat(43), new Date('2030-01-04T00:00:00Z')),
+    ).rejects.toThrow('rolled back');
+    await expect(
+      store.pinTrustRoot('D'.repeat(43), 3n, 'C'.repeat(43), new Date('2030-01-04T00:00:00Z')),
+    ).rejects.toThrow('changed unexpectedly');
   });
 
   it('durably deduplicates bounded session inbox frames and detects conflicts', async () => {
