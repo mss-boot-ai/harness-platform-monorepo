@@ -73,6 +73,7 @@ func TestPostgresSchemaMigrationContract(t *testing.T) {
 		t.Fatalf("VerifyAllSchema on TimescaleDB: %v", err)
 	}
 	exercisePostgresEnrollmentRoundTrip(t, db)
+	exercisePostgresGatewayCounters(t, db)
 	if err := db.Exec(`DROP INDEX "ux_harness_endpoint_owner_sign"`).Error; err != nil {
 		t.Fatalf("drop PostgreSQL security index for partial-index negative test: %v", err)
 	}
@@ -118,6 +119,33 @@ func TestPostgresEnrollmentRoundTrip(t *testing.T) {
 	}
 	closeGORMDatabase(t, db)
 	exercisePostgresEnrollmentRoundTrip(t, db)
+}
+
+func exercisePostgresGatewayCounters(t *testing.T, db *gorm.DB) {
+	t.Helper()
+	persistence, err := New(db)
+	if err != nil {
+		t.Fatal(err)
+	}
+	id, err := domain.NewID(rand.Reader)
+	if err != nil {
+		t.Fatal(err)
+	}
+	now := time.Now().UTC().Truncate(time.Microsecond)
+	for generation := uint64(1); generation <= 3; generation++ {
+		got, err := persistence.NextConnectionGeneration(t.Context(), id, now)
+		if err != nil || got != generation {
+			t.Fatalf("connection generation = %d, want %d: %v", got, generation, err)
+		}
+		hash := sha256.Sum256([]byte(fmt.Sprintf("nonce-%d", generation)))
+		if err := persistence.PutEndpointNonce(t.Context(), id, hash, now, now.Add(time.Minute)); err != nil {
+			t.Fatalf("put nonce %d: %v", generation, err)
+		}
+		gotHash, err := persistence.GetEndpointNonceHash(t.Context(), id, now)
+		if err != nil || gotHash != hash {
+			t.Fatalf("nonce round trip %d: %v", generation, err)
+		}
+	}
 }
 
 func exercisePostgresEnrollmentRoundTrip(t *testing.T, db *gorm.DB) {
