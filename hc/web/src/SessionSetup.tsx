@@ -44,8 +44,12 @@ export function SessionSetup({
 }) {
   const [endpoints, setEndpoints] = useState<readonly ABAEndpointSummary[]>([]);
   const [selectedABA, setSelectedABA] = useState('');
-  const [runtimeProfileId, setRuntimeProfileId] = useState('test-agent');
-  const [workspaceId, setWorkspaceId] = useState('harness-platform');
+  const [runtimeProfileId, setRuntimeProfileId] = useState(
+    import.meta.env.VITE_HARNESS_DEFAULT_RUNTIME_PROFILE_ID?.trim() || 'test-agent',
+  );
+  const [workspaceId, setWorkspaceId] = useState(
+    import.meta.env.VITE_HARNESS_DEFAULT_WORKSPACE_ID?.trim() || 'harness-platform',
+  );
   const [session, setSession] = useState<EndpointSessionSummary | null>(null);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);

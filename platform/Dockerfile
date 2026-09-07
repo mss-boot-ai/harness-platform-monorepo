@@ -20,12 +20,14 @@ RUN corepack pnpm@10.34.5 build
 
 FROM alpine:3.24.1@sha256:28bd5fe8b56d1bd048e5babf5b10710ebe0bae67db86916198a6eec434943f8b
 RUN apk add --no-cache ca-certificates tzdata \
-    && addgroup -S admin \
-    && adduser -S -G admin -h /app admin
+    && addgroup -S -g 65532 admin \
+    && adduser -S -D -H -u 65532 -G admin admin
 WORKDIR /app
+RUN mkdir -p /app/config \
+    && chown 65532:65532 /app/config
 COPY --from=backend --chown=admin:admin /out/admin /app/admin
 COPY --from=frontend --chown=admin:admin /src/web/dist /app/public
-USER admin
+USER 65532:65532
 EXPOSE 8080
 HEALTHCHECK --interval=30s --timeout=3s --start-period=10s --retries=3 \
   CMD wget --quiet --spider http://127.0.0.1:8080/healthz || exit 1
