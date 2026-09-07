@@ -1,0 +1,34 @@
+schema_version = 1
+
+[platform]
+url = "http://127.0.0.1:18082"
+
+[limits]
+max_sessions = 4
+max_packet_bytes = 1048576
+max_inflight_per_channel = 1024
+journal_max_bytes = 67108864
+
+[[runtime]]
+id = "deepseek-harness"
+display_name = "DeepSeek Harness"
+command = "/opt/harness/bin/deepseek-acp"
+args = []
+env_allow = [
+  "HOME",
+  "PATH",
+  "MSS_HARNESS_API_BASE_URL",
+  "MSS_HARNESS_API_KEY",
+  "MSS_HARNESS_MODEL",
+  "MSS_HARNESS_MAX_TOKENS",
+  "MSS_HARNESS_REQUEST_TIMEOUT_SECONDS",
+  "MSS_HARNESS_SESSION_ROOT",
+]
+max_sessions = 2
+
+[[workspace]]
+id = "harness-platform"
+display_name = "Harness Platform"
+path = "/srv/harness-workspaces/harness-platform"
+allowed_runtimes = ["deepseek-harness"]
+follow_symlinks = false
