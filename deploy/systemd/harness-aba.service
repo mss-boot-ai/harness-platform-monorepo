@@ -38,6 +38,7 @@ LockPersonality=true
 CapabilityBoundingSet=
 CPUQuota=400%
 LimitNOFILE=8192
+LimitCORE=0
 MemoryMax=4G
 TasksMax=256
 
