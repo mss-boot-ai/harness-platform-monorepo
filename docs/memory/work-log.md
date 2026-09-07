@@ -6,6 +6,53 @@
 
 ---
 
+## 2026-09-07 14:43 +08:00 — 242 开发环境部署与真实 DeepSeek H5 验证
+
+从 main 64f69044491b0f817e634d98ed4c5e413037e44f 在 codex/deploy-harness-dev-242
+分支迭代，所有代码检查点均已独立 commit + push，PR #2 保留待人工合并。
+
+Platform/Admin Web/HC 部署镜像源 8932c16911a7befd3cd02af136a25b00c1102452；
+Gateway 热修复源 71be3c901bd1f2003ad93cd264029598beb2fcb5；
+宿主 ABA 源 3d9cef351af6827c6c3472f42dc2d607eb5befb5。
+对应最后 CI 34091522630 七项 job 全部成功。
+
+真实执行：TimescaleDB 2.29.2 与 PVC、显式迁移、四组件镜像、双域名 HTTPS、
+专用非 root loopback bridge；DeepSeek ACP probe 三次通过；内置浏览器完成 Admin
+登录、ABA 审批、HC 注册/安全连接、真实加密 Prompt、同 Session 断线重连后 Prompt、
+关闭回收、再次创建 Session。ABA 与 bridge 当前 active。
+
+迭代修复 PostgreSQL 索引方言/列序/约束、空 CHAR ID、时间精度、upsert 字段歧义、
+Nginx 内部端口跳转及 HC 重连后 ACK 序号范围。直接跨网络完整 PG 用例曾超时；
+独立 enrollment 真库回归与 CI 完整 Timescale 用例通过，超时测试 schema 已清理。
+备份已落主机 root-only 目录，尚未做恢复演练。
+
+仍有开发文件 KeyStore、runtime 同 UID 隔离不足、单节点资源余量、目标栈升级、
+未重做完整吊销/轮换/容量/灾备矩阵等限制。未据此声明全量 PRD/生产验收完成。
+凭据仅在受限主机文件与用户交付中提供，不进入 Git。
+详见 [242 部署验证](../roadmap/verification/2026-09-07-dev-242-deployment.md)。
+
+---
+
+## 2026-09-07 11:53 +08:00 — 242 Timescale/Kubernetes 部署准备（远端未执行）
+
+> 此为历史阶段记录；阻塞后来解除，实际部署见 14:43 记录。
+
+确认 PR #1 已 squash merge 到 `main` 提交
+`64f69044491b0f817e634d98ed4c5e413037e44f`。在隔离 Git 工作副本的
+`codex/deploy-harness-dev-242` 分支完成首个本地检查点
+`34f29331827eb244c9c2c3b1a2c6b348bb301bf0`（Gateway PostgreSQL/Timescale 基础），但
+本地 socket 沙箱在 GitHub/SSH 建连前拒绝连接，该提交尚未 push。后续部署、Trust、跨库
+迁移、锁序、镜像、Kubernetes、systemd、HC Pin 与 CI 变更仍处于本地暂存态，没有据此
+声明远端或镜像验证通过。
+
+当前本地门禁包括 Go Store/Module/Trust/Readiness、`go vet`、Rust 全 Clippy/测试、HC
+lint/typecheck/25 tests/build、Admin Web build、严格 Kubernetes 类型解码、Shell 与无秘密
+bootstrap/render 回归。真实 Timescale migration/并发、Docker build/run、242 集群盘点、
+DeepSeek ACP probe、TLS 和内置浏览器 E2E 均待执行。详细范围、失败证据和后续验收见
+[`../roadmap/verification/2026-09-07-dev-242-deployment.md`](../roadmap/verification/2026-09-07-dev-242-deployment.md)。
+
+---
+
 ## 2026-09-05 06:25 +08:00 — 本地 MVP：外部 ACP、可靠密文、恢复、关闭与 UNCERTAIN
 
 从 `7a63c982c7aa929e0f7a159eb983895f9e854ff8` 延伸到
