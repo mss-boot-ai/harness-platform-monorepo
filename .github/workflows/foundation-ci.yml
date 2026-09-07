@@ -191,9 +191,13 @@ jobs:
           curl --fail --silent --show-error --retry 20 --retry-delay 1 http://127.0.0.1:18081/healthz
           curl --fail --silent --show-error --dump-header "${RUNNER_TEMP}/platform-headers" \
             --output /dev/null http://127.0.0.1:18080/
+          curl --silent --show-error --head --dump-header "${RUNNER_TEMP}/platform-route-headers" \
+            --output /dev/null http://127.0.0.1:18080/harness/enrollments
           curl --fail --silent --show-error --dump-header "${RUNNER_TEMP}/hc-headers" \
             --output /dev/null http://127.0.0.1:18081/
           grep -Fi 'Content-Security-Policy:' "${RUNNER_TEMP}/platform-headers"
+          tr -d '\r' <"${RUNNER_TEMP}/platform-route-headers" \
+            | grep -Fix 'location: /harness/enrollments/'
           grep -Fi "require-trusted-types-for 'script'" "${RUNNER_TEMP}/hc-headers"
 
   protocol:
