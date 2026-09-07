@@ -4,10 +4,53 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/glebarez/sqlite"
 	"gorm.io/driver/mysql"
 	"gorm.io/driver/postgres"
 	"gorm.io/gorm"
 )
+
+func TestQuoteSQLIdentifierByDialect(t *testing.T) {
+	t.Parallel()
+	tests := []struct {
+		name      string
+		dialector gorm.Dialector
+		want      string
+	}{
+		{name: "sqlite", dialector: sqlite.Open(":memory:"), want: `"safe_name"`},
+		{
+			name: "postgres",
+			dialector: postgres.New(postgres.Config{
+				DSN:                  "postgres://harness.invalid/harness",
+				PreferSimpleProtocol: true,
+			}),
+			want: `"safe_name"`,
+		},
+		{
+			name: "mysql",
+			dialector: mysql.New(mysql.Config{
+				DSN:                       "harness:harness@tcp(127.0.0.1:3306)/harness?charset=utf8mb4&parseTime=true",
+				SkipInitializeWithVersion: true,
+			}),
+			want: "`safe_name`",
+		},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			db, err := gorm.Open(test.dialector, &gorm.Config{DisableAutomaticPing: true})
+			if err != nil {
+				t.Fatalf("open %s schema compiler: %v", test.name, err)
+			}
+			quoted, err := quoteSQLIdentifier(db, "safe_name")
+			if err != nil || quoted != test.want {
+				t.Fatalf("quoteSQLIdentifier(%s) = %q, %v; want %q", test.name, quoted, err, test.want)
+			}
+			if _, err := quoteSQLIdentifier(db, "unsafe-name"); err == nil {
+				t.Fatalf("quoteSQLIdentifier(%s) accepted an unsafe name", test.name)
+			}
+		})
+	}
+}
 
 func TestBinaryFieldsUsePostgresBytea(t *testing.T) {
 	t.Parallel()
