@@ -6,6 +6,7 @@ use aba::gateway::GatewayClient;
 use aba::identity::DevFileKeyStore;
 use aba::identity::enrollment::EnrollmentClient;
 use aba::journal::Journal;
+use aba::process::AgentProcess;
 use aba::version::{PRODUCT_NAME, build_info};
 use clap::{Args, Parser, Subcommand};
 use url::Url;
@@ -29,6 +30,8 @@ enum Command {
     Config(ConfigArgs),
     /// Manage the ABA endpoint identity.
     Identity(IdentityArgs),
+    /// Probe one locally allow-listed ACP runtime without connecting to Platform.
+    Runtime(RuntimeArgs),
     /// Enroll this ABA with a loopback development Platform.
     Enroll {
         #[arg(long, value_name = "PATH")]
@@ -100,6 +103,27 @@ struct ConfigArgs {
     command: ConfigCommand,
 }
 
+#[derive(Debug, Args)]
+struct RuntimeArgs {
+    #[command(subcommand)]
+    command: RuntimeCommand,
+}
+
+#[derive(Debug, Subcommand)]
+enum RuntimeCommand {
+    /// Start an ACP runtime and verify initialize plus session/new.
+    Probe {
+        #[arg(long, value_name = "PATH")]
+        config: PathBuf,
+        #[arg(long, value_name = "ID")]
+        runtime: String,
+        #[arg(long, value_name = "ID")]
+        workspace: String,
+        #[arg(long)]
+        insecure_loopback_development: bool,
+    },
+}
+
 #[derive(Debug, Subcommand)]
 enum ConfigCommand {
     /// Strictly parse and validate a local ABA TOML configuration.
@@ -168,6 +192,34 @@ fn execute(cli: Cli) -> Result<(), Box<dyn std::error::Error>> {
                 print_identity_summary(&summary, json)?;
             }
         },
+        Command::Runtime(RuntimeArgs {
+            command:
+                RuntimeCommand::Probe {
+                    config,
+                    runtime,
+                    workspace,
+                    insecure_loopback_development,
+                },
+        }) => {
+            let config =
+                AgentConfig::load_with_loopback_development(config, insecure_loopback_development)?;
+            let runtime = config
+                .runtimes
+                .iter()
+                .find(|candidate| candidate.id == runtime)
+                .ok_or("runtime profile is not allow-listed")?;
+            let workspace = config
+                .workspaces
+                .iter()
+                .find(|candidate| candidate.id == workspace)
+                .ok_or("workspace profile is not allow-listed")?;
+            if !workspace.allowed_runtimes.contains(&runtime.id) {
+                return Err("workspace does not allow the selected runtime".into());
+            }
+            let process = AgentProcess::start(runtime, workspace)?;
+            drop(process);
+            println!("ACP runtime probe succeeded.");
+        }
         Command::Enroll {
             store,
             platform,

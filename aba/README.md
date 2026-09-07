@@ -27,6 +27,8 @@ durable Journal detects uncertain dispatch, while the HC closes unrecoverable Se
 ```bash
 cargo run -- version --json
 cargo run -- config validate --config ./aba.toml
+cargo run -- runtime probe --config ./.aba-dev/local.toml --runtime test-agent --workspace harness-platform --insecure-loopback-development
+PYTHONDONTWRITEBYTECODE=1 python3 -m unittest discover -s adapters/tests -p 'test_*.py'
 cargo run -- identity init --store ./.aba-dev/identity.json --platform http://127.0.0.1:8082 --insecure-dev-keystore --json
 cargo run -- identity inspect --store ./.aba-dev/identity.json --platform http://127.0.0.1:8082 --insecure-dev-keystore --json
 cargo run --bin aba -- run --config ./.aba-dev/local.toml --store ./.aba-dev/identity.json --insecure-dev-keystore
@@ -63,3 +65,9 @@ follow_symlinks = false
 ```
 
 Secrets, endpoint private keys, tokens, tickets, and session keys never belong in this file.
+
+`adapters/deepseek_harness_acp.py` is a bounded ACP stable-v1 stdio adapter for the official
+DeepSeek Harness Python SDK. It keeps one SDK instance/session alive for the ABA child-process
+lifetime, accepts text prompts only, and emits protocol JSON on stdout. Deploy it with a
+dedicated virtual environment and inject the existing model gateway settings through the
+ABA runtime environment allow-list; never copy an API key into TOML or command arguments.

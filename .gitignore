@@ -28,6 +28,10 @@ aba/.aba-dev/
 coverage*.txt
 coverage*.html
 
+# Python
+__pycache__/
+*.py[cod]
+
 # Node / frontend
 node_modules/
 .pnpm-store/
