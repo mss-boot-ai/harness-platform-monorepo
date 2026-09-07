@@ -3,6 +3,7 @@ package store
 import (
 	"fmt"
 	"slices"
+	"sort"
 	"strings"
 
 	"gorm.io/gorm"
@@ -18,8 +19,11 @@ func verifyUniqueIndexContract(db *gorm.DB, contract uniqueIndexContract) error 
 	if db == nil || contract.model == nil || contract.name == "" || len(contract.columns) == 0 {
 		return fmt.Errorf("invalid unique index contract %q", contract.name)
 	}
-	if db.Dialector.Name() == "postgres" {
+	switch db.Dialector.Name() {
+	case "postgres":
 		return verifyPostgresUniqueIndexContract(db, contract)
+	case "sqlite":
+		return verifySQLiteUniqueIndexContract(db, contract)
 	}
 	indexes, err := db.Migrator().GetIndexes(contract.model)
 	if err != nil {
@@ -55,13 +59,17 @@ func verifyPostgresUniqueIndexContract(db *gorm.DB, contract uniqueIndexContract
 		Unique     bool   `gorm:"column:is_unique"`
 		Valid      bool   `gorm:"column:is_valid"`
 		Ready      bool   `gorm:"column:is_ready"`
+		Immediate  bool   `gorm:"column:is_immediate"`
+		Live       bool   `gorm:"column:is_live"`
 	}
 	var rows []indexColumn
 	if err := db.Raw(`
 SELECT attribute.attname AS column_name,
        pg_idx.indisunique AS is_unique,
        pg_idx.indisvalid AS is_valid,
-       pg_idx.indisready AS is_ready
+       pg_idx.indisready AS is_ready,
+       pg_idx.indimmediate AS is_immediate,
+       pg_idx.indislive AS is_live
 FROM pg_index AS pg_idx
 JOIN pg_class AS relation ON relation.oid = pg_idx.indrelid
 JOIN pg_namespace AS namespace ON namespace.oid = relation.relnamespace
@@ -84,10 +92,65 @@ ORDER BY index_key.ordinal`, table, contract.name).Scan(&rows).Error; err != nil
 	}
 	columns := make([]string, 0, len(rows))
 	for _, row := range rows {
-		if !row.Unique || !row.Valid || !row.Ready {
-			return fmt.Errorf("Harness index %s must be unique, valid, and ready", contract.name)
+		if !row.Unique || !row.Valid || !row.Ready || !row.Immediate || !row.Live {
+			return fmt.Errorf("Harness index %s must be unique, valid, ready, immediate, and live", contract.name)
 		}
 		columns = append(columns, row.ColumnName)
+	}
+	if !slices.Equal(columns, contract.columns) {
+		return fmt.Errorf("Harness index %s columns = %v, want %v", contract.name, columns, contract.columns)
+	}
+	return nil
+}
+
+func verifySQLiteUniqueIndexContract(db *gorm.DB, contract uniqueIndexContract) error {
+	table, err := modelTableName(db, contract.model)
+	if err != nil {
+		return err
+	}
+	quotedName, err := quoteSQLIdentifier(db, contract.name)
+	if err != nil {
+		return fmt.Errorf("invalid Harness unique index contract %q: %w", contract.name, err)
+	}
+	quotedTable, err := quoteSQLIdentifier(db, table)
+	if err != nil {
+		return fmt.Errorf("invalid Harness index table %q: %w", table, err)
+	}
+	type indexListRow struct {
+		Name    string `gorm:"column:name"`
+		Unique  int    `gorm:"column:unique"`
+		Partial int    `gorm:"column:partial"`
+	}
+	var indexes []indexListRow
+	if err := db.Raw("PRAGMA index_list(" + quotedTable + ")").Scan(&indexes).Error; err != nil {
+		return fmt.Errorf("inspect Harness index %s: %w", contract.name, err)
+	}
+	found := false
+	for _, index := range indexes {
+		if index.Name != contract.name {
+			continue
+		}
+		found = true
+		if index.Unique != 1 || index.Partial != 0 {
+			return fmt.Errorf("Harness index %s must be unique and non-partial", contract.name)
+		}
+		break
+	}
+	if !found {
+		return fmt.Errorf("Harness index %s is unavailable", contract.name)
+	}
+	type indexInfoRow struct {
+		Sequence int    `gorm:"column:seqno"`
+		Name     string `gorm:"column:name"`
+	}
+	var rows []indexInfoRow
+	if err := db.Raw("PRAGMA index_info(" + quotedName + ")").Scan(&rows).Error; err != nil {
+		return fmt.Errorf("inspect Harness index %s columns: %w", contract.name, err)
+	}
+	sort.Slice(rows, func(left, right int) bool { return rows[left].Sequence < rows[right].Sequence })
+	columns := make([]string, 0, len(rows))
+	for _, row := range rows {
+		columns = append(columns, row.Name)
 	}
 	if !slices.Equal(columns, contract.columns) {
 		return fmt.Errorf("Harness index %s columns = %v, want %v", contract.name, columns, contract.columns)
@@ -133,12 +196,13 @@ func ensureUniqueIndexContract(db *gorm.DB, contract uniqueIndexContract) error 
 			return fmt.Errorf("repair Harness index %s: duplicate rows violate the required unique contract", contract.name)
 		}
 		if tx.Migrator().HasIndex(contract.model, contract.name) {
+			if tx.Dialector.Name() == "mysql" {
+				return fmt.Errorf("repair Harness index %s: refusing a non-atomic MySQL index replacement", contract.name)
+			}
 			var dropStatement string
 			switch tx.Dialector.Name() {
 			case "postgres", "sqlite":
 				dropStatement = fmt.Sprintf("DROP INDEX IF EXISTS %s", quotedName)
-			case "mysql":
-				dropStatement = fmt.Sprintf("DROP INDEX %s ON %s", quotedName, quotedTable)
 			default:
 				return fmt.Errorf("drop malformed Harness index %s: unsupported database dialect %q", contract.name, tx.Dialector.Name())
 			}

@@ -62,6 +62,10 @@ func TestPostgresSchemaMigrationContract(t *testing.T) {
 		t.Fatalf("open scoped PostgreSQL integration database: %v", err)
 	}
 	closeGORMDatabase(t, db)
+	var currentSchema string
+	if err := db.Raw("SELECT CURRENT_SCHEMA()").Scan(&currentSchema).Error; err != nil || currentSchema != schema {
+		t.Fatalf("PostgreSQL integration search_path schema=%q, want %q, err=%v", currentSchema, schema, err)
+	}
 	if err := CreateAllSchema(db); err != nil {
 		t.Fatalf("CreateAllSchema on TimescaleDB: %v", err)
 	}
@@ -82,6 +86,21 @@ func TestPostgresSchemaMigrationContract(t *testing.T) {
 	}
 	if err := VerifyAllSchema(db); err != nil {
 		t.Fatalf("VerifyAllSchema after partial-index repair: %v", err)
+	}
+	if err := db.Exec(`DROP INDEX "ux_harness_endpoint_owner_sign"`).Error; err != nil {
+		t.Fatalf("drop PostgreSQL security index for deferrable negative test: %v", err)
+	}
+	if err := db.Exec(`ALTER TABLE "harness_endpoints" ADD CONSTRAINT "ux_harness_endpoint_owner_sign" UNIQUE ("owner_user_id", "signing_jkt") DEFERRABLE INITIALLY IMMEDIATE`).Error; err != nil {
+		t.Fatalf("create deferrable PostgreSQL unique constraint: %v", err)
+	}
+	if err := VerifyAllSchema(db); err == nil {
+		t.Fatal("VerifyAllSchema accepted a deferrable PostgreSQL unique constraint")
+	}
+	if err := db.Exec(`ALTER TABLE "harness_endpoints" DROP CONSTRAINT "ux_harness_endpoint_owner_sign"`).Error; err != nil {
+		t.Fatalf("drop deferrable PostgreSQL unique constraint: %v", err)
+	}
+	if err := CreateAllSchema(db); err != nil {
+		t.Fatalf("restore PostgreSQL security index after deferrable negative test: %v", err)
 	}
 	exercisePostgresAuthorizedFrames(t, db)
 	exercisePostgresRefreshRevocationLocks(t, db)

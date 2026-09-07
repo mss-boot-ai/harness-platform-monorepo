@@ -14,6 +14,10 @@ func TestVerifyAllSchemaRejectsMalformedBaseSecurityIndexes(t *testing.T) {
 			createSQL: "CREATE INDEX ux_harness_endpoint_owner_sign ON harness_endpoints(owner_user_id, signing_jkt)",
 		},
 		{
+			name: "endpoint signing partial", model: new(endpointRow), indexName: "ux_harness_endpoint_owner_sign",
+			createSQL: "CREATE UNIQUE INDEX ux_harness_endpoint_owner_sign ON harness_endpoints(owner_user_id, signing_jkt) WHERE owner_user_id <> ''",
+		},
+		{
 			name: "endpoint kem wrong order", model: new(endpointRow), indexName: "ux_harness_endpoint_owner_kem",
 			createSQL: "CREATE UNIQUE INDEX ux_harness_endpoint_owner_kem ON harness_endpoints(kem_jkt, owner_user_id)",
 		},
