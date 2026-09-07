@@ -29,14 +29,28 @@ func New(db *gorm.DB) (*Store, error) {
 	return &Store{db: db}, nil
 }
 
+func (store *Store) Ping(ctx context.Context) error {
+	if err := requireStore(store, ctx); err != nil {
+		return err
+	}
+	sqlDB, err := store.db.DB()
+	if err != nil {
+		return errors.New("access Harness database pool")
+	}
+	if err := sqlDB.PingContext(ctx); err != nil {
+		return errors.New("Harness database is unavailable")
+	}
+	return nil
+}
+
 type endpointRow struct {
 	ID                 string     `gorm:"column:id;type:char(32);primaryKey"`
 	OwnerUserID        string     `gorm:"column:owner_user_id;size:128;not null;uniqueIndex:ux_harness_endpoint_owner_sign,priority:1;uniqueIndex:ux_harness_endpoint_owner_kem,priority:1;index:idx_harness_endpoint_owner_status,priority:1"`
 	TenantID           string     `gorm:"column:tenant_id;size:128;not null;default:''"`
 	Type               string     `gorm:"column:type;size:24;not null"`
 	Name               string     `gorm:"column:name;size:120;not null"`
-	SigningPublicJWK   []byte     `gorm:"column:signing_public_jwk;type:blob;not null"`
-	KEMPublicJWK       []byte     `gorm:"column:kem_public_jwk;type:blob;not null"`
+	SigningPublicJWK   []byte     `gorm:"column:signing_public_jwk;not null"`
+	KEMPublicJWK       []byte     `gorm:"column:kem_public_jwk;not null"`
 	SigningJKT         string     `gorm:"column:signing_jkt;size:64;not null;uniqueIndex:ux_harness_endpoint_owner_sign,priority:2"`
 	KEMJKT             string     `gorm:"column:kem_jkt;size:64;not null;uniqueIndex:ux_harness_endpoint_owner_kem,priority:2"`
 	Status             string     `gorm:"column:status;size:24;not null;index:idx_harness_endpoint_owner_status,priority:2"`
@@ -60,8 +74,8 @@ type enrollmentRow struct {
 	EndpointName     string     `gorm:"column:endpoint_name;size:120;not null"`
 	DeviceCodeHash   string     `gorm:"column:device_code_hash;type:char(64);not null;uniqueIndex"`
 	UserCodeHash     string     `gorm:"column:user_code_hash;type:char(64);not null;uniqueIndex"`
-	SigningPublicJWK []byte     `gorm:"column:signing_public_jwk;type:blob;not null"`
-	KEMPublicJWK     []byte     `gorm:"column:kem_public_jwk;type:blob;not null"`
+	SigningPublicJWK []byte     `gorm:"column:signing_public_jwk;not null"`
+	KEMPublicJWK     []byte     `gorm:"column:kem_public_jwk;not null"`
 	SigningJKT       string     `gorm:"column:signing_jkt;size:64;not null"`
 	KEMJKT           string     `gorm:"column:kem_jkt;size:64;not null"`
 	Status           string     `gorm:"column:status;size:24;not null;index:idx_harness_enrollment_owner_status,priority:2;index:idx_harness_enrollment_expiry,priority:1"`
@@ -142,9 +156,9 @@ type frameRow struct {
 	Sequence           uint64     `gorm:"column:sequence;not null;uniqueIndex:ux_harness_frame_sequence,priority:4;index:idx_harness_frame_receiver_status_sequence,priority:3"`
 	KeyID              string     `gorm:"column:key_id;type:char(32);not null"`
 	CreatedAtMS        int64      `gorm:"column:created_at_ms;not null"`
-	AAD                []byte     `gorm:"column:aad;type:blob;not null"`
-	Ciphertext         []byte     `gorm:"column:ciphertext;type:blob;not null"`
-	Signature          []byte     `gorm:"column:signature;type:blob;not null"`
+	AAD                []byte     `gorm:"column:aad;not null"`
+	Ciphertext         []byte     `gorm:"column:ciphertext;not null"`
+	Signature          []byte     `gorm:"column:signature;not null"`
 	ContentHash        string     `gorm:"column:content_hash;type:char(64);not null"`
 	Status             string     `gorm:"column:status;size:24;not null;index:idx_harness_frame_receiver_status_sequence,priority:2"`
 	ReceivedAt         time.Time  `gorm:"column:received_at;not null"`
@@ -1074,12 +1088,9 @@ func enrollmentFromRow(row enrollmentRow) (domain.Enrollment, error) {
 	if err != nil {
 		return domain.Enrollment{}, err
 	}
-	var endpointID domain.ID
-	if row.EndpointID != "" {
-		endpointID, err = parseID(row.EndpointID)
-		if err != nil {
-			return domain.Enrollment{}, err
-		}
+	endpointID, err := parseOptionalID(row.EndpointID)
+	if err != nil {
+		return domain.Enrollment{}, err
 	}
 	return domain.Enrollment{
 		ID:               id,

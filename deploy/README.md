@@ -42,3 +42,9 @@ HARNESS_ABA_STORE=/absolute/identity.json \
 This is the local MVP launcher, not a production deployment. Production still requires
 an external database, managed secret/key storage, a provisioned Gateway signer, TLS,
 and an init migration job. ABA remains outbound-only and requires no ingress service.
+
+The target-specific Kubernetes development overlay for Platform, TimescaleDB, Gateway,
+Admin Web and HC Web is documented in
+[`kubernetes/dev-242/README.md`](kubernetes/dev-242/README.md). It preserves ABA's
+loopback-only development KeyStore by using a host-local Gateway bridge; it is not a
+production KMS/OS-Keyring deployment.

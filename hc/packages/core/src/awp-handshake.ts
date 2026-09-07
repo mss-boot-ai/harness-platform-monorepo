@@ -16,6 +16,7 @@ const textEncoder = new TextEncoder();
 
 export interface VerifiedTrustManifest {
   readonly expiresAt: Date;
+  readonly onlineJkt: string;
   readonly onlinePublicJwk: P256PublicJwk;
   readonly onlineVerifyingKey: CryptoKey;
   readonly revision: bigint;
@@ -70,11 +71,13 @@ export async function verifyTrustManifest(input: unknown, now = new Date()): Pro
     throw new Error('trust manifest root or expiry is invalid');
   }
   const onlinePublicJwk = parseP256PublicJwk(objectValue(payload.onlinePublicJwk, 'online JWK'));
-  if ((await publicJwkThumbprint(onlinePublicJwk)) === rootJkt) {
+  const onlineJkt = await publicJwkThumbprint(onlinePublicJwk);
+  if (onlineJkt === rootJkt) {
     throw new Error('root and online signing keys must be distinct');
   }
   return {
     expiresAt: new Date(payload.expiresAtMs),
+    onlineJkt,
     onlinePublicJwk,
     onlineVerifyingKey: await importP256VerifyingKey(onlinePublicJwk),
     revision: BigInt(value.revision),

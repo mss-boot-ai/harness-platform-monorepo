@@ -35,6 +35,8 @@ type trustManifestPayload struct {
 	RootJKT         string                  `json:"rootJkt"`
 }
 
+const trustManifestTTL = 24 * time.Hour
+
 func NewEphemeralTrust(random io.Reader, now time.Time) (*TrustBundle, error) {
 	if random == nil || now.IsZero() {
 		return nil, errors.New("trust key randomness and current time are required")
@@ -47,7 +49,21 @@ func NewEphemeralTrust(random io.Reader, now time.Time) (*TrustBundle, error) {
 	if err != nil {
 		return nil, fmt.Errorf("generate local online signer: %w", err)
 	}
-	return &TrustBundle{Root: root, Online: online, Revision: 1, ExpiresAt: now.Add(24 * time.Hour)}, nil
+	return &TrustBundle{Root: root, Online: online, Revision: 1, ExpiresAt: now.Add(trustManifestTTL)}, nil
+}
+
+// ManifestAt returns a fresh short-lived statement over the same pinned root,
+// online key, and monotonic revision. Refreshing expiry does not rotate trust.
+func (trust *TrustBundle) ManifestAt(now time.Time) (TrustManifest, error) {
+	if trust == nil {
+		return TrustManifest{}, errors.New("Gateway trust bundle is invalid")
+	}
+	if now.IsZero() {
+		return TrustManifest{}, errors.New("Gateway trust manifest time is required")
+	}
+	refreshed := *trust
+	refreshed.ExpiresAt = now.UTC().Add(trustManifestTTL)
+	return refreshed.Manifest()
 }
 
 func (trust *TrustBundle) Manifest() (TrustManifest, error) {

@@ -12,6 +12,21 @@
 !.env.example
 config/application-*.yml
 config/application-*.yaml
+config/application.yml
+config/application.yaml
+
+*.pem
+*.key
+*.p12
+*.pfx
+*.jks
+**/*.pem
+**/*.key
+**/*.p12
+**/*.pfx
+**/*.jks
+secrets
+**/secrets
 
 bin
 *.db

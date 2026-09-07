@@ -273,9 +273,9 @@ func (service Service) random() io.Reader {
 }
 func (service Service) now() time.Time {
 	if service.Now != nil {
-		return service.Now().UTC()
+		return service.Now().UTC().Truncate(time.Microsecond)
 	}
-	return time.Now().UTC()
+	return time.Now().UTC().Truncate(time.Microsecond)
 }
 func (service Service) randomBytes(length int) ([]byte, error) {
 	value := make([]byte, length)

@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"slices"
 	"testing"
 
 	"github.com/gin-gonic/gin"
@@ -91,7 +92,18 @@ func TestProtectedHealthRouteUsesCurrentPrincipalAndSchema(t *testing.T) {
 	if body.Status != "ready" || body.UserID != "owner" || body.TenantID != "tenant" {
 		t.Fatalf("unexpected response: %#v", body)
 	}
-	if len(body.SchemaMigrations) != 7 || body.SchemaMigrations[6] != store.M2ConnectionMigrationID.String() {
+	wantMigrations := []string{
+		store.SchemaMigrationID.String(),
+		store.M1PersistenceMigrationID.String(),
+		store.M2IdentityMigrationID.String(),
+		HarnessAuthorizationMigrationID.String(),
+		HarnessHCRegistrationAuthorizationMigrationID.String(),
+		store.M2GatewayMigrationID.String(),
+		store.M2ConnectionMigrationID.String(),
+		store.ReliabilityMigrationID.String(),
+		store.PortableBinaryMigrationID.String(),
+	}
+	if !slices.Equal(body.SchemaMigrations, wantMigrations) {
 		t.Fatalf("unexpected schema migrations: %#v", body.SchemaMigrations)
 	}
 }

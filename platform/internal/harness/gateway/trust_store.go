@@ -73,7 +73,7 @@ func LoadOrCreateTrustState(path string, random io.Reader, now time.Time) (*Trus
 	if root.D.Cmp(online.D) == 0 {
 		return nil, errors.New("Gateway root and online signing keys must be distinct")
 	}
-	return &TrustBundle{Root: root, Online: online, Revision: state.Revision, ExpiresAt: now.Add(24 * time.Hour)}, nil
+	return &TrustBundle{Root: root, Online: online, Revision: state.Revision, ExpiresAt: now.Add(trustManifestTTL)}, nil
 }
 
 func ensurePrivateDirectory(path string) error {

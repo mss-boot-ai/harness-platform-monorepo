@@ -220,6 +220,10 @@ signature
 
 - Manifest 自身由当前可信 Root/Manifest Signer 签名。
 - Version 单调递增；Endpoint 拒绝回滚到更低版本。
+- Revision 只标识 Root、Online Key、Suite 和策略等信任材料；材料不变时，Platform
+  可以在同一 Revision 下重新签发更晚但仍有界的 `expires_at`。Endpoint 只接受相同
+  Revision、相同 Root/Online Key 且到期时间不回退的刷新。Platform 必须缓存签名结果并按
+  固定窗口刷新，匿名读取不得逐请求驱动 Root/KMS 签名。
 - `next_root` 必须由当前可信根交叉签名或经过用户明确恢复确认。
 - Endpoint 保存最近已接受的 Version 和 Root Fingerprint。
 - Manifest 过期且无法刷新时，已有短期连接可以按有限 Grace 运行；新 Enrollment、证书签发和未知 Root 必须失败关闭。

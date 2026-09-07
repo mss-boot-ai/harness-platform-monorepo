@@ -35,7 +35,6 @@ const CONTROL_TIME_SKEW_MS: i64 = 60_000;
 
 pub(super) struct ControlState {
     platform_inbound_sequence: u64,
-    hc_inbound_sequences: HashMap<[u8; 16], u64>,
     outbound_sequence: u64,
     sessions: HashMap<[u8; 16], LocalSession>,
     journal: Journal,
@@ -72,7 +71,6 @@ impl ControlState {
     pub fn new(journal: Journal) -> Self {
         Self {
             platform_inbound_sequence: 0,
-            hc_inbound_sequences: HashMap::new(),
             outbound_sequence: 0,
             sessions: HashMap::new(),
             journal,
@@ -470,17 +468,11 @@ impl ControlState {
             .as_slice()
             .try_into()
             .map_err(|_| GatewayError::Protocol)?;
-        let sequence_is_contiguous = self
-            .hc_inbound_sequences
-            .get(&sender_id)
-            .map_or(control_frame.control_sequence > 0, |previous| {
-                previous.checked_add(1) == Some(control_frame.control_sequence)
-            });
         let now_ms = unix_millis(now)?;
         if control_frame.message_id.len() != 16
             || sender_id.iter().all(|value| *value == 0)
             || control_frame.receiver_endpoint_id != endpoint_id
-            || !sequence_is_contiguous
+            || control_frame.control_sequence == 0
             || control_frame.payload.is_empty()
             || control_frame.signature.len() != 64
             || control_frame.created_at_ms < now_ms - CONTROL_TIME_SKEW_MS
@@ -524,8 +516,10 @@ impl ControlState {
         ) {
             return Err(GatewayError::Trust);
         }
-        self.hc_inbound_sequences
-            .insert(sender_id, control_frame.control_sequence);
+        // HC control sequences are scoped to its Gateway connection, which may
+        // change independently of this ABA connection. Replay protection here
+        // is the signed Session/KeyPackage/recipient binding and the one-way
+        // inactive -> active transition; an ACK cannot activate another session.
         self.sessions
             .get_mut(&session_id)
             .ok_or(GatewayError::Protocol)?
@@ -1107,7 +1101,8 @@ mod tests {
             expires_at_ms: unix_millis(now)? + 30_000,
             ..Default::default()
         });
-        let packet = platform_open_packet(&online, &endpoint_id, request, unix_millis(now)?, 1)?;
+        let packet =
+            platform_open_packet(&online, &endpoint_id, request.clone(), unix_millis(now)?, 1)?;
         let mut state = ControlState::new(Journal::memory(1 << 20));
         let credential_id = [15_u8; 16];
         let encoded = state.handle(
@@ -1183,7 +1178,7 @@ mod tests {
             control_type: ControlType::SessionKeyPackageAck as u32,
             payload: &ack_payload,
         })?;
-        let ack_packet = WirePacket {
+        let mut ack_packet = WirePacket {
             wire_major: 1,
             wire_minor: 0,
             packet_id: vec![19_u8; 16],
@@ -1199,7 +1194,7 @@ mod tests {
             })),
         };
         let ack_response = state.handle(
-            ack_packet,
+            ack_packet.clone(),
             ControlContext {
                 endpoint_id: &endpoint_id,
                 online_key: online.verifying_key(),
@@ -1267,6 +1262,83 @@ mod tests {
         let closed_result = CloseTunnelResult::decode(closed_control.payload.as_slice())?;
         assert_eq!(closed_result.status, CloseTunnelStatus::Accepted as i32);
         assert!(state.sessions.is_empty());
+        // A reconnected HC starts its control sequence again, while ABA keeps
+        // its existing connection. A new session must accept that fresh ACK.
+        let mut next_request = request;
+        next_request.session_id = vec![24_u8; 16];
+        let next_packets = state.handle(
+            platform_open_packet(&online, &endpoint_id, next_request, unix_millis(now)?, 3)?,
+            ControlContext {
+                endpoint_id: &endpoint_id,
+                online_key: online.verifying_key(),
+                identity: &identity,
+                config: &config,
+                credential_id: &credential_id,
+                now,
+            },
+        )?;
+        let next_packet = WirePacket::decode(next_packets[1].as_slice())?;
+        let Some(wire_packet::Body::Control(next_frame)) = next_packet.body else {
+            return Err("missing next key package".into());
+        };
+        let next_package = SessionKeyPackage::decode(next_frame.payload.as_slice())?;
+        let Some(wire_packet::Body::Control(ref mut next_ack)) = ack_packet.body else {
+            return Err("missing acknowledgment".into());
+        };
+        next_ack.control_sequence = 1;
+        next_ack.payload = SessionKeyPackageAck {
+            session_id: next_package.session_id,
+            key_generation: next_package.key_generation,
+            key_package_id: next_package.key_package_id,
+            recipient_hc_endpoint_id: hc_endpoint_id.to_vec(),
+            acknowledged_at_ms: unix_millis(now)?,
+        }
+        .encode_to_vec();
+        next_ack.signature = sign_p1363_low_s(
+            &hc_signing,
+            &control(ControlInput {
+                message_id: &next_ack.message_id,
+                sender_endpoint_id: &hc_endpoint_id,
+                receiver_endpoint_id: &endpoint_id,
+                sequence: 1,
+                created_at_ms: unix_millis(now)?,
+                control_type: ControlType::SessionKeyPackageAck as u32,
+                payload: &next_ack.payload,
+            })?,
+        )
+        .to_vec();
+        state.handle(
+            ack_packet.clone(),
+            ControlContext {
+                endpoint_id: &endpoint_id,
+                online_key: online.verifying_key(),
+                identity: &identity,
+                config: &config,
+                credential_id: &credential_id,
+                now,
+            },
+        )?;
+        assert!(
+            state
+                .sessions
+                .get(&[24_u8; 16])
+                .is_some_and(|session| session.active)
+        );
+        assert!(
+            state
+                .handle(
+                    ack_packet,
+                    ControlContext {
+                        endpoint_id: &endpoint_id,
+                        online_key: online.verifying_key(),
+                        identity: &identity,
+                        config: &config,
+                        credential_id: &credential_id,
+                        now
+                    }
+                )
+                .is_err()
+        );
         Ok(())
     }
 

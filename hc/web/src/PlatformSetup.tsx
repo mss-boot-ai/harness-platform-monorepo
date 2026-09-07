@@ -37,7 +37,7 @@ export function PlatformSetup({ identity, onRegistered, registration }: Platform
       if (cause instanceof HcApiError) {
         setError(`${cause.message}（${cause.code}）`);
       } else {
-        setError('Platform 注册失败，请确认本地服务与网络状态。');
+        setError('Platform 注册失败，请确认 Platform 服务与网络状态。');
       }
     } finally {
       setBusy(false);

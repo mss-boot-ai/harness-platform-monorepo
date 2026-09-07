@@ -1,0 +1,83 @@
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: harness-dev
+  namespace: harness-dev
+  labels:
+    app.kubernetes.io/part-of: harness-platform
+  annotations:
+    cert-manager.io/issuer: harness-dev-letsencrypt-production
+    nginx.ingress.kubernetes.io/force-ssl-redirect: "true"
+    nginx.ingress.kubernetes.io/ssl-redirect: "true"
+spec:
+  ingressClassName: HARNESS_INGRESS_CLASS
+  tls:
+    - hosts:
+        - platform-dev.mss-boot-io.top
+        - hc-dev.mss-boot-io.top
+      secretName: harness-dev-mss-boot-io-tls
+  rules:
+    - host: platform-dev.mss-boot-io.top
+      http:
+        paths:
+          - path: /admin/api
+            pathType: Prefix
+            backend:
+              service:
+                name: harness-platform-api
+                port:
+                  name: http
+          - path: /
+            pathType: Prefix
+            backend:
+              service:
+                name: harness-platform-web
+                port:
+                  name: http
+    - host: hc-dev.mss-boot-io.top
+      http:
+        paths:
+          - path: /admin/api
+            pathType: Prefix
+            backend:
+              service:
+                name: harness-platform-api
+                port:
+                  name: http
+          - path: /
+            pathType: Prefix
+            backend:
+              service:
+                name: harness-hc-web
+                port:
+                  name: http
+---
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: harness-dev-gateway
+  namespace: harness-dev
+  labels:
+    app.kubernetes.io/part-of: harness-platform
+  annotations:
+    nginx.ingress.kubernetes.io/force-ssl-redirect: "true"
+    nginx.ingress.kubernetes.io/proxy-read-timeout: "3600"
+    nginx.ingress.kubernetes.io/proxy-send-timeout: "3600"
+    nginx.ingress.kubernetes.io/ssl-redirect: "true"
+spec:
+  ingressClassName: HARNESS_INGRESS_CLASS
+  tls:
+    - hosts:
+        - hc-dev.mss-boot-io.top
+      secretName: harness-dev-mss-boot-io-tls
+  rules:
+    - host: hc-dev.mss-boot-io.top
+      http:
+        paths:
+          - path: /gateway/v1
+            pathType: Prefix
+            backend:
+              service:
+                name: harness-gateway
+                port:
+                  name: http

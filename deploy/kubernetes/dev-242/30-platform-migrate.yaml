@@ -1,0 +1,85 @@
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: harness-platform-migrate
+  namespace: harness-dev
+  labels:
+    app.kubernetes.io/name: harness-platform
+    app.kubernetes.io/part-of: harness-platform
+    app.kubernetes.io/component: migration
+spec:
+  backoffLimit: 2
+  activeDeadlineSeconds: 600
+  ttlSecondsAfterFinished: 86400
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: harness-platform
+        app.kubernetes.io/part-of: harness-platform
+        app.kubernetes.io/component: migration
+    spec:
+      automountServiceAccountToken: false
+      restartPolicy: Never
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 65532
+        runAsGroup: 65532
+        seccompProfile:
+          type: RuntimeDefault
+      containers:
+        - name: platform-migrate
+          image: harness-platform-api:dev
+          imagePullPolicy: IfNotPresent
+          args: ["migrate", "--domain", "platform-dev.mss-boot-io.top"]
+          env:
+            - name: CONFIG_PROVIDER
+              value: local
+            - name: STAGE
+              value: dev-242
+            - name: HARNESS_DATABASE_DSN
+              valueFrom:
+                secretKeyRef:
+                  name: harness-database
+                  key: HARNESS_DATABASE_DSN
+            - name: HARNESS_ADMIN_AUTH_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: harness-platform-runtime
+                  key: HARNESS_ADMIN_AUTH_KEY
+            - name: HARNESS_ADMIN_IDENTITY_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: harness-platform-runtime
+                  key: HARNESS_ADMIN_IDENTITY_KEY
+            - name: MSS_ADMIN_INITIAL_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: harness-platform-bootstrap
+                  key: MSS_ADMIN_INITIAL_PASSWORD
+                  optional: true
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop: ["ALL"]
+          resources:
+            requests:
+              cpu: 5m
+              memory: 64Mi
+            limits:
+              cpu: 500m
+              memory: 256Mi
+          volumeMounts:
+            - name: config
+              mountPath: /app/config/application.yml
+              subPath: application.yml
+              readOnly: true
+            - name: tmp
+              mountPath: /tmp
+      volumes:
+        - name: config
+          configMap:
+            name: harness-platform-config
+        - name: tmp
+          emptyDir:
+            sizeLimit: 64Mi

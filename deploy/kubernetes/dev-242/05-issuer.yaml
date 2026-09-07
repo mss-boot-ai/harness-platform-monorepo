@@ -1,0 +1,28 @@
+apiVersion: cert-manager.io/v1
+kind: Issuer
+metadata:
+  name: harness-dev-letsencrypt-production
+  namespace: harness-dev
+  labels:
+    app.kubernetes.io/name: harness-platform
+    app.kubernetes.io/part-of: harness-platform
+    app.kubernetes.io/component: tls
+spec:
+  acme:
+    email: HARNESS_ACME_EMAIL
+    privateKeySecretRef:
+      name: harness-dev-letsencrypt-production-account-key
+    server: https://acme-v02.api.letsencrypt.org/directory
+    solvers:
+      - http01:
+          ingress:
+            ingressClassName: HARNESS_INGRESS_CLASS
+            podTemplate:
+              spec:
+                resources:
+                  requests:
+                    cpu: 5m
+                    memory: 32Mi
+                  limits:
+                    cpu: 100m
+                    memory: 64Mi

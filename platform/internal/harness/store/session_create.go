@@ -6,6 +6,7 @@ import (
 	"strings"
 
 	"github.com/mss-boot-ai/harness-platform-monorepo/platform/internal/harness/domain"
+	"gorm.io/gorm"
 	"gorm.io/gorm/clause"
 )
 
@@ -70,21 +71,14 @@ func (store *Store) CreateEndpointSession(
 }
 
 func (store *Store) authorizeAndCreateEndpointSession(ctx context.Context, session domain.Session) error {
-	var endpoints []endpointRow
-	if err := store.db.WithContext(ctx).Clauses(clause.Locking{Strength: "UPDATE"}).Where(
-		"id IN ?", []string{session.ABAEndpointID.String(), session.HCEndpointID.String()},
-	).Find(&endpoints).Error; err != nil {
-		return classifyPersistence(err, "authorize session endpoints")
+	aba, err := lockSessionCreationEndpoint(store.db.WithContext(ctx), session.ABAEndpointID)
+	if err != nil {
+		return err
 	}
-	if len(endpoints) != 2 {
-		return domain.NewProblem(domain.CodeNotFound, "session endpoint was not found", nil)
+	hc, err := lockSessionCreationEndpoint(store.db.WithContext(ctx), session.HCEndpointID)
+	if err != nil {
+		return err
 	}
-	byID := make(map[string]endpointRow, len(endpoints))
-	for _, endpoint := range endpoints {
-		byID[endpoint.ID] = endpoint
-	}
-	aba := byID[session.ABAEndpointID.String()]
-	hc := byID[session.HCEndpointID.String()]
 	if aba.OwnerUserID != strings.TrimSpace(session.OwnerUserID) || aba.TenantID != strings.TrimSpace(session.TenantID) ||
 		hc.OwnerUserID != strings.TrimSpace(session.OwnerUserID) || hc.TenantID != strings.TrimSpace(session.TenantID) {
 		return domain.NewProblem(domain.CodeNotFound, "session endpoint was not found", nil)
@@ -120,4 +114,14 @@ func (store *Store) authorizeAndCreateEndpointSession(ctx context.Context, sessi
 		return classifyPersistence(err, "create endpoint session")
 	}
 	return nil
+}
+
+func lockSessionCreationEndpoint(tx *gorm.DB, id domain.ID) (endpointRow, error) {
+	var endpoint endpointRow
+	if err := tx.Clauses(clause.Locking{Strength: "UPDATE"}).First(
+		&endpoint, "id = ?", id.String(),
+	).Error; err != nil {
+		return endpointRow{}, notFoundOr("authorize session endpoint", "session endpoint was not found", err)
+	}
+	return endpoint, nil
 }

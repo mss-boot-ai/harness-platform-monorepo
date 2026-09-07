@@ -83,11 +83,9 @@ func (store *Store) putAuthorizedEndpointFrameOnce(
 			return err
 		}
 
-		sender, err := lockAuthorizedFrameEndpoint(tx, frame.SenderEndpointID, owner, tenant)
-		if err != nil {
-			return err
-		}
-		receiver, err := lockAuthorizedFrameEndpoint(tx, frame.ReceiverEndpointID, owner, tenant)
+		sender, receiver, err := lockAuthorizedFrameRouteEndpoints(
+			tx, session, frame.Direction, owner, tenant,
+		)
 		if err != nil {
 			return err
 		}
@@ -120,6 +118,41 @@ func (store *Store) putAuthorizedEndpointFrameOnce(
 		return "", semanticConflict
 	}
 	return outcome, nil
+}
+
+func lockAuthorizedFrameRouteEndpoints(
+	tx *gorm.DB,
+	session sessionRow,
+	direction domain.Direction,
+	owner string,
+	tenant string,
+) (endpointRow, endpointRow, error) {
+	abaID, err := parseID(session.ABAEndpointID)
+	if err != nil {
+		return endpointRow{}, endpointRow{}, err
+	}
+	hcID, err := parseID(session.HCEndpointID)
+	if err != nil {
+		return endpointRow{}, endpointRow{}, err
+	}
+	aba, err := lockAuthorizedFrameEndpoint(tx, abaID, owner, tenant)
+	if err != nil {
+		return endpointRow{}, endpointRow{}, err
+	}
+	hc, err := lockAuthorizedFrameEndpoint(tx, hcID, owner, tenant)
+	if err != nil {
+		return endpointRow{}, endpointRow{}, err
+	}
+	switch direction {
+	case domain.DirectionHCToABA:
+		return hc, aba, nil
+	case domain.DirectionABAToHC:
+		return aba, hc, nil
+	default:
+		return endpointRow{}, endpointRow{}, domain.NewProblem(
+			domain.CodeInvalidArgument, "encrypted frame direction is invalid", nil,
+		)
+	}
 }
 
 func putAuthorizedFrameRow(tx *gorm.DB, row frameRow) (PutFrameOutcome, error, error) {

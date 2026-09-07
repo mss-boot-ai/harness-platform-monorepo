@@ -72,17 +72,26 @@ func (store *Store) RotateRefreshCredential(
 	}
 	var reused bool
 	err := store.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
+		// Read immutable routing data before taking locks, then use the shared
+		// Endpoint -> Credential order used by revocation and frame writes.
+		var candidate refreshCredentialRow
+		if err := tx.Where("token_hash = ?", hashString(presentedHash)).Take(&candidate).Error; err != nil {
+			return gatewayRefreshError(err)
+		}
+		var endpointRecord endpointRow
+		if err := tx.Clauses(clause.Locking{Strength: "UPDATE"}).Where("id = ?", candidate.EndpointID).Take(&endpointRecord).Error; err != nil {
+			return gatewayRefreshError(err)
+		}
 		var currentRow refreshCredentialRow
-		if err := tx.Clauses(clause.Locking{Strength: "UPDATE"}).Where("token_hash = ?", hashString(presentedHash)).Take(&currentRow).Error; err != nil {
+		if err := tx.Clauses(clause.Locking{Strength: "UPDATE"}).Where(
+			"id = ? AND token_hash = ? AND endpoint_id = ?",
+			candidate.ID, hashString(presentedHash), endpointRecord.ID,
+		).Take(&currentRow).Error; err != nil {
 			return gatewayRefreshError(err)
 		}
 		current, err := refreshCredentialFromRow(currentRow)
 		if err != nil {
 			return err
-		}
-		var endpointRecord endpointRow
-		if err := tx.Clauses(clause.Locking{Strength: "UPDATE"}).Where("id = ?", currentRow.EndpointID).Take(&endpointRecord).Error; err != nil {
-			return gatewayRefreshError(err)
 		}
 		endpoint, err := endpointFromRow(endpointRecord)
 		if err != nil {

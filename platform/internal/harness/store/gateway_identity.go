@@ -145,7 +145,7 @@ func (store *Store) NextConnectionGeneration(
 		clause.OnConflict{
 			Columns: []clause.Column{{Name: "endpoint_id"}},
 			DoUpdates: clause.Assignments(map[string]any{
-				"generation": gorm.Expr("generation + 1"), "updated_at": now,
+				"generation": gorm.Expr("? + 1", clause.Column{Table: "harness_connection_generations", Name: "generation"}), "updated_at": now,
 			}),
 		},
 		clause.Returning{Columns: []clause.Column{{Name: "generation"}}},
@@ -243,7 +243,7 @@ func (store *Store) PutEndpointNonce(
 		Columns: []clause.Column{{Name: "endpoint_id"}},
 		DoUpdates: clause.Assignments(map[string]any{
 			"nonce_hash": row.NonceHash, "issued_at": now, "expires_at": expiresAt,
-			"row_version": gorm.Expr("row_version + 1"),
+			"row_version": gorm.Expr("? + 1", clause.Column{Table: "harness_endpoint_nonces", Name: "row_version"}),
 		}),
 	}).Create(&row).Error; err != nil {
 		return classifyPersistence(err, "store endpoint nonce")

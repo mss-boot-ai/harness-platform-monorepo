@@ -157,8 +157,21 @@ export class IndexedDbSecureStore {
     }
   }
 
-  public async pinTrustRoot(rootJkt: string, revision: bigint): Promise<void> {
-    if (!/^[A-Za-z0-9_-]{43}$/u.test(rootJkt) || revision <= 0n) {
+  public async pinTrustRoot(
+    rootJkt: string,
+    revision: bigint,
+    onlineJkt: string,
+    expiresAt: Date,
+  ): Promise<void> {
+    const expiresAtMs = expiresAt.getTime();
+    if (
+      !/^[A-Za-z0-9_-]{43}$/u.test(rootJkt) ||
+      !/^[A-Za-z0-9_-]{43}$/u.test(onlineJkt) ||
+      rootJkt === onlineJkt ||
+      revision <= 0n ||
+      !Number.isSafeInteger(expiresAtMs) ||
+      expiresAtMs <= 0
+    ) {
       throw new Error('Gateway trust pin is invalid');
     }
     const database = await this.open();
@@ -167,7 +180,13 @@ export class IndexedDbSecureStore {
       const objectStore = transaction.objectStore(TRUST_PIN_STORE);
       const current = await requestResult(
         objectStore.get(GATEWAY_ROOT_PIN) as IDBRequest<
-          { id: string; revision: string; rootJkt: string } | undefined
+          {
+            expiresAtMs?: number;
+            id: string;
+            onlineJkt?: string;
+            revision: string;
+            rootJkt: string;
+          } | undefined
         >,
       );
       if (current !== undefined) {
@@ -177,8 +196,21 @@ export class IndexedDbSecureStore {
         if (BigInt(current.revision) > revision) {
           throw new Error('Gateway trust manifest revision rolled back');
         }
+        if (
+          BigInt(current.revision) === revision &&
+          ((current.onlineJkt !== undefined && current.onlineJkt !== onlineJkt) ||
+            (current.expiresAtMs !== undefined && current.expiresAtMs > expiresAtMs))
+        ) {
+          throw new Error('Gateway trust manifest changed within one revision');
+        }
       }
-      objectStore.put({ id: GATEWAY_ROOT_PIN, revision: revision.toString(), rootJkt });
+      objectStore.put({
+        expiresAtMs,
+        id: GATEWAY_ROOT_PIN,
+        onlineJkt,
+        revision: revision.toString(),
+        rootJkt,
+      });
       await transactionComplete(transaction);
     } catch (error) {
       try {

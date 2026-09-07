@@ -77,6 +77,129 @@ jobs:
           pnpm test
           pnpm build
 
+  platform-timescaledb:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    services:
+      timescaledb:
+        image: timescale/timescaledb:2.29.2-pg16@sha256:289d55704b1b3ee8263cd3805c6930f9cd54506835a8f19f9b85dad17d5c5a8a
+        env:
+          POSTGRES_DB: harness_test
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: harness-test-password
+          TIMESCALEDB_TELEMETRY: "off"
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U postgres -d harness_test"
+          --health-interval 5s
+          --health-timeout 3s
+          --health-retries 30
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/setup-go@v6
+        with:
+          go-version-file: platform/go.mod
+          cache-dependency-path: platform/go.sum
+      - name: Build the exact Platform migration binary
+        working-directory: platform
+        run: |
+          go build -trimpath -o "${RUNNER_TEMP}/harness-platform" ./cmd/server
+          go build -trimpath -o "${RUNNER_TEMP}/harness-gateway" ./cmd/harness-gateway
+      - name: Run the full Platform migration twice on TimescaleDB
+        env:
+          HARNESS_DATABASE_DSN: host=127.0.0.1 port=5432 user=postgres password=harness-test-password dbname=harness_test sslmode=disable TimeZone=UTC
+          HARNESS_ADMIN_AUTH_KEY: CI-only-auth-key-with-more-than-32-bytes-1234567890
+          HARNESS_ADMIN_IDENTITY_KEY: CI-only-identity-key-with-more-than-32-bytes-1234567890
+          MSS_ADMIN_INITIAL_PASSWORD: HarnessCiPassword1
+          CONFIG_PROVIDER: local
+          STAGE: dev-242
+        run: |
+          set -Eeuo pipefail
+          mkdir -p "${RUNNER_TEMP}/harness-config/config"
+          cp deploy/kubernetes/dev-242/application.yml "${RUNNER_TEMP}/harness-config/config/application.yml"
+          cd "${RUNNER_TEMP}/harness-config"
+          "${RUNNER_TEMP}/harness-platform" migrate --domain platform-dev.mss-boot-io.top
+          unset MSS_ADMIN_INITIAL_PASSWORD
+          "${RUNNER_TEMP}/harness-platform" migrate --domain platform-dev.mss-boot-io.top
+      - name: Start Platform and Gateway against the migrated schema
+        env:
+          HARNESS_DATABASE_DSN: host=127.0.0.1 port=5432 user=postgres password=harness-test-password dbname=harness_test sslmode=disable TimeZone=UTC
+          HARNESS_ADMIN_AUTH_KEY: CI-only-auth-key-with-more-than-32-bytes-1234567890
+          HARNESS_ADMIN_IDENTITY_KEY: CI-only-identity-key-with-more-than-32-bytes-1234567890
+          CONFIG_PROVIDER: local
+          STAGE: dev-242
+          HARNESS_GATEWAY_DB_DRIVER: postgres
+          HARNESS_GATEWAY_DB_DSN: host=127.0.0.1 port=5432 user=postgres password=harness-test-password dbname=harness_test sslmode=disable TimeZone=UTC
+          HARNESS_GATEWAY_ADDR: 127.0.0.1:8082
+          HARNESS_GATEWAY_ALLOWED_ORIGIN: https://hc-dev.mss-boot-io.top
+          HARNESS_GATEWAY_EXTERNAL_ORIGIN: https://hc-dev.mss-boot-io.top
+          HARNESS_GATEWAY_NATIVE_EXTERNAL_ORIGIN: http://127.0.0.1:18082
+          HARNESS_GATEWAY_VERIFICATION_URI: https://platform-dev.mss-boot-io.top/harness/enrollments
+        run: |
+          set -Eeuo pipefail
+          cd "${RUNNER_TEMP}/harness-config"
+          "${RUNNER_TEMP}/harness-platform" server >"${RUNNER_TEMP}/platform.log" 2>&1 &
+          platform_pid=$!
+          HARNESS_GATEWAY_TRUST_FILE="${RUNNER_TEMP}/gateway-private/trust.json" \
+            "${RUNNER_TEMP}/harness-gateway" >"${RUNNER_TEMP}/gateway.log" 2>&1 &
+          gateway_pid=$!
+          cleanup() {
+            kill -TERM "${platform_pid}" "${gateway_pid}" 2>/dev/null || true
+            wait "${platform_pid}" "${gateway_pid}" 2>/dev/null || true
+          }
+          trap cleanup EXIT
+          curl --fail --silent --show-error --retry 60 --retry-delay 1 --retry-connrefused \
+            http://127.0.0.1:8080/readyz >/dev/null
+          curl --fail --silent --show-error --retry 60 --retry-delay 1 --retry-connrefused \
+            http://127.0.0.1:8082/gateway/v1/ready >/dev/null
+      - name: Verify Harness schema contracts on TimescaleDB
+        working-directory: platform
+        env:
+          HARNESS_TEST_POSTGRES_DSN: host=127.0.0.1 port=5432 user=postgres password=harness-test-password dbname=harness_test sslmode=disable
+        run: go test -count=1 -run 'TestPostgres(SchemaMigrationContract|EnrollmentRoundTrip)' ./internal/harness/store
+
+  container-images:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 40
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - name: Build deployable Platform, Gateway and HC images
+        run: |
+          set -Eeuo pipefail
+          docker build -f platform/Dockerfile -t harness-platform-api:${GITHUB_SHA} platform
+          docker build -f platform/Dockerfile.web -t harness-platform-web:${GITHUB_SHA} platform
+          docker build -f platform/Dockerfile.gateway -t harness-gateway:${GITHUB_SHA} platform
+          docker build -f hc/Dockerfile -t harness-hc-web:${GITHUB_SHA} hc
+      - name: Smoke-test image users and static runtimes
+        run: |
+          set -Eeuo pipefail
+          test "$(docker image inspect --format '{{.Config.User}}' harness-platform-api:${GITHUB_SHA})" = '65532:65532'
+          test "$(docker image inspect --format '{{.Config.User}}' harness-gateway:${GITHUB_SHA})" = '65532:65532'
+          test "$(docker image inspect --format '{{.Config.User}}' harness-platform-web:${GITHUB_SHA})" = '101:101'
+          test "$(docker image inspect --format '{{.Config.User}}' harness-hc-web:${GITHUB_SHA})" = '101:101'
+          docker image inspect --format '{{range .Config.Env}}{{println .}}{{end}}' harness-gateway:${GITHUB_SHA} \
+            | grep -Fx 'HARNESS_GATEWAY_ADDR=0.0.0.0:8082'
+          docker image inspect --format '{{range .Config.Env}}{{println .}}{{end}}' harness-gateway:${GITHUB_SHA} \
+            | grep -Fx 'HARNESS_GATEWAY_DB_DRIVER=postgres'
+          platform_web_id="$(docker run -d --read-only --tmpfs /tmp:rw,noexec,nosuid,size=64m \
+            -p 127.0.0.1:18080:8080 harness-platform-web:${GITHUB_SHA})"
+          hc_web_id="$(docker run -d --read-only --tmpfs /tmp:rw,noexec,nosuid,size=64m \
+            -p 127.0.0.1:18081:8080 harness-hc-web:${GITHUB_SHA})"
+          trap 'docker rm -f "${platform_web_id}" "${hc_web_id}" >/dev/null 2>&1 || true' EXIT
+          curl --fail --silent --show-error --retry 20 --retry-delay 1 http://127.0.0.1:18080/healthz
+          curl --fail --silent --show-error --retry 20 --retry-delay 1 http://127.0.0.1:18081/healthz
+          curl --fail --silent --show-error --dump-header "${RUNNER_TEMP}/platform-headers" \
+            --output /dev/null http://127.0.0.1:18080/
+          curl --silent --show-error --head --dump-header "${RUNNER_TEMP}/platform-route-headers" \
+            --output /dev/null http://127.0.0.1:18080/harness/enrollments
+          curl --fail --silent --show-error --dump-header "${RUNNER_TEMP}/hc-headers" \
+            --output /dev/null http://127.0.0.1:18081/
+          grep -Fi 'Content-Security-Policy:' "${RUNNER_TEMP}/platform-headers"
+          tr -d '\r' <"${RUNNER_TEMP}/platform-route-headers" \
+            | grep -Fix 'location: /harness/enrollments/'
+          grep -Fi "require-trusted-types-for 'script'" "${RUNNER_TEMP}/hc-headers"
+
   protocol:
     runs-on: ubuntu-24.04
     timeout-minutes: 10
@@ -102,6 +225,34 @@ jobs:
           cargo +1.88.0 fmt --all -- --check
           cargo +1.88.0 clippy --locked --workspace --all-targets --all-features -- -D warnings
           cargo +1.88.0 test --locked --workspace --all-targets
+          cargo +1.88.0 build --locked --bin aba --bin test-agent
+          probe_workspace="$(mktemp -d "${RUNNER_TEMP}/aba-probe-workspace.XXXXXX")"
+          test_agent="$(realpath target/debug/test-agent)"
+          printf '%s\n' \
+            'schema_version = 1' \
+            '[platform]' \
+            'url = "http://127.0.0.1:18082"' \
+            '[[runtime]]' \
+            'id = "test-agent"' \
+            'display_name = "Test Agent"' \
+            "command = \"${test_agent}\"" \
+            'args = []' \
+            'env_allow = ["HOME", "PATH"]' \
+            'max_sessions = 1' \
+            '[[workspace]]' \
+            'id = "probe"' \
+            'display_name = "Probe"' \
+            "path = \"${probe_workspace}\"" \
+            'allowed_runtimes = ["test-agent"]' \
+            'follow_symlinks = false' \
+            >"${RUNNER_TEMP}/aba-probe.toml"
+          target/debug/aba runtime probe \
+            --config "${RUNNER_TEMP}/aba-probe.toml" \
+            --runtime test-agent \
+            --workspace probe \
+            --insecure-loopback-development
+          PYTHONDONTWRITEBYTECODE=1 python3 -W error::ResourceWarning -m unittest \
+            discover -s adapters/tests -p 'test_*.py'
 
   hc-typescript:
     runs-on: ubuntu-24.04

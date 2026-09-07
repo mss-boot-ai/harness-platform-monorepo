@@ -1,0 +1,22 @@
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: harness-timescaledb-ingress
+  namespace: harness-dev
+  labels:
+    app.kubernetes.io/part-of: harness-platform
+spec:
+  podSelector:
+    matchLabels:
+      app.kubernetes.io/name: harness-timescaledb
+  policyTypes: ["Ingress"]
+  ingress:
+    - from:
+        - podSelector:
+            matchExpressions:
+              - key: app.kubernetes.io/component
+                operator: In
+                values: ["api", "gateway", "migration"]
+      ports:
+        - protocol: TCP
+          port: 5432

@@ -151,7 +151,7 @@ export function App() {
           <span className="brand-mark">H</span>
           <span>Harness HC</span>
         </a>
-        <span className="environment-badge">H5 · LOCAL</span>
+        <span className="environment-badge">H5 · OPAQUE</span>
       </header>
 
       <section className="hero">

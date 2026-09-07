@@ -80,7 +80,12 @@ impl TrustManifestEnvelope {
         {
             return Err(GatewayError::Trust);
         }
-        store.pin_gateway_trust(&root_jkt, self.revision, &payload.online_public_jwk)?;
+        store.pin_gateway_trust(
+            &root_jkt,
+            self.revision,
+            payload.expires_at_ms,
+            &payload.online_public_jwk,
+        )?;
         Ok(VerifiedTrust {
             online_key,
             revision: self.revision,

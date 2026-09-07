@@ -19,8 +19,8 @@ type controlOutboxRow struct {
 	CorrelationID       string     `gorm:"column:correlation_id;type:char(32);not null;uniqueIndex:ux_harness_control_outbox_correlation,priority:2"`
 	RecipientEndpointID string     `gorm:"column:recipient_endpoint_id;type:char(32);not null;uniqueIndex:ux_harness_control_outbox_correlation,priority:3;index:idx_harness_control_outbox_recipient_status,priority:1"`
 	Kind                string     `gorm:"column:kind;size:40;not null;uniqueIndex:ux_harness_control_outbox_correlation,priority:1"`
-	Payload             []byte     `gorm:"column:payload;type:blob"`
-	Packet              []byte     `gorm:"column:packet;type:blob"`
+	Payload             []byte     `gorm:"column:payload"`
+	Packet              []byte     `gorm:"column:packet"`
 	Status              string     `gorm:"column:status;size:24;not null;index:idx_harness_control_outbox_recipient_status,priority:2;index:idx_harness_control_outbox_session_status,priority:2"`
 	CreatedAt           time.Time  `gorm:"column:created_at;not null;index:idx_harness_control_outbox_recipient_status,priority:3"`
 	UpdatedAt           time.Time  `gorm:"column:updated_at;not null"`
@@ -45,7 +45,7 @@ func RegisterReliabilityMigration(runner *migration.Migration) error {
 	if runner == nil {
 		return errors.New("harness reliability migration runner is required")
 	}
-	return runner.Register(ReliabilityMigrationID, func(db *gorm.DB, version string) error {
+	if err := runner.Register(ReliabilityMigrationID, func(db *gorm.DB, version string) error {
 		if version != ReliabilityMigrationID.String() {
 			return errors.New("harness reliability migration version mismatch")
 		}
@@ -53,7 +53,10 @@ func RegisterReliabilityMigration(runner *migration.Migration) error {
 			return err
 		}
 		return runner.CreateVersion(db, version)
-	})
+	}); err != nil {
+		return err
+	}
+	return RegisterPortableBinaryMigration(runner)
 }
 
 func CreateReliabilitySchema(db *gorm.DB) error {
