@@ -1088,12 +1088,9 @@ func enrollmentFromRow(row enrollmentRow) (domain.Enrollment, error) {
 	if err != nil {
 		return domain.Enrollment{}, err
 	}
-	var endpointID domain.ID
-	if row.EndpointID != "" {
-		endpointID, err = parseID(row.EndpointID)
-		if err != nil {
-			return domain.Enrollment{}, err
-		}
+	endpointID, err := parseOptionalID(row.EndpointID)
+	if err != nil {
+		return domain.Enrollment{}, err
 	}
 	return domain.Enrollment{
 		ID:               id,

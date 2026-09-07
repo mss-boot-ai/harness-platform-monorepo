@@ -157,7 +157,7 @@ jobs:
         working-directory: platform
         env:
           HARNESS_TEST_POSTGRES_DSN: host=127.0.0.1 port=5432 user=postgres password=harness-test-password dbname=harness_test sslmode=disable
-        run: go test -count=1 -run TestPostgresSchemaMigrationContract ./internal/harness/store
+        run: go test -count=1 -run 'TestPostgres(SchemaMigrationContract|EnrollmentRoundTrip)' ./internal/harness/store
 
   container-images:
     runs-on: ubuntu-24.04

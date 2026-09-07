@@ -72,6 +72,7 @@ func TestPostgresSchemaMigrationContract(t *testing.T) {
 	if err := VerifyAllSchema(db); err != nil {
 		t.Fatalf("VerifyAllSchema on TimescaleDB: %v", err)
 	}
+	exercisePostgresEnrollmentRoundTrip(t, db)
 	if err := db.Exec(`DROP INDEX "ux_harness_endpoint_owner_sign"`).Error; err != nil {
 		t.Fatalf("drop PostgreSQL security index for partial-index negative test: %v", err)
 	}
@@ -104,6 +105,66 @@ func TestPostgresSchemaMigrationContract(t *testing.T) {
 	}
 	exercisePostgresAuthorizedFrames(t, db)
 	exercisePostgresRefreshRevocationLocks(t, db)
+}
+
+func TestPostgresEnrollmentRoundTrip(t *testing.T) {
+	dsn := strings.TrimSpace(os.Getenv("HARNESS_TEST_POSTGRES_DSN"))
+	if dsn == "" {
+		t.Skip("HARNESS_TEST_POSTGRES_DSN is not configured")
+	}
+	db, err := gorm.Open(postgres.Open(dsn), &gorm.Config{Logger: logger.Default.LogMode(logger.Silent)})
+	if err != nil {
+		t.Fatalf("open PostgreSQL enrollment database: %v", err)
+	}
+	closeGORMDatabase(t, db)
+	exercisePostgresEnrollmentRoundTrip(t, db)
+}
+
+func exercisePostgresEnrollmentRoundTrip(t *testing.T, db *gorm.DB) {
+	t.Helper()
+	persistence, err := New(db)
+	if err != nil {
+		t.Fatalf("New PostgreSQL Store for enrollment: %v", err)
+	}
+	now := time.Unix(1_800_200_000, 0).UTC()
+	endpoint := endpoint(0x31, 0x32, 0x33, domain.EndpointTypeABA, "", now)
+	enrollmentID, err := domain.NewID(rand.Reader)
+	if err != nil {
+		t.Fatalf("generate PostgreSQL enrollment ID: %v", err)
+	}
+	deviceRaw := make([]byte, 32)
+	userRaw := make([]byte, 32)
+	if _, err := rand.Read(deviceRaw); err != nil {
+		t.Fatalf("generate PostgreSQL enrollment device code: %v", err)
+	}
+	if _, err := rand.Read(userRaw); err != nil {
+		t.Fatalf("generate PostgreSQL enrollment user code: %v", err)
+	}
+	deviceHash := sha256.Sum256(deviceRaw)
+	userHash := sha256.Sum256(userRaw)
+	enrollment := domain.Enrollment{
+		ID: enrollmentID, EndpointType: domain.EndpointTypeABA, EndpointName: "PostgreSQL ABA",
+		DeviceCodeHash: deviceHash, UserCodeHash: userHash,
+		SigningPublicJWK: endpoint.SigningPublicJWK, KEMPublicJWK: endpoint.KEMPublicJWK,
+		SigningJKT: endpoint.SigningJKT, KEMJKT: endpoint.KEMJKT,
+		Status: domain.EnrollmentStatusPending, ExpiresAt: now.Add(10 * time.Minute),
+		CreatedAt: now, UpdatedAt: now,
+	}
+	if err := persistence.CreateEnrollment(t.Context(), enrollment); err != nil {
+		t.Fatalf("CreateEnrollment on PostgreSQL: %v", err)
+	}
+	t.Cleanup(func() {
+		if err := db.Exec("DELETE FROM harness_enrollments WHERE id = ?", enrollment.ID.String()).Error; err != nil {
+			t.Errorf("delete PostgreSQL enrollment fixture: %v", err)
+		}
+	})
+	stored, err := persistence.GetEnrollmentByDeviceCode(t.Context(), enrollment.ID, deviceHash, now.Add(time.Second))
+	if err != nil {
+		t.Fatalf("GetEnrollmentByDeviceCode on PostgreSQL: %v", err)
+	}
+	if stored.ID != enrollment.ID || stored.Status != domain.EnrollmentStatusPending || !stored.EndpointID.IsZero() {
+		t.Fatalf("PostgreSQL enrollment round trip = %#v", stored)
+	}
 }
 
 func exercisePostgresAuthorizedFrames(t *testing.T, db *gorm.DB) {
