@@ -18,10 +18,10 @@ type keyPackageRow struct {
 	IssuerABAEndpointID   string     `gorm:"column:issuer_aba_endpoint_id;type:char(32);not null"`
 	RecipientHCEndpointID string     `gorm:"column:recipient_hc_endpoint_id;type:char(32);not null;uniqueIndex:ux_harness_key_package_recipient,priority:3"`
 	CryptoSuite           uint16     `gorm:"column:crypto_suite;not null"`
-	EncapsulatedKey       []byte     `gorm:"column:encapsulated_key;type:blob;not null"`
-	Ciphertext            []byte     `gorm:"column:ciphertext;type:blob;not null"`
+	EncapsulatedKey       []byte     `gorm:"column:encapsulated_key;not null"`
+	Ciphertext            []byte     `gorm:"column:ciphertext;not null"`
 	ContextHash           string     `gorm:"column:context_hash;type:char(64);not null"`
-	IssuerSignature       []byte     `gorm:"column:issuer_signature;type:blob;not null"`
+	IssuerSignature       []byte     `gorm:"column:issuer_signature;not null"`
 	IssuerCredentialID    string     `gorm:"column:issuer_credential_id;type:char(32);not null"`
 	Status                string     `gorm:"column:status;size:24;not null;index:idx_harness_key_package_session_status,priority:2"`
 	ExpiresAt             time.Time  `gorm:"column:expires_at;not null"`
@@ -42,7 +42,7 @@ type auditRow struct {
 	ObjectID     string    `gorm:"column:object_id;size:256;not null"`
 	Result       string    `gorm:"column:result;size:128;not null"`
 	ErrorCode    string    `gorm:"column:error_code;size:128;not null;default:''"`
-	MetadataJSON []byte    `gorm:"column:metadata_json;type:blob;not null"`
+	MetadataJSON []byte    `gorm:"column:metadata_json;not null"`
 	CreatedAt    time.Time `gorm:"column:created_at;not null;index:idx_harness_audit_scope_time,priority:3,sort:desc"`
 }
 
@@ -58,7 +58,7 @@ type idempotencyRow struct {
 	RequestHash  string    `gorm:"column:request_hash;type:char(64);not null"`
 	Status       string    `gorm:"column:status;size:24;not null"`
 	HTTPStatus   int       `gorm:"column:http_status;not null;default:0"`
-	ResponseJSON []byte    `gorm:"column:response_json;type:blob"`
+	ResponseJSON []byte    `gorm:"column:response_json"`
 	ErrorCode    string    `gorm:"column:error_code;size:128;not null;default:''"`
 	CreatedAt    time.Time `gorm:"column:created_at;not null"`
 	UpdatedAt    time.Time `gorm:"column:updated_at;not null"`

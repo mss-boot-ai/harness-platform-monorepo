@@ -35,8 +35,8 @@ type endpointRow struct {
 	TenantID           string     `gorm:"column:tenant_id;size:128;not null;default:''"`
 	Type               string     `gorm:"column:type;size:24;not null"`
 	Name               string     `gorm:"column:name;size:120;not null"`
-	SigningPublicJWK   []byte     `gorm:"column:signing_public_jwk;type:blob;not null"`
-	KEMPublicJWK       []byte     `gorm:"column:kem_public_jwk;type:blob;not null"`
+	SigningPublicJWK   []byte     `gorm:"column:signing_public_jwk;not null"`
+	KEMPublicJWK       []byte     `gorm:"column:kem_public_jwk;not null"`
 	SigningJKT         string     `gorm:"column:signing_jkt;size:64;not null;uniqueIndex:ux_harness_endpoint_owner_sign,priority:2"`
 	KEMJKT             string     `gorm:"column:kem_jkt;size:64;not null;uniqueIndex:ux_harness_endpoint_owner_kem,priority:2"`
 	Status             string     `gorm:"column:status;size:24;not null;index:idx_harness_endpoint_owner_status,priority:2"`
@@ -60,8 +60,8 @@ type enrollmentRow struct {
 	EndpointName     string     `gorm:"column:endpoint_name;size:120;not null"`
 	DeviceCodeHash   string     `gorm:"column:device_code_hash;type:char(64);not null;uniqueIndex"`
 	UserCodeHash     string     `gorm:"column:user_code_hash;type:char(64);not null;uniqueIndex"`
-	SigningPublicJWK []byte     `gorm:"column:signing_public_jwk;type:blob;not null"`
-	KEMPublicJWK     []byte     `gorm:"column:kem_public_jwk;type:blob;not null"`
+	SigningPublicJWK []byte     `gorm:"column:signing_public_jwk;not null"`
+	KEMPublicJWK     []byte     `gorm:"column:kem_public_jwk;not null"`
 	SigningJKT       string     `gorm:"column:signing_jkt;size:64;not null"`
 	KEMJKT           string     `gorm:"column:kem_jkt;size:64;not null"`
 	Status           string     `gorm:"column:status;size:24;not null;index:idx_harness_enrollment_owner_status,priority:2;index:idx_harness_enrollment_expiry,priority:1"`
@@ -142,9 +142,9 @@ type frameRow struct {
 	Sequence           uint64     `gorm:"column:sequence;not null;uniqueIndex:ux_harness_frame_sequence,priority:4;index:idx_harness_frame_receiver_status_sequence,priority:3"`
 	KeyID              string     `gorm:"column:key_id;type:char(32);not null"`
 	CreatedAtMS        int64      `gorm:"column:created_at_ms;not null"`
-	AAD                []byte     `gorm:"column:aad;type:blob;not null"`
-	Ciphertext         []byte     `gorm:"column:ciphertext;type:blob;not null"`
-	Signature          []byte     `gorm:"column:signature;type:blob;not null"`
+	AAD                []byte     `gorm:"column:aad;not null"`
+	Ciphertext         []byte     `gorm:"column:ciphertext;not null"`
+	Signature          []byte     `gorm:"column:signature;not null"`
 	ContentHash        string     `gorm:"column:content_hash;type:char(64);not null"`
 	Status             string     `gorm:"column:status;size:24;not null;index:idx_harness_frame_receiver_status_sequence,priority:2"`
 	ReceivedAt         time.Time  `gorm:"column:received_at;not null"`
