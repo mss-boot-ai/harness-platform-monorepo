@@ -126,7 +126,7 @@ func exercisePostgresEnrollmentRoundTrip(t *testing.T, db *gorm.DB) {
 	if err != nil {
 		t.Fatalf("New PostgreSQL Store for enrollment: %v", err)
 	}
-	now := time.Unix(1_800_200_000, 0).UTC()
+	now := time.Unix(1_800_200_000, 123_456_000).UTC()
 	endpoint := endpoint(0x31, 0x32, 0x33, domain.EndpointTypeABA, "", now)
 	enrollmentID, err := domain.NewID(rand.Reader)
 	if err != nil {
@@ -162,7 +162,8 @@ func exercisePostgresEnrollmentRoundTrip(t *testing.T, db *gorm.DB) {
 	if err != nil {
 		t.Fatalf("GetEnrollmentByDeviceCode on PostgreSQL: %v", err)
 	}
-	if stored.ID != enrollment.ID || stored.Status != domain.EnrollmentStatusPending || !stored.EndpointID.IsZero() {
+	if stored.ID != enrollment.ID || stored.Status != domain.EnrollmentStatusPending || !stored.EndpointID.IsZero() ||
+		!stored.ExpiresAt.Equal(enrollment.ExpiresAt) {
 		t.Fatalf("PostgreSQL enrollment round trip = %#v", stored)
 	}
 }
