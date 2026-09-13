@@ -1,0 +1,39 @@
+name: Remote Checkpoint
+
+on:
+  pull_request:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: remote-checkpoint-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  reproducible-source:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          persist-credentials: false
+      - name: Verify documentation and archive only tracked source
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          ./scripts/check-docs.sh
+          mkdir -p "${RUNNER_TEMP}/remote-checkpoint"
+          git rev-parse HEAD > "${RUNNER_TEMP}/remote-checkpoint/source-sha.txt"
+          git archive --format=tar --prefix=harness/ HEAD | gzip -n > "${RUNNER_TEMP}/remote-checkpoint/source.tar.gz"
+          cd "${RUNNER_TEMP}/remote-checkpoint"
+          sha256sum source.tar.gz > SHA256SUMS
+      - name: Upload reproducible source checkpoint (no credentials or runtime data)
+        uses: actions/upload-artifact@v4
+        with:
+          name: remote-source-${{ github.sha }}
+          path: ${{ runner.temp }}/remote-checkpoint/
+          if-no-files-found: error
+          retention-days: 3
