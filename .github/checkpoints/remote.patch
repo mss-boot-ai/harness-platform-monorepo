@@ -148,3 +148,30 @@ index 795ff20f3a6b40ec3ae82796256fc07204059b52..e00a3012d3e642d1d066f75ddb8130ad
      }
  
      fn handle_ack_frame(
+diff --git a/aba/src/process.rs b/aba/src/process.rs
+--- a/aba/src/process.rs
++++ b/aba/src/process.rs
+@@ -131,7 +131,7 @@
+         let Some(method) = method else { return self.submit_permission(message, dispatch_id); };
+         if message.get("result").is_some() || message.get("error").is_some() { return Err(ProcessError::Protocol); }
+         if method == "session/cancel" {
+-            if message.get("id").is_some() || !message.get("params").and_then(Value::as_object).is_some_and(|params| params.len() == 1) || message.pointer("/params/sessionId").and_then(Value::as_str) != Some(platform_session_id) {
++            if message.get("id").is_some() || message.get("params").and_then(Value::as_object).is_none_or(|params| params.len() != 1) || message.pointer("/params/sessionId").and_then(Value::as_str) != Some(platform_session_id) {
+                 return Err(ProcessError::Protocol);
+             }
+             self.cancel_permissions()?;
+@@ -275,12 +275,12 @@
+         if Instant::now() >= permission.deadline { return Err(ProcessError::Protocol); }
+         match message.pointer("/result/outcome/outcome").and_then(Value::as_str) {
+             Some("selected") => {
+-                if !message.pointer("/result/outcome").and_then(Value::as_object).is_some_and(|object| object.len() == 2) { return Err(ProcessError::Protocol); }
++                if message.pointer("/result/outcome").and_then(Value::as_object).is_none_or(|object| object.len() != 2) { return Err(ProcessError::Protocol); }
+                 let option = message.pointer("/result/outcome/optionId").and_then(Value::as_str).ok_or(ProcessError::Protocol)?;
+                 if !permission.option_ids.contains(option) { return Err(ProcessError::Protocol); }
+             }
+             Some("cancelled") => {
+-                if !message.pointer("/result/outcome").and_then(Value::as_object).is_some_and(|object| object.len() == 1) { return Err(ProcessError::Protocol); }
++                if message.pointer("/result/outcome").and_then(Value::as_object).is_none_or(|object| object.len() != 1) { return Err(ProcessError::Protocol); }
+             }
+             _ => return Err(ProcessError::Protocol),
+         }
