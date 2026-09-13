@@ -1,4 +1,4 @@
-import { conversationTitle, MAX_REPLY_CHARACTERS, receiveAcp, safeLink, settleTurn, shouldSendOnEnter, startTurn } from './model';
+import { conversationTitle, MAX_REPLY_CHARACTERS, mergeSessionObservation, receiveAcp, safeLink, settleTurn, shouldSendOnEnter, startTurn } from './model';
 const chunk = (text: string) => ({ method: 'session/update', params: { update: { sessionUpdate: 'agent_message_chunk', content: { type: 'text', text } } } });
 describe('chat presentation model', () => {
   it('collects chunks into one assistant message and completes only the matching request', () => {
@@ -45,4 +45,21 @@ describe('chat presentation model', () => {
     expect(safeLink('https://example.com/docs')).toBe('https://example.com/docs');
     for (const value of ['javascript:alert(1)', 'data:text/html,test', 'file:///etc/passwd', '//evil.test', '/admin', 'vbscript:test']) expect(safeLink(value)).toBeNull();
   });
+});
+
+it('keeps late polls from rolling active, closing or uncertain sessions backwards', () => {
+  const snapshot = (status: string) => ({ sessionId: 'same', status });
+  for (const [current, observed, expected] of [
+    ['WAITING_KEY', 'CREATING', 'WAITING_KEY'],
+    ['ACTIVE', 'WAITING_KEY', 'ACTIVE'],
+    ['ACTIVE', 'CREATING', 'ACTIVE'],
+    ['ACTIVE', 'DRAINING', 'DRAINING'],
+    ['DRAINING', 'ACTIVE', 'DRAINING'],
+    ['DRAINING', 'CLOSED', 'CLOSED'],
+    ['UNCERTAIN', 'ACTIVE', 'UNCERTAIN'],
+    ['UNCERTAIN', 'DRAINING', 'DRAINING'],
+    ['CLOSED', 'ACTIVE', 'CLOSED'],
+  ] as const) expect(mergeSessionObservation(snapshot(current), snapshot(observed))?.status).toBe(expected);
+  expect(mergeSessionObservation(snapshot('CLOSED'), null)).toBeNull();
+  expect(mergeSessionObservation(snapshot('CLOSED'), { sessionId: 'new', status: 'CREATING' })?.status).toBe('CREATING');
 });

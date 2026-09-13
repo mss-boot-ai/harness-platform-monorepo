@@ -12,7 +12,7 @@ import {
 } from './api';
 import { ChatWorkspace } from './chat/ChatWorkspace';
 import {
-  conversationTitle, MAX_MESSAGES, MAX_SAVED_CONVERSATIONS, receiveAcp, settleTurn, startTurn,
+  conversationTitle, MAX_MESSAGES, MAX_SAVED_CONVERSATIONS, mergeSessionObservation, receiveAcp, settleTurn, startTurn,
   type ChatMessage, type SavedConversation,
 } from './chat/model';
 
@@ -70,7 +70,8 @@ export function SessionSetup({ connection, identity, onRegistration, registratio
     const next = change(messagesRef.current); messagesRef.current = next; setMessages(next);
   }, []);
   const updateSession = useCallback((value: EndpointSessionSummary | null) => {
-    sessionRef.current = value; setSession(value);
+    const next = mergeSessionObservation(sessionRef.current, value);
+    sessionRef.current = next; setSession(next);
   }, []);
   const markUncertain = useCallback((description: string) => {
     queuedPrompt.current = null;

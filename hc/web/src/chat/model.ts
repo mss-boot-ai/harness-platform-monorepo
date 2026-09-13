@@ -80,3 +80,19 @@ export function safeLink(value: string): string | null {
     return ['https:', 'http:', 'mailto:'].includes(url.protocol) ? url.href : null;
   } catch { return null; }
 }
+
+/** Polls and key-package processing may finish out of order. Never regress a settled phase. */
+export function mergeSessionObservation<T extends { readonly sessionId: string; readonly status: string }>(
+  current: T | null, observed: T | null,
+): T | null {
+  if (current === null || observed === null || current.sessionId !== observed.sessionId) return observed;
+  const early = ['CREATING', 'WAITING_KEY'];
+  const terminal = ['CLOSED', 'FAILED', 'ABA_REVOKED'];
+  if (terminal.includes(current.status)) return current;
+  if (current.status === 'WAITING_KEY' && observed.status === 'CREATING') return current;
+  if (current.status === 'ACTIVE' && early.includes(observed.status)) return current;
+  if (current.status === 'REKEY_REQUIRED' && early.includes(observed.status)) return current;
+  if (current.status === 'DRAINING' && !terminal.includes(observed.status)) return current;
+  if (current.status === 'UNCERTAIN' && observed.status !== 'DRAINING' && !terminal.includes(observed.status)) return current;
+  return observed;
+}
