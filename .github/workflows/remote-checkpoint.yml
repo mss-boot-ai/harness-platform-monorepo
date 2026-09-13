@@ -59,6 +59,18 @@ jobs:
         run: |
           cargo +1.88.0 test --locked --workspace --all-targets
           cargo +1.88.0 clippy --locked --workspace --all-targets --all-features -- -D warnings
+      - uses: actions/setup-node@v6
+        with:
+          node-version: '24'
+      - name: Verify the HC candidate against locked dependencies
+        run: |
+          corepack enable
+          corepack prepare pnpm@10.34.5 --activate
+          pnpm --dir hc install --frozen-lockfile
+          pnpm --dir hc lint
+          pnpm --dir hc typecheck
+          pnpm --dir hc test
+          pnpm --dir hc build
       - name: Upload verified Git objects, never update refs
         if: success()
         env:
@@ -76,6 +88,14 @@ jobs:
           cp "${toolchain}/bin/rustfmt" "${RUNNER_TEMP}/runtime-review/formatter/bin/"
           find "${toolchain}/lib" -maxdepth 1 -type f -name '*.so*' -exec cp {} "${RUNNER_TEMP}/runtime-review/formatter/lib/" \;
           git rev-parse HEAD > "${RUNNER_TEMP}/runtime-review/source-sha.txt"
+          # Explicit public build dependencies only, never checkout credentials, npmrc,
+          # local identities, runtime data, or host environments. Retain only when a
+          # candidate was prepared; used for offline checks in the review container.
+          if test -f "${RUNNER_TEMP}/runtime-review/candidate-local.json" && test -d hc/node_modules; then
+            mkdir -p "${RUNNER_TEMP}/runtime-review/node-tools/bin"
+            cp "$(command -v node)" "${RUNNER_TEMP}/runtime-review/node-tools/bin/"
+            tar -czf "${RUNNER_TEMP}/runtime-review/hc-dependencies.tar.gz" -C hc node_modules packages/core/node_modules web/node_modules
+          fi
       - name: Upload runtime review evidence
         if: always()
         uses: actions/upload-artifact@v4
