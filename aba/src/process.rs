@@ -54,6 +54,7 @@ struct RequestBinding {
     original_id: Value,
     dispatch_id: [u8; 16],
     method: String,
+    requested_value: Option<Value>,
     deadline: Instant,
 }
 
@@ -212,7 +213,7 @@ impl AgentProcess {
             session["sessionId"] = Value::String(platform_session_id.to_owned());
             return self.immediate_result(id, json!({
                 "initialize": self.initialized, "session": session,
-                "bridge": {"duplex": true, "protocolVersion": 1, "processEpoch": self.process_epoch.to_string()}
+                "bridge": {"duplex": true, "turnCancellation": self.initialized.pointer("/_meta/mss/turnCancellation").and_then(Value::as_bool).unwrap_or(true), "protocolVersion": 1, "processEpoch": self.process_epoch.to_string()}
             }), dispatch_id);
         }
         if !matches!(
@@ -254,6 +255,10 @@ impl AgentProcess {
             RequestBinding {
                 original_id: id,
                 dispatch_id,
+                requested_value: message
+                    .pointer("/params/modeId")
+                    .or_else(|| message.pointer("/params/modelId"))
+                    .cloned(),
                 method,
                 deadline: Instant::now() + timeout,
             },
@@ -377,6 +382,18 @@ impl AgentProcess {
                     self.session_info["configOptions"] = options.clone();
                 }
             }
+            if message
+                .pointer("/params/update/sessionUpdate")
+                .and_then(Value::as_str)
+                == Some("current_mode_update")
+            {
+                if let Some(mode) = message
+                    .pointer("/params/update/currentModeId")
+                    .filter(|value| value.is_string())
+                {
+                    self.session_info["modes"]["currentModeId"] = mode.clone();
+                }
+            }
             message["params"]["sessionId"] = Value::String(
                 self.platform_session_id
                     .clone()
@@ -411,6 +428,15 @@ impl AgentProcess {
                 .filter(|value| value.is_array())
             {
                 self.session_info["configOptions"] = options.clone();
+            }
+        }
+        if message.get("error").is_none() {
+            if let Some(value) = request.requested_value {
+                match request.method.as_str() {
+                    "session/set_mode" => self.session_info["modes"]["currentModeId"] = value,
+                    "session/set_model" => self.session_info["models"]["currentModelId"] = value,
+                    _ => {}
+                }
             }
         }
         message["id"] = request.original_id;

@@ -11,10 +11,11 @@ import (
 var safeLocalID = regexp.MustCompile(`^[A-Za-z0-9](?:[A-Za-z0-9._-]{0,62}[A-Za-z0-9])?$`)
 
 var allowedCapabilities = map[string]struct{}{
-	"prompt":     {},
-	"permission": {},
-	"cancel":     {},
-	"session":    {},
+	"prompt":            {},
+	"permission":        {},
+	"cancel":            {},
+	"session":           {},
+	"remote-session-v1": {},
 }
 
 func (request *SessionRequest) Validate() error {

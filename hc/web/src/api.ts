@@ -238,7 +238,7 @@ export function createEndpointSession(
     const path = '/gateway/v1/sessions';
     const body = JSON.stringify({
       abaEndpointId: input.abaEndpointId,
-      requestedCapabilities: ['prompt', 'session'],
+      requestedCapabilities: ['prompt', 'session', 'permission', 'cancel', 'remote-session-v1'],
       runtimeProfileId: input.runtimeProfileId,
       workspaceId: input.workspaceId,
     });

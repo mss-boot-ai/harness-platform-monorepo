@@ -131,6 +131,7 @@ def run() -> int:
             "id": initialize_id,
             "result": {
                 "protocolVersion": 1,
+                "_meta": {"mss": {"turnCancellation": False}},
                 "agentCapabilities": {
                     "loadSession": False,
                     "promptCapabilities": {

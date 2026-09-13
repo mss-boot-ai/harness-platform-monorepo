@@ -63,3 +63,9 @@ it('keeps late polls from rolling active, closing or uncertain sessions backward
   expect(mergeSessionObservation(snapshot('CLOSED'), null)).toBeNull();
   expect(mergeSessionObservation(snapshot('CLOSED'), { sessionId: 'new', status: 'CREATING' })?.status).toBe('CREATING');
 });
+
+it('marks cancellation as the end of this turn, not a failed or closed session', () => {
+  const result = receiveAcp(startTurn([], 'cancelled-turn', 'wait'), { jsonrpc: '2.0', id: 'cancelled-turn', result: { stopReason: 'cancelled' } }, 'cancelled-turn');
+  expect(result.completed).toBe(true); expect(result.failed).toBe(false); expect(result.messages[1]?.state).toBe('cancelled');
+  expect(startTurn(result.messages, 'next-turn', 'continue')).toHaveLength(4);
+});

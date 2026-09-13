@@ -114,3 +114,13 @@ button { touch-action: manipulation; }
 }
 @media (max-width: 360px) { .suggestion span { display: none; }.agent-picker strong { max-width: 125px; } }
 @media (prefers-reduced-motion: reduce) { *, *::before, *::after { animation: none !important; transition: none !important; scroll-behavior: auto !important; } }
+
+/* Runtime-originated controls are not global preferences. */
+.runtime-configuration { border-top: 1px solid var(--line); margin-top: 10px; padding-top: 16px; display: grid; gap: 12px; }
+.runtime-configuration h3 { font-size: 13px; margin: 0; }.runtime-configuration small { font-size: 10px; color: var(--muted); line-height: 1.6; }
+.context-usage { display: grid; gap: 7px; color: var(--muted); font-size: 11px; }.context-usage progress { width: 100%; height: 7px; accent-color: var(--accent); }
+.runtime-activity { margin: 8px 0 16px; display: grid; gap: 10px; }.tool-card,.plan-card { border: 1px solid var(--line); border-radius: 10px; padding: 10px 12px; background: var(--sidebar); font-size: 12px; }
+.tool-card summary { display: flex; gap: 12px; justify-content: space-between; cursor: pointer; }.tool-card summary > span:first-child { overflow-wrap: anywhere; }.tool-card h4 { font-size: 11px; color: var(--muted); margin: 12px 0 4px; }
+.tool-card pre,.permission-card pre,.approval-detail { white-space: pre-wrap; overflow-wrap: anywhere; overflow-y: auto; max-height: 360px; font-size: 11px; line-height: 1.7; background: var(--surface); padding: 10px; border-radius: 6px; }
+.permission-card { padding: 15px; border: 1px solid var(--accent); border-radius: 12px; background: var(--bg); display: grid; gap: 10px; font-size: 12px; }.permission-card h3 { font-size: 13px; margin: 0; }.permission-card summary { cursor: pointer; }.permission-card .status-pill { white-space: normal; text-align: right; }
+.permission-actions { display: flex; flex-wrap: wrap; gap: 8px; }.permission-actions button { min-height: 42px; }.tool-failed { border-color: var(--error); }.plan-card ol { margin: 10px 0 0; padding-left: 20px; }

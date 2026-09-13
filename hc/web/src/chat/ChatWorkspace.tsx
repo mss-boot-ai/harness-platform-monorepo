@@ -12,6 +12,8 @@ export interface ChatWorkspaceProps {
   readonly online: boolean; readonly connected: boolean; readonly busy: boolean; readonly responding: boolean;
   readonly canSubmit: boolean; readonly readOnly: boolean; readonly hasActiveSession: boolean;
   readonly notice: string | null; readonly error: string | null; readonly targetSettings: ReactNode;
+  readonly onCancelTurn?: () => void; readonly cancelPending?: boolean;
+  readonly renderTurnActivity?: (turnId: string) => ReactNode;
 }
 const suggestions: readonly { readonly icon: IconName; readonly title: string; readonly detail: string; readonly prompt: string }[] = [
   { icon: 'code', title: '审查代码', detail: '找到问题，给出改进建议', prompt: '请帮我审查当前工作区的代码，先说明你会重点检查哪些问题。' },
@@ -73,11 +75,12 @@ export function ChatWorkspace(props: ChatWorkspaceProps) {
               keyCode: event.nativeEvent.keyCode, repeat: event.repeat })) { event.preventDefault(); submit(); }
           }} />
         <div className="composer-actions"><span className="composer-context"><Icon name="lock" />{props.connected ? props.online ? '加密对话' : '连接已断开' : '连接自己的 Agent'}</span>
-          {props.responding && props.onEndChat !== null ? <button className="send-button stop-button" type="button" aria-label="结束当前会话" title="结束会话；已执行的操作不会撤销" disabled={props.busy} onClick={() => setConfirm('end')}><Icon name="stop" /></button>
+          {props.responding && props.onCancelTurn !== undefined ? <button className="send-button stop-button" type="button" aria-label={props.cancelPending ? '等待停止确认' : '停止本轮'} title="停止当前轮次，保留会话；已执行的动作不会撤销" disabled={props.busy || props.cancelPending} onClick={props.onCancelTurn}><Icon name="stop" /></button>
+            : props.responding && props.onEndChat !== null ? <button className="send-button stop-button" type="button" aria-label="结束当前会话" title="结束会话；已执行的操作不会撤销" disabled={props.busy} onClick={() => setConfirm('end')}><Icon name="stop" /></button>
             : <button className="send-button" type="submit" aria-label={props.connected ? '发送消息' : '连接 Agent'} title={props.connected ? '发送消息' : '先连接 Agent，草稿会保留'} disabled={!props.canSubmit || props.busy || props.draft.trim() === ''}><Icon name="arrow" /></button>}
         </div>
       </form>
-      <p className="composer-hint">{props.responding ? 'Agent 正在回复；方形按钮将结束整个会话。' : props.busy ? '正在建立会话或发送消息…' : 'Enter 发送 · Shift + Enter 换行'}<span>请核对重要内容</span></p>
+      <p className="composer-hint">{props.responding ? props.onCancelTurn !== undefined ? props.cancelPending ? '已请求停止，等待执行端确认；会话仍然保留。' : 'Agent 正在回复；方形按钮停止本轮。' : 'Agent 正在回复；方形按钮将结束整个会话。' : props.busy ? '正在建立会话或发送消息…' : 'Enter 发送 · Shift + Enter 换行'}<span>请核对重要内容</span></p>
     </>}
   </div>;
   return <div className={`chat-shell ${collapsed ? 'sidebar-collapsed' : ''} ${sidebarOpen ? 'sidebar-open' : ''}`}>
@@ -113,8 +116,10 @@ export function ChatWorkspace(props: ChatWorkspaceProps) {
               {message.role === 'assistant' ? <div className="assistant-avatar" aria-hidden="true">H</div> : null}
               <div className="message-body">{message.role === 'assistant' ? <>
                 <div className="message-author">{props.agent || 'Agent'}</div>
+                {props.renderTurnActivity?.(message.id.replace(/^assistant-/u, ''))}
                 {message.text !== '' ? <Markdown text={message.text} /> : message.state === 'streaming' ? <div className="thinking"><span /><span /><span /><span className="sr-only">正在等待 Agent 回复</span></div> : <p className="message-muted">{message.state === 'uncertain' ? '回复中断，请检查执行状态，不要直接重发。' : '本次回复未返回文本。'}</p>}
                 {message.text.length >= MAX_REPLY_CHARACTERS ? <p className="message-muted">回复超过本页显示上限，请在执行端查看完整结果。</p> : null}
+                {message.state === 'cancelled' ? <p className="message-muted">本轮已停止，可以继续对话；已发生的操作不受影响。</p> : null}
                 {message.state === 'uncertain' ? <p className="uncertain-label">执行结果待确认</p> : null}
                 {message.text !== '' && message.state !== 'streaming' ? <CopyButton text={message.text} label="复制回复" /> : null}
               </> : <p className="plain-message">{message.text}</p>}</div>

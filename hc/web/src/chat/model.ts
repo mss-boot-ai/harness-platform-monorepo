@@ -1,4 +1,4 @@
-export type MessageState = 'streaming' | 'complete' | 'uncertain';
+export type MessageState = 'streaming' | 'complete' | 'uncertain' | 'cancelled';
 export interface ChatMessage {
   readonly id: string;
   readonly role: 'user' | 'assistant' | 'system';
@@ -51,7 +51,7 @@ export function receiveAcp(
   if (value === null || requestId === null) return { messages, completed: false, failed: false };
   if (value.id === requestId && ('result' in value || 'error' in value)) {
     const failed = 'error' in value;
-    return { messages: settleTurn(messages, requestId, failed ? 'uncertain' : 'complete'), completed: true, failed };
+    return { messages: settleTurn(messages, requestId, failed ? 'uncertain' : record(value.result)?.stopReason === 'cancelled' ? 'cancelled' : 'complete'), completed: true, failed };
   }
   const params = record(value.params);
   const update = record(params?.update);

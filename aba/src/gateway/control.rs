@@ -925,7 +925,7 @@ fn validate_open_request(request: &OpenTunnelRequest, now_ms: i64) -> Result<(),
         || capabilities.iter().any(|value| {
             !matches!(
                 value.as_str(),
-                "prompt" | "permission" | "cancel" | "session"
+                "prompt" | "permission" | "cancel" | "session" | "remote-session-v1"
             )
         })
     {

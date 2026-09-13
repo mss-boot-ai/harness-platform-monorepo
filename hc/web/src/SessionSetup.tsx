@@ -11,6 +11,9 @@ import {
   type ABAEndpointSummary, type EndpointSessionSummary, type RegistrationSession,
 } from './api';
 import { ChatWorkspace } from './chat/ChatWorkspace';
+import { RuntimeActivity, RuntimeConfiguration, type PendingConfig } from './remote/RuntimeControls';
+import { closeTurnPermissions, configRequest, confirmConfiguration, markPermissionSubmitted, newRuntimeState,
+  permissionDecision, readDescriptor, receiveRuntime, record, type ConfigOption, type RpcId, type RuntimeState } from './remote/runtime-state';
 import {
   conversationTitle, MAX_MESSAGES, MAX_SAVED_CONVERSATIONS, mergeSessionObservation, receiveAcp, settleTurn, startTurn,
   type ChatMessage, type SavedConversation,
@@ -40,6 +43,12 @@ export function SessionSetup({ connection, identity, onRegistration, registratio
   const [blocked, setBlocked] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [keyReady, setKeyReady] = useState(false);
+  const [runtime, setRuntime] = useState<RuntimeState>(newRuntimeState);
+  const runtimeRef = useRef(runtime);
+  const [pendingConfig, setPendingConfig] = useState<PendingConfig | null>(null);
+  const [cancelPending, setCancelPending] = useState(false);
+  const controlRequests = useRef(new Map<string, { readonly kind: 'describe' | 'config'; readonly option?: ConfigOption }>());
+  const describedFor = useRef<string | null>(null);
   const [messages, setMessages] = useState<readonly ChatMessage[]>([]);
   const [saved, setSaved] = useState<readonly SavedConversation[]>([]);
   const [viewId, setViewId] = useState<string | null>(null);
@@ -73,10 +82,13 @@ export function SessionSetup({ connection, identity, onRegistration, registratio
     const next = mergeSessionObservation(sessionRef.current, value);
     sessionRef.current = next; setSession(next);
   }, []);
+  const updateRuntime = useCallback((change: (previous: RuntimeState) => RuntimeState) => {
+    const next = change(runtimeRef.current); runtimeRef.current = next; setRuntime(next);
+  }, []);
   const markUncertain = useCallback((description: string) => {
     queuedPrompt.current = null;
     updateMessages((current) => settleTurn(current, awaiting.current, 'uncertain'));
-    awaiting.current = null; setResponding(false); setBlocked(true); setError(description);
+    awaiting.current = null; setResponding(false); setCancelPending(false); setPendingConfig(null); setBlocked(true); setError(description);
   }, [updateMessages]);
 
   useEffect(() => {
@@ -153,11 +165,36 @@ export function SessionSetup({ connection, identity, onRegistration, registratio
       connection.socket.send(new Uint8Array(acknowledgment).buffer);
       if (stored === 'duplicate') return;
       const payload: unknown = JSON.parse(new TextDecoder().decode(frame.plaintext));
-      const result = receiveAcp(messagesRef.current, payload, awaiting.current);
-      updateMessages(() => result.messages);
-      if (result.completed) {
-        awaiting.current = null; setResponding(false);
-        if (result.failed) { setBlocked(true); setError('Agent 未能完成这次请求。请检查执行状态后结束会话。'); }
+      // Responses and reverse requests share the authenticated stream, not an unrelated UI API.
+      for (const item of Array.isArray(payload) ? payload : [payload]) {
+        const message = record(item);
+        const request = typeof message?.id === 'string' ? controlRequests.current.get(message.id) : undefined;
+        if (request !== undefined && message !== null && ('result' in message || 'error' in message)) {
+          controlRequests.current.delete(message.id as string);
+          if ('error' in message) {
+            updateRuntime((value) => ({ ...value, status: request.kind === 'describe' ? 'unsupported' : value.status,
+              configError: request.kind === 'describe' ? '执行端未提供此会话控制能力。' : '执行端拒绝了配置修改，原配置保持不变。' }));
+          } else if (request.kind === 'describe') {
+            updateRuntime((value) => readDescriptor(value, message.result, currentSession.sessionId));
+          } else if (request.option?.method === 'session/set_config_option') {
+            updateRuntime((value) => confirmConfiguration(value, message.result));
+          } else {
+            // Legacy setters return {}, so obtain the execution-side effective state again.
+            describedFor.current = null;
+          }
+          setPendingConfig(null);
+          continue;
+        }
+        if (message?.method === 'session/update' && record(message.params)?.sessionId !== currentSession.sessionId) throw new Error('ACP session binding mismatch');
+        const turnId = awaiting.current;
+        updateRuntime((value) => receiveRuntime(value, item, currentSession.sessionId, turnId));
+        const result = receiveAcp(messagesRef.current, item, turnId);
+        updateMessages(() => result.messages);
+        if (result.completed) {
+          if (turnId !== null) updateRuntime((value) => closeTurnPermissions(value, turnId));
+          awaiting.current = null; setResponding(false); setCancelPending(false);
+          if (result.failed) { setBlocked(true); setError('Agent 未能完成这次请求。请检查执行状态后结束会话。'); }
+        }
       }
     };
     const schedule = (encoded: Uint8Array) => {
@@ -173,7 +210,7 @@ export function SessionSetup({ connection, identity, onRegistration, registratio
     connection.socket.addEventListener('message', message);
     if (sessionRef.current !== null) for (const encoded of pendingPackets.current.splice(0)) schedule(encoded);
     return () => { active = false; connection.socket.removeEventListener('message', message); if (enqueuePacket.current === schedule) enqueuePacket.current = () => undefined; };
-  }, [connection.socket, identity, registration.endpointId, secureStore, updateSession, updateMessages, markUncertain]);
+  }, [connection.socket, identity, registration.endpointId, secureStore, updateSession, updateMessages, updateRuntime, markUncertain]);
 
   useEffect(() => {
     if (session?.sessionId !== undefined) for (const encoded of pendingPackets.current.splice(0)) enqueuePacket.current(encoded);
@@ -227,9 +264,71 @@ export function SessionSetup({ connection, identity, onRegistration, registratio
     return () => { active = false; };
   }, [identity, registration, reload]);
 
+  const sendSessionControl = async (payload: Record<string, unknown>, context?: { readonly kind: 'describe' | 'config'; readonly option?: ConfigOption }): Promise<boolean> => {
+    const current = sessionRef.current;
+    const keys = openedPackage.current;
+    if (actionBusy.current || blocked || current?.status !== 'ACTIVE' || keys === null || !online) return false;
+    actionBusy.current = true; setBusy(true); setError(null);
+    const operationEpoch = epoch.current;
+    try {
+      outboundFrameSequence.current += 1n;
+      const packet = await createHCToABAFramePacket(identity, keys,
+        { abaEndpointId: current.abaEndpointId, hcEndpointId: registration.endpointId, sessionId: current.sessionId },
+        textEncoder.encode(JSON.stringify(payload)), outboundFrameSequence.current);
+      if (operationEpoch !== epoch.current || connection.socket.readyState !== WebSocket.OPEN) throw new Error('Control delivery interrupted');
+      if (context !== undefined && typeof payload.id === 'string') controlRequests.current.set(payload.id, context);
+      connection.socket.send(new Uint8Array(packet).buffer);
+      return true;
+    } catch {
+      markUncertain('会话控制消息的送达尚未确认。不会自动重复授权、取消或配置操作，请检查连接。');
+      return false;
+    } finally { actionBusy.current = false; setBusy(false); }
+  };
+  const describeSession = async () => {
+    const current = sessionRef.current;
+    if (current === null || actionBusy.current || awaiting.current !== null) return;
+    describedFor.current = current.sessionId;
+    if (!current.requestedCapabilities.includes('remote-session-v1')) {
+      updateRuntime((value) => ({ ...value, status: 'unsupported', configError: '这是旧版会话。保留基础对话能力；新建会话后才能协商 Remote 控制。' }));
+      return;
+    }
+    updateRuntime((value) => ({ ...value, status: 'pending', configError: null }));
+    const id = crypto.randomUUID();
+    if (!(await sendSessionControl({ jsonrpc: '2.0', id, method: '_mss/session/describe', params: { sessionId: current.sessionId } }, { kind: 'describe' }))) describedFor.current = null;
+  };
+  const describeRef = useRef(describeSession);
+  useEffect(() => { describeRef.current = describeSession; });
+  useEffect(() => {
+    if (!busy && online && !blocked && keyReady && session?.status === 'ACTIVE' && describedFor.current !== session.sessionId && awaiting.current === null) void describeRef.current();
+  }, [busy, online, blocked, keyReady, session?.status, session?.sessionId, pendingConfig]);
+  const changeConfiguration = async (option: ConfigOption, value: string) => {
+    const current = sessionRef.current;
+    if (current === null || awaiting.current !== null || actionBusy.current || pendingConfig !== null || runtimeRef.current.status !== 'ready') return;
+    const id = crypto.randomUUID();
+    const payload = configRequest(option, value, current.sessionId, id);
+    setPendingConfig({ id, option, value });
+    if (!(await sendSessionControl(payload, { kind: 'config', option }))) setPendingConfig(null);
+  };
+  const decidePermission = async (id: RpcId, optionId: string | null) => {
+    if (actionBusy.current || awaiting.current === null || !online || blocked) return;
+    let payload: Record<string, unknown>;
+    try { payload = permissionDecision(runtimeRef.current, id, optionId); }
+    catch { setError('这项权限请求已失效或选项无效，没有发送授权。'); return; }
+    // Prevent duplicate UI decisions synchronously, before asynchronous cryptography.
+    updateRuntime((value) => markPermissionSubmitted(value, id));
+    await sendSessionControl(payload);
+  };
+  const cancelTurn = async () => {
+    const current = sessionRef.current;
+    if (current === null || awaiting.current === null || cancelPending || actionBusy.current || !runtimeRef.current.cancelSupported) return;
+    setCancelPending(true);
+    // No request ID: ACP cancellation is a notification; completion comes from the original prompt.
+    await sendSessionControl({ jsonrpc: '2.0', method: 'session/cancel', params: { sessionId: current.sessionId } });
+  };
+
   const transmit = async (text: string) => {
     const current = sessionRef.current;
-    if (actionBusy.current || awaiting.current !== null || blocked || current?.status !== 'ACTIVE' || openedPackage.current === null) return;
+    if (actionBusy.current || awaiting.current !== null || blocked || pendingConfig !== null || runtimeRef.current.status === 'pending' || current?.status !== 'ACTIVE' || openedPackage.current === null) return;
     const aba = endpointsRef.current.find((value) => value.id === current.abaEndpointId);
     if (aba === undefined || connection.socket.readyState !== WebSocket.OPEN) { setError('连接不可用，草稿未发送。'); return; }
     actionBusy.current = true; setBusy(true); setError(null);
@@ -251,9 +350,9 @@ export function SessionSetup({ connection, identity, onRegistration, registratio
   const transmitRef = useRef(transmit);
   useEffect(() => { transmitRef.current = transmit; });
   useEffect(() => {
-    if (busy || !online || blocked || !keyReady || session?.status !== 'ACTIVE' || queuedPrompt.current === null) return;
+    if (busy || !online || blocked || !keyReady || pendingConfig !== null || runtime.status === 'pending' || session?.status !== 'ACTIVE' || queuedPrompt.current === null) return;
     const text = queuedPrompt.current; queuedPrompt.current = null; void transmitRef.current(text);
-  }, [busy, online, blocked, keyReady, session?.status]);
+  }, [busy, online, blocked, keyReady, session?.status, runtime.status, pendingConfig]);
 
   const createAndSend = async () => {
     if (actionBusy.current || awaiting.current !== null || !online || draft.trim() === '') return;
@@ -309,6 +408,7 @@ export function SessionSetup({ connection, identity, onRegistration, registratio
       }
       epoch.current += 1; pendingPackets.current = []; zeroOpenedPackage(openedPackage.current); openedPackage.current = null;
       lastPackageSequence.current = 0n; outboundFrameSequence.current = 0n; inboundFrameSequence.current = 0n;
+      controlRequests.current.clear(); describedFor.current = null; setPendingConfig(null); setCancelPending(false); updateRuntime(() => newRuntimeState());
       updateSession(null); updateMessages(() => []); setKeyReady(false); setBlocked(false); setResponding(false); awaiting.current = null; setViewId(null); onDraftChange('');
     } catch (cause) { setError(cause instanceof HcApiError ? `${cause.message}（${cause.code}）` : '会话关闭未确认，请检查执行端后再试。'); }
     finally { actionBusy.current = false; setBusy(false); }
@@ -333,14 +433,18 @@ export function SessionSetup({ connection, identity, onRegistration, registratio
     {active ? <p>新建对话后可以更换执行环境。</p> : <button className="secondary-button" type="button" disabled={busy} onClick={() => setReload((value) => value + 1)}>刷新设备列表</button>}
     {session !== null ? <details className="technical-details"><summary>会话诊断</summary><p>会话：{session.sessionId}<br />状态：{session.status}<br />密钥：{keyReady ? '已就绪' : '未就绪'}</p>{active ? <button type="button" className="secondary-button" disabled={busy} onClick={() => void endOrNew(false)}>请求关闭当前会话</button> : null}</details> : null}
     {unrecoverable.length > 0 ? <details className="technical-details"><summary>检查 {unrecoverable.length} 个旧会话</summary><p>这些会话的页面密钥不可用，不能恢复对话内容。请确认后关闭。</p>{unrecoverable.map((value) => <div className="old-session" key={value.sessionId}><span>{value.sessionId.slice(0, 10)}… · {value.status}</span><button type="button" className="secondary-button" disabled={busy} onClick={() => void closeOld(value)}>关闭旧会话</button></div>)}</details> : null}
+    {session !== null && keyReady ? <RuntimeConfiguration state={runtime} pending={pendingConfig} disabled={!online || busy || responding || blocked || terminal(session.status)}
+      onChange={(option, value) => void changeConfiguration(option, value)} onRefresh={() => void describeSession()} /> : null}
   </div>;
   return <ChatWorkspace draft={draft} onDraftChange={onDraftChange} onSubmit={() => void createAndSend()}
     onNewChat={() => void endOrNew(true)} onEndChat={active ? () => void endOrNew(false) : null}
+    {...(runtime.cancelSupported && !blocked && online && archive === undefined ? { onCancelTurn: () => void cancelTurn(), cancelPending } : {})}
+    renderTurnActivity={(turnId) => <RuntimeActivity state={runtime} turnId={turnId} disabled={!online || busy || blocked || archive !== undefined || readOnly} onDecision={(id, optionId) => void decidePermission(id, optionId)} />}
     onOpenSettings={onOpenSettings} onSelectConversation={(id) => setViewId(id === session?.sessionId ? null : id)}
     conversations={conversations} selectedConversationId={viewId ?? session?.sessionId ?? null}
     messages={archive?.messages ?? messages} title={archive?.title ?? title} agent={archive?.agent ?? session?.runtimeProfileId ?? runtimeProfileId}
     online={online} connected busy={busy} responding={responding && archive === undefined}
-    canSubmit={online && !blocked && !full && !readOnly && (session === null ? selectedABA !== '' && runtimeProfileId.trim() !== '' && workspaceId.trim() !== '' : keyReady && session.status === 'ACTIVE')}
+    canSubmit={online && !blocked && !full && !readOnly && pendingConfig === null && (session === null || runtime.status !== 'pending') && (session === null ? selectedABA !== '' && runtimeProfileId.trim() !== '' && workspaceId.trim() !== '' : keyReady && session.status === 'ACTIVE')}
     readOnly={readOnly} hasActiveSession={active} targetSettings={targetSettings} error={error}
     notice={!online ? '连接已断开。会话与草稿保留在本页；请打开连接设置重新连接，不会自动重发请求。' : full ? '本页会话达到显示上限，请新建对话。' : endpoints.length === 0 ? '还没有在线执行设备。请在顶部的执行环境中检查或刷新设备列表。' : session !== null && !keyReady && active ? '正在准备安全会话，请稍候。未发送的内容仍保留在草稿中。' : null} />;
 }
