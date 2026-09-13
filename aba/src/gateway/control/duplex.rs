@@ -31,11 +31,8 @@ impl ControlState {
             if !session.active || session.uncertain {
                 continue;
             }
-            let channel_id = session_channel_id(
-                &id,
-                endpoint_id,
-                &session.material.recipient_hc_endpoint_id,
-            )?;
+            let channel_id =
+                session_channel_id(&id, endpoint_id, &session.material.recipient_hc_endpoint_id)?;
             for _ in 0..MAX_EVENTS_PER_SESSION {
                 if packets.len() >= MAX_POLL_PACKETS {
                     break;
@@ -55,7 +52,9 @@ impl ControlState {
                         }
                         if let Some(message_id) = event.completed_dispatch {
                             if !session.pending_dispatches.remove(&message_id) {
-                                return Err(GatewayError::ProtocolStage("unknown dispatch receipt"));
+                                return Err(GatewayError::ProtocolStage(
+                                    "unknown dispatch receipt",
+                                ));
                             }
                             journal.mark_responded(message_id, now_ms)?;
                         }

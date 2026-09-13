@@ -110,14 +110,20 @@ fn read_line(reader: &mut impl BufRead) -> Result<Option<Vec<u8>>, ProcessError>
 
 #[cfg(test)]
 mod tests {
-    use std::io::Cursor;
     use super::*;
+    use std::io::Cursor;
 
     #[test]
     fn lines_are_bounded_and_require_a_delimiter() -> Result<(), ProcessError> {
-        assert_eq!(read_line(&mut Cursor::new(b"{}\r\n"))?, Some(b"{}".to_vec()));
+        assert_eq!(
+            read_line(&mut Cursor::new(b"{}\r\n"))?,
+            Some(b"{}".to_vec())
+        );
         assert_eq!(read_line(&mut Cursor::new(b""))?, None);
-        assert_eq!(read_line(&mut Cursor::new(b"{}")), Err(ProcessError::Transport));
+        assert_eq!(
+            read_line(&mut Cursor::new(b"{}")),
+            Err(ProcessError::Transport)
+        );
         assert_eq!(
             read_line(&mut Cursor::new(vec![b'x'; MAX_ACP_MESSAGE_BYTES + 1])),
             Err(ProcessError::Limit)

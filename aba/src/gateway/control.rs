@@ -1,4 +1,6 @@
-use std::collections::HashMap;
+mod duplex;
+
+use std::collections::{BTreeSet, HashMap};
 use std::fs;
 #[cfg(unix)]
 use std::os::unix::fs::PermissionsExt as _;
@@ -38,6 +40,7 @@ pub(super) struct ControlState {
     outbound_sequence: u64,
     sessions: HashMap<[u8; 16], LocalSession>,
     journal: Journal,
+    poll_offset: usize,
 }
 
 struct LocalSession {
@@ -50,6 +53,7 @@ struct LocalSession {
     aba_frame_sequence: u64,
     uncertain: bool,
     uncertain_message_id: Option<[u8; 16]>,
+    pending_dispatches: BTreeSet<[u8; 16]>,
 }
 
 pub(super) struct ControlContext<'a> {
@@ -74,6 +78,7 @@ impl ControlState {
             outbound_sequence: 0,
             sessions: HashMap::new(),
             journal,
+            poll_offset: 0,
         }
     }
 
@@ -336,6 +341,7 @@ impl ControlState {
                 aba_frame_sequence: 0,
                 uncertain: false,
                 uncertain_message_id: None,
+                pending_dispatches: BTreeSet::new(),
             },
         );
         Ok(responses)
@@ -655,39 +661,24 @@ impl ControlState {
             IntakeOutcome::New | IntakeOutcome::Duplicate(InboundState::Received) => {}
         }
         journal.start_dispatch(aad.message_id, now_ms)?;
-        let responses = match session.agent.prompt(&plaintext, &lower_hex(&session_id)) {
-            Ok(responses) => responses,
-            Err(_) => {
-                journal.mark_uncertain(aad.message_id, now_ms)?;
-                session.uncertain = true;
-                session.uncertain_message_id = Some(aad.message_id);
-                return Ok(vec![
-                    acknowledgment,
-                    signed_uncertain_error(aad.message_id, identity)?,
-                ]);
+        session.pending_dispatches.insert(aad.message_id);
+        if session
+            .agent
+            .submit(&plaintext, &lower_hex(&session_id), aad.message_id)
+            .is_err()
+        {
+            for pending in std::mem::take(&mut session.pending_dispatches) {
+                journal.mark_uncertain(pending, now_ms)?;
             }
-        };
-        let mut packets = Vec::with_capacity(responses.len() + 1);
-        packets.push(acknowledgment);
-        for response in responses {
-            match seal_aba_frame(
-                session,
-                endpoint_id,
-                identity,
-                channel_id,
-                &response,
-                now_ms,
-                &journal,
-            ) {
-                Ok(packet) => packets.push(packet),
-                Err(error) => {
-                    let _ = journal.mark_uncertain(aad.message_id, now_ms);
-                    return Err(error);
-                }
-            }
+            session.uncertain = true;
+            session.uncertain_message_id = Some(aad.message_id);
+            return Ok(vec![
+                acknowledgment,
+                signed_uncertain_error(aad.message_id, identity)?,
+            ]);
         }
-        journal.mark_responded(aad.message_id, now_ms)?;
-        Ok(packets)
+        // ACK means safe intake. Agent updates/results are emitted by poll() as they arrive.
+        Ok(vec![acknowledgment])
     }
 
     fn handle_ack_frame(

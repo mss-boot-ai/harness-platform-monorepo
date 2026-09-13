@@ -435,11 +435,23 @@ impl ReadyConnection {
         {
             self.socket.send(Message::binary(packet))?;
         }
+        configure_poll_timeouts(&mut self.socket)?;
         loop {
+            for packet in controls.poll(&self.endpoint_id_bytes, identity, SystemTime::now())? {
+                self.socket.send(Message::binary(packet))?;
+            }
             let message = match self.socket.read() {
                 Ok(message) => message,
                 Err(tungstenite::Error::ConnectionClosed | tungstenite::Error::AlreadyClosed) => {
                     return Ok(());
+                }
+                Err(tungstenite::Error::Io(error))
+                    if matches!(
+                        error.kind(),
+                        std::io::ErrorKind::WouldBlock | std::io::ErrorKind::TimedOut
+                    ) =>
+                {
+                    continue;
                 }
                 Err(error) => return Err(GatewayError::WebSocket(error)),
             };
@@ -475,6 +487,20 @@ impl ReadyConnection {
         self.socket.close(None)?;
         Ok(())
     }
+}
+
+fn configure_poll_timeouts(
+    socket: &mut WebSocket<MaybeTlsStream<std::net::TcpStream>>,
+) -> Result<(), GatewayError> {
+    let stream = match socket.get_mut() {
+        MaybeTlsStream::Plain(stream) => stream,
+        MaybeTlsStream::Rustls(stream) => &mut stream.sock,
+        _ => return Err(GatewayError::ProtocolStage("unsupported socket transport")),
+    };
+    stream
+        .set_read_timeout(Some(Duration::from_millis(25)))
+        .and_then(|()| stream.set_write_timeout(Some(Duration::from_secs(5))))
+        .map_err(|error| GatewayError::WebSocket(tungstenite::Error::Io(error)))
 }
 
 fn nonce_challenge(response: Response) -> Result<String, GatewayError> {
