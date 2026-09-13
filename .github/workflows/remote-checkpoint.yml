@@ -37,3 +37,50 @@ jobs:
           path: ${{ runner.temp }}/remote-checkpoint/
           if-no-files-found: error
           retention-days: 3
+
+  runtime-duplex:
+    if: github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository && github.event.pull_request.head.ref == 'design/device-fabric-foundation'
+    permissions:
+      contents: write
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          ref: ${{ github.event.pull_request.head.sha }}
+          persist-credentials: false
+      - name: Install locked Rust toolchain
+        run: rustup toolchain install 1.88.0 --profile minimal --component rustfmt,clippy
+      - name: Apply the reviewed integration patch and format a candidate
+        if: hashFiles('.github/checkpoints/remote.patch') != ''
+        run: python3 .github/scripts/prepare_candidate.py prepare
+      - name: Compile and test the exact candidate
+        working-directory: aba
+        run: |
+          cargo +1.88.0 test --locked --workspace --all-targets
+          cargo +1.88.0 clippy --locked --workspace --all-targets --all-features -- -D warnings
+      - name: Upload verified Git objects, never update refs
+        if: success()
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          if test -f "${RUNNER_TEMP}/runtime-review/candidate-local.json"; then
+            python3 .github/scripts/prepare_candidate.py publish
+          fi
+      - name: Retain formatter tooling and review evidence
+        if: always()
+        run: |
+          set -Eeuo pipefail
+          mkdir -p "${RUNNER_TEMP}/runtime-review/formatter/bin" "${RUNNER_TEMP}/runtime-review/formatter/lib"
+          toolchain="$(rustup run 1.88.0 rustc --print sysroot)"
+          cp "${toolchain}/bin/rustfmt" "${RUNNER_TEMP}/runtime-review/formatter/bin/"
+          find "${toolchain}/lib" -maxdepth 1 -type f -name '*.so*' -exec cp {} "${RUNNER_TEMP}/runtime-review/formatter/lib/" \;
+          git rev-parse HEAD > "${RUNNER_TEMP}/runtime-review/source-sha.txt"
+      - name: Upload runtime review evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: remote-runtime-review-${{ github.sha }}
+          path: ${{ runner.temp }}/runtime-review/
+          if-no-files-found: warn
+          retention-days: 3
