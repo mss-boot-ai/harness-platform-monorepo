@@ -57,9 +57,10 @@ try {
   await page.locator('.chat-scroll').evaluate((element) => { element.scrollTop = 0; element.dispatchEvent(new Event('scroll')); });
   await page.getByRole('button', { name: '回到最新', exact: true }).waitFor();
   await page.getByRole('button', { name: '回到最新', exact: true }).click();
-  await page.waitForTimeout(100);
-  const remaining = await page.locator('.chat-scroll').evaluate((element) => element.scrollHeight - element.clientHeight - element.scrollTop);
-  assert.ok(remaining < 100);
+  await page.waitForFunction(() => {
+    const element = document.querySelector('.chat-scroll');
+    return element !== null && element.scrollHeight - element.clientHeight - element.scrollTop < 100;
+  }, undefined, { timeout: 5000 });
 
   await page.goto(`${base}/e2e/fixture.html?scenario=offline`, { waitUntil: 'networkidle' });
   await page.getByLabel('消息', { exact: true }).fill('离线草稿');

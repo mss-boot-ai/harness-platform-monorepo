@@ -121,7 +121,7 @@ export function ChatWorkspace(props: ChatWorkspaceProps) {
             </article>)}
           </section>}
       </div>
-      {!empty ? <div className="composer-dock">{!atBottom ? <button className="latest-button" type="button" onClick={() => { nearBottom.current = true; setAtBottom(true); viewport.current?.scrollTo({ top: viewport.current.scrollHeight, behavior: 'smooth' }); }}><Icon name="down" />回到最新</button> : null}{composer}</div> : null}
+      {!empty ? <div className="composer-dock">{!atBottom ? <button className="latest-button" type="button" onClick={() => { nearBottom.current = true; setAtBottom(true); viewport.current?.scrollTo({ top: viewport.current.scrollHeight, behavior: window.matchMedia('(prefers-reduced-motion: reduce)').matches ? 'auto' : 'smooth' }); }}><Icon name="down" />回到最新</button> : null}{composer}</div> : null}
       <span className="sr-only" role="status">{props.responding ? 'Agent 正在回复' : '可以继续操作'}</span>
     </main>
     <Dialog open={confirm !== null} onClose={() => setConfirm(null)} title={confirm === 'new' ? '结束当前会话并新建？' : '结束当前会话？'}><p>将向执行端发送关闭会话请求。已经执行的操作不会撤销；此操作不是仅停止显示文字。</p><div className="dialog-actions"><button className="secondary-button" type="button" onClick={() => setConfirm(null)}>继续当前会话</button><button className="primary-button" type="button" onClick={() => { const action = confirm; setConfirm(null); if (action === 'new') props.onNewChat(); else props.onEndChat?.(); }}>{confirm === 'new' ? '结束并新建' : '结束会话'}</button></div></Dialog>
