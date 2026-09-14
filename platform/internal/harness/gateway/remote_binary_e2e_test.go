@@ -175,7 +175,22 @@ func TestRemoteActualABAGatewayDuplex(t *testing.T) {
 		if result.Code != http.StatusOK {
 			t.Fatalf("ABA discovery failed before readiness polling: HTTP %d", result.Code)
 		}
-		if bytes.Contains(result.Body.Bytes(), []byte(aba.ID.String())) {
+		var discovered struct {
+			Items []struct {
+				ID      string `json:"id"`
+				Catalog struct {
+					Status string `json:"status"`
+				} `json:"catalog"`
+			} `json:"items"`
+		}
+		if err := json.Unmarshal(result.Body.Bytes(), &discovered); err != nil {
+			t.Fatal(err)
+		}
+		ready := false
+		for _, item := range discovered.Items {
+			ready = ready || item.ID == aba.ID.String() && item.Catalog.Status == "ready"
+		}
+		if ready {
 			break
 		}
 		select {
