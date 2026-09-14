@@ -20,7 +20,20 @@
 14. [`memory/work-log.md`](memory/work-log.md)：实际工作、提交、验证与未完成项记录。
 15. [`references.md`](references.md)：上游版本、标准和外部规范引用。
 
+### 2026-09-13 设备能力扩展提案
+
+在保留以上已接受ACP基线的基础上，设备扩展工作还须读取：
+
+- [`device-fabric/README.md`](device-fabric/README.md)：完整设计入口、当前代码审阅和产品范围。
+- [`device-fabric/INTEGRATION.md`](device-fabric/INTEGRATION.md)：实体终端主动发任务、Headless HC与原ACP的具体接缝。
+- [`adr/0006-device-fabric-and-trusted-execution.md`](adr/0006-device-fabric-and-trusted-execution.md)：Draft架构决策。
+- [`memory/2026-09-13-device-fabric-design.md`](memory/2026-09-13-device-fabric-design.md)：本轮范围和事实记录。
+
+上述为待评审/待实现的设计，不表示设备协议、MCP、审批或真机已验证；不更改旧AWP的Accepted安全契约。
+
 ## 2. 文档权威顺序
+
+当前 Remote 工作入口：[产品/技术方案](remote/README.md)、[交付矩阵](remote/DELIVERY.md)、[HC C3 验证报告](roadmap/verification/2026-09-14-hc-remote-conversations.md)。报告明确区分同一浏览器安装的恢复与未完成的跨设备、Host 恢复和生产验收。
 
 发生冲突时按以下顺序处理：
 

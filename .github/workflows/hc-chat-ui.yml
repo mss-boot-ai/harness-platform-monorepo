@@ -1,0 +1,55 @@
+name: HC Chat UI
+on:
+  pull_request:
+    branches: [main]
+    paths: ['hc/**', '.github/workflows/hc-chat-ui.yml']
+  workflow_dispatch:
+permissions:
+  contents: read
+concurrency:
+  group: hc-chat-ui-${{ github.ref }}
+  cancel-in-progress: true
+jobs:
+  browser:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # existing repository pin
+      - uses: actions/setup-node@v6
+        with:
+          node-version: '24'
+      - name: Install locked HC dependencies and verify
+        run: |
+          corepack enable
+          corepack prepare pnpm@10.34.5 --activate
+          pnpm --dir hc install --frozen-lockfile
+          pnpm --dir hc lint
+          pnpm --dir hc typecheck
+          pnpm --dir hc test
+          pnpm --dir hc build
+      - name: Install pinned browser test tooling
+        run: |
+          npm install --prefix "${RUNNER_TEMP}/hc-browser-tools" --no-save --package-lock=false playwright@1.55.0
+          "${RUNNER_TEMP}/hc-browser-tools/node_modules/.bin/playwright" install --with-deps chromium
+          sudo apt-get install -y fonts-noto-cjk
+      - name: Run UI smoke checks (synthetic conversation, no production account)
+        env:
+          HC_BROWSER_TOOLS: ${{ runner.temp }}/hc-browser-tools
+          HC_BROWSER_BASE_URL: http://127.0.0.1:4173
+        run: |
+          set -Eeuo pipefail
+          pnpm --dir hc --filter @harness/hc-web dev --port 4173 >"${RUNNER_TEMP}/hc-ui-vite.log" 2>&1 &
+          server_pid=$!
+          trap 'kill "${server_pid}" 2>/dev/null || true' EXIT
+          curl --fail --silent --retry 30 --retry-delay 1 --retry-connrefused http://127.0.0.1:4173/ >/dev/null
+          node hc/web/e2e/smoke.mjs
+      - name: Upload browser screenshots and production bundle
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: hc-chat-ui-${{ github.sha }}
+          path: |
+            hc/web/browser-evidence/
+            hc/web/dist/
+          if-no-files-found: warn
+          retention-days: 7

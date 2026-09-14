@@ -1,117 +1,42 @@
-import {
-  connectGateway,
-  IndexedDbSecureStore,
-  type EndpointIdentity,
-  type ReadyGatewayConnection,
-} from '@harness/hc-core';
-import { useEffect, useRef, useState } from 'react';
-import {
-  HcApiError,
-  fetchTrustManifest,
-  issueWebSocketTicket,
-  refreshEndpointSession,
-  type RegistrationSession,
-  type WebSocketTicket,
-} from './api';
-
-export function GatewaySetup({
-  identity,
-  onRegistration,
-  onReady,
-}: {
-  readonly identity: EndpointIdentity;
-  readonly onRegistration: (registration: RegistrationSession) => void;
+import { type IndexedDbSecureStore, type ReadyGatewayConnection } from '@harness/hc-core';
+import { useCallback, useEffect, useRef, useState } from 'react';
+import { HcApiError } from './api';
+import type { EndpointAccess } from './remote/endpoint-access';
+export function GatewaySetup({ access, store, onReady }: {
+  readonly access: EndpointAccess; readonly store: IndexedDbSecureStore;
   readonly onReady: (ready: ReadyGatewayConnection | null) => void;
 }) {
-  const [ticket, setTicket] = useState<WebSocketTicket | null>(null);
   const [connection, setConnection] = useState<ReadyGatewayConnection | null>(null);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  const socketRef = useRef<WebSocket | null>(null);
-
-  useEffect(() => () => socketRef.current?.close(1000, 'HC page closed'), []);
-
-  const issue = async () => {
-    setBusy(true);
-    setError(null);
+  const socket = useRef<WebSocket | null>(null);
+  const attempt = useRef(0);
+  const mounted = useRef(false);
+  useEffect(() => { mounted.current = true; return () => { mounted.current = false; attempt.current += 1; socket.current?.close(1000, 'HC page detached'); }; }, []);
+  const issue = useCallback(async () => {
+    const id = ++attempt.current; const current = () => mounted.current && id === attempt.current;
+    setBusy(true); setError(null); socket.current?.close(1000, 'HC reconnecting'); socket.current = null; setConnection(null); onReady(null);
     try {
-      socketRef.current?.close(1000, 'HC reconnecting');
-      const activeRegistration = await refreshEndpointSession(identity);
-      const issued = await issueWebSocketTicket(identity, activeRegistration);
-      setTicket(issued);
-      const trust = await fetchTrustManifest();
-      if (globalThis.indexedDB === undefined) {
-        throw new Error('Gateway trust pin storage is unavailable');
-      }
-      await new IndexedDbSecureStore(globalThis.indexedDB).pinTrustRoot(
-        trust.rootJkt,
-        trust.revision,
-        trust.onlineJkt,
-        trust.expiresAt,
-      );
-      const ready = await connectGateway(identity, {
-        credentialId: activeRegistration.credentialId,
-        endpointId: activeRegistration.endpointId,
-        ticket: issued.ticket,
-        websocketUrl: issued.websocketUrl,
-      }, trust);
+      const ready = await access.connect(store);
+      if (!current()) { ready.socket.close(1000, 'Superseded connection'); return; }
       ready.socket.addEventListener('close', () => {
-        if (socketRef.current === ready.socket) {
-          socketRef.current = null;
-          setConnection(null);
-          setTicket(null);
-        }
+        if (mounted.current && socket.current === ready.socket) { socket.current = null; setConnection(null); onReady(null); }
       }, { once: true });
-      socketRef.current = ready.socket;
-      setConnection(ready);
-      onRegistration(activeRegistration);
-      onReady(ready);
+      socket.current = ready.socket; setConnection(ready); onReady(ready);
     } catch (cause) {
-      if (cause instanceof HcApiError) {
-        setError(`${cause.message}（${cause.code}）`);
-      } else {
-        setError('Gateway Ticket 获取失败，请确认 Gateway 服务与网络状态。');
-      }
-    } finally {
-      setBusy(false);
-    }
-  };
-
+      if (current()) setError(cause instanceof HcApiError ? `${cause.message}（${cause.code}）` : '无法建立安全连接，请检查网络、登录和浏览器端点状态。');
+    } finally { if (current()) setBusy(false); }
+  }, [access, store, onReady]);
+  useEffect(() => { const timer = setTimeout(() => { void issue(); }, 0); return () => clearTimeout(timer); }, [issue]);
   const disconnect = () => {
-    socketRef.current?.close(1000, 'HC manual network recovery test');
-    socketRef.current = null;
-    setConnection(null);
-    setTicket(null);
-    setError(null);
+    attempt.current += 1; socket.current?.close(1000, 'HC user disconnected'); socket.current = null;
+    setConnection(null); onReady(null); setBusy(false); setError(null);
   };
-
-  return (
-    <section className="gateway-card" aria-labelledby="gateway-title">
-      <div className="section-heading">
-        <div>
-          <p className="eyebrow">STEP 3 OF 4</p>
-          <h2 id="gateway-title">准备安全连接</h2>
-        </div>
-        <span className={`status-pill ${connection === null ? 'pending' : 'success'}`}>
-          {connection === null ? (ticket === null ? '需要 Ticket' : '正在握手') : 'CONNECTION READY'}
-        </span>
-      </div>
-      <p className="platform-copy">
-        {connection !== null
-          ? `连接已通过双向签名挑战，Generation ${connection.connectionGeneration}；Root ${connection.rootJkt.slice(0, 10)}…`
-          : ticket === null
-          ? 'Gateway 将先签发 Server Nonce，再验证 DPoP proof 并生成 30 秒单次 Ticket。'
-          : `Ticket 已签发，有效至 ${new Date(ticket.expiresAt).toLocaleTimeString()}；正在完成二进制签名挑战。`}
-      </p>
-      {error === null ? null : <p className="error-banner" role="alert">{error}</p>}
-      <button className="primary-button gateway-button" type="button" disabled={busy} onClick={() => void issue()}>
-        {busy ? '正在验证并握手…' : connection === null ? '获取 Ticket 并安全连接' : '重新建立安全连接'}
-      </button>
-      {connection === null ? null : (
-        <button className="secondary-button" type="button" disabled={busy} onClick={disconnect}>
-          断开连接（保留 Session）
-        </button>
-      )}
-    </section>
-  );
+  return <section className="gateway-card" aria-labelledby="gateway-title">
+    <div className="section-heading"><h3 id="gateway-title">安全连接</h3><span className={`status-pill ${connection === null ? '' : 'success'}`}>{busy ? '连接中' : connection === null ? '未连接' : '已连接'}</span></div>
+    <p>{connection === null ? '登录后会自动连接。断线时，加密历史和草稿仍保留在此浏览器。' : '已完成安全验证，可以返回对话。'}</p>
+    {error === null ? null : <p className="error-banner" role="alert">{error}</p>}
+    <button className="primary-button" type="button" disabled={busy} onClick={() => void issue()}>{busy ? '正在连接…' : connection === null ? '重新连接' : '重新建立连接'}</button>
+    {connection !== null ? <><button className="secondary-button" type="button" disabled={busy} onClick={disconnect}>断开连接（保留会话）</button><details className="technical-details"><summary>连接诊断</summary><p>Generation {connection.connectionGeneration.toString()}<br />Root {connection.rootJkt}</p></details></> : null}
+  </section>;
 }

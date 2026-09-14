@@ -6,6 +6,22 @@
 
 ---
 
+## 2026-09-14 20:10 +08:00 — HC 持久会话页面接入与浏览器恢复验证
+
+仓库 `mss-boot-ai/harness-platform-monorepo`，用户指定分支 `design/device-fabric-foundation`，Draft PR #3。本轮由 `717a85351beed69834ef810c5cf9aaeb09dc78d7` 继续，所有代码检查点先最小检查、commit/push，再执行完整验证。最终已验证实现源 `a0dad3fdbfb9a15b701f4973c48b8d2158072442`，提交消息 `fix(hc): retain failed drafts independently across conversation switches`。
+
+已实现生产 HC 多会话协调器、加密历史/草稿/恢复密钥/原帧 outbox、立即且版本化的会话选择、同安装标签页独占及接管、授权复核、积压恢复和刷新后仍有效的完整性隔离。ChatGPT 提供规划和独立源码评审，Codex 执行修改、提交及验证。
+
+本地 Node 24.20.0（nvm）、pnpm 10.34.5：lint/typecheck/build、102 个测试与两个帧故障工具测试通过；Go 1.26.6（gvm）和 Rust 1.88.0 的实际 ABA/Gateway 加密 race 集成通过。最终 Actions：Harness `34841287378`、HC UI `34841287431`、Remote Integration `34841287375`、Checkpoint `34841287352`，共 12 项检查全部成功。实际浏览器 checkout 为 PR 合成 merge `7b9071dfc6d818c41e050a7d36ae5fcfa37d0435`，不是已合并到 main。
+
+认证生产浏览器通过双会话、快速切换/独立草稿配置、刷新后审批、取消后继续、投递前/ACK 前/ACK 后三种中断的原帧恢复与一次执行、标签页接管、Opaque Canary、单会话关闭、吊销和无 Web Locks 拒绝。内置浏览器另验未登录生产页的设置/草稿/独占权与接管，以及合成组件的只读保留草稿；两者证据范围未混用。临时测试服务和私有临时栈已清理，未部署或合并。
+
+失败记录保留：首轮 lint/断言修复到 `2211e8b9aafe9f23d62306e224ab33b3d636e00f`；Vite HMR 误计修复到 `a3745721dc9c674c4bfccad6521d8018e335390f`；真实选择竞态修复 `0ea873d49d69ff28bdd5b9efcc83b12087581e28` 的测试类型标注在 `fe7997e724e5cf22105fe3df36a48dafe9eed702` 修复；积压/故障生命周期修复为 `3cdae17113990d6e9e7261520cc32fb43a1a280f`、`07dd21205057b4ae8732438a60cc0c8d502c1b16`；刷新测试改用应用状态断言，并在 `a0dad3fdbfb9a15b701f4973c48b8d2158072442` 等待选择保存确认、隔离失败草稿后最终通过。
+
+完整命令、场景、SHA/CI 对应关系及限制见[验证报告](../roadmap/verification/2026-09-14-hc-remote-conversations.md)。未完成项仍包括 Host 重启恢复、权威 workspace fencing、独立设备 Attachment/租约、真实模型增量验收、资源/PWA/生产部署及最终跨端场景。本日志为后续文档更新，不把其尚未执行的检查归入实现源的通过结果。
+
+---
+
 ## 2026-09-07 14:43 +08:00 — 242 开发环境部署与真实 DeepSeek H5 验证
 
 从 main 64f69044491b0f817e634d98ed4c5e413037e44f 在 codex/deploy-harness-dev-242

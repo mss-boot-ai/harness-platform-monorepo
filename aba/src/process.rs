@@ -1,26 +1,31 @@
+//! Local ACP process boundary with non-blocking bidirectional dispatch.
+//! Gateway calls submit/poll; prompt remains only for the CLI probe and legacy tests.
+mod transport;
+
+use std::collections::{BTreeMap, BTreeSet, VecDeque};
 use std::fs;
-use std::io::{BufRead, BufReader, Write as _};
-use std::process::{Child, ChildStdin, Command, Stdio};
-use std::sync::mpsc::{self, Receiver, RecvTimeoutError, SyncSender};
+use std::process::{Child, Command, Stdio};
+use std::sync::mpsc::{Receiver, RecvTimeoutError, SyncSender, TryRecvError};
 use std::thread::{self, JoinHandle};
 use std::time::{Duration, Instant};
 
 use agent_client_protocol::schema::ProtocolVersion;
 use agent_client_protocol::schema::v1::{
     InitializeRequest, InitializeResponse, NewSessionRequest, NewSessionResponse, PromptRequest,
-    PromptResponse, SessionNotification,
 };
-use serde_json::Value;
+use rand_core::{OsRng, RngCore as _};
+use serde_json::{Value, json};
 use thiserror::Error;
 
 use crate::config::{RuntimeProfile, WorkspaceProfile};
+use transport::{QUEUE_DEPTH, TransportEvent, WriteCommand};
 
 const MAX_ACP_MESSAGE_BYTES: usize = 64 * 1024;
-const MAX_READER_LINE_BYTES: usize = 1024 * 1024;
 const MAX_TURN_MESSAGES: usize = 256;
 const START_TIMEOUT: Duration = Duration::from_secs(10);
-const PROMPT_TIMEOUT: Duration = Duration::from_secs(60);
-const READER_QUEUE_DEPTH: usize = 64;
+const TURN_TIMEOUT: Duration = Duration::from_secs(3_600);
+const REQUEST_TIMEOUT: Duration = Duration::from_secs(30);
+const APPROVAL_TIMEOUT: Duration = Duration::from_secs(300);
 
 #[derive(Debug, Error, Clone, Copy, PartialEq, Eq)]
 pub enum ProcessError {
@@ -38,18 +43,42 @@ pub enum ProcessError {
     Limit,
 }
 
-#[derive(Debug, Clone, Copy)]
-enum ReaderError {
-    Transport,
-    Limit,
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct AgentEvent {
+    /// Empty for a durable transport-dispatch receipt, not an ACP execution result.
+    pub message: Vec<u8>,
+    pub completed_dispatch: Option<[u8; 16]>,
+}
+
+struct RequestBinding {
+    original_id: Value,
+    dispatch_id: [u8; 16],
+    method: String,
+    requested_value: Option<Value>,
+    deadline: Instant,
+}
+
+struct PermissionBinding {
+    original_id: Value,
+    option_ids: BTreeSet<String>,
+    deadline: Instant,
 }
 
 pub struct AgentProcess {
     child: Child,
-    stdin: ChildStdin,
-    receiver: Option<Receiver<Result<Vec<u8>, ReaderError>>>,
-    reader: Option<JoinHandle<()>>,
+    writer: Option<SyncSender<WriteCommand>>,
+    receiver: Option<Receiver<TransportEvent>>,
+    threads: Vec<JoinHandle<()>>,
     agent_session_id: String,
+    platform_session_id: Option<String>,
+    initialized: Value,
+    session_info: Value,
+    requests: BTreeMap<String, RequestBinding>,
+    permissions: BTreeMap<String, PermissionBinding>,
+    immediate: VecDeque<AgentEvent>,
+    active_turn: Option<String>,
+    next_id: u64,
+    process_epoch: u64,
 }
 
 impl AgentProcess {
@@ -86,196 +115,669 @@ impl AgentProcess {
             terminate_child(&mut child);
             return Err(ProcessError::Spawn);
         };
-        let (sender, receiver) = mpsc::sync_channel(READER_QUEUE_DEPTH);
-        let reader = match thread::Builder::new()
-            .name("aba-agent-stdout".to_owned())
-            .spawn(move || read_agent_stdout(stdout, &sender))
-        {
-            Ok(reader) => reader,
-            Err(_) => {
+        let pumps = match transport::spawn(stdin, stdout) {
+            Ok(value) => value,
+            Err(error) => {
                 terminate_child(&mut child);
-                return Err(ProcessError::Spawn);
+                return Err(error);
             }
         };
         let mut process = Self {
             child,
-            stdin,
-            receiver: Some(receiver),
-            reader: Some(reader),
+            writer: Some(pumps.writer),
+            receiver: Some(pumps.events),
+            threads: pumps.threads,
             agent_session_id: String::new(),
+            platform_session_id: None,
+            initialized: Value::Null,
+            session_info: Value::Null,
+            requests: BTreeMap::new(),
+            permissions: BTreeMap::new(),
+            immediate: VecDeque::new(),
+            active_turn: None,
+            next_id: 0,
+            process_epoch: OsRng.next_u64(),
         };
         process.initialize(&workspace_path)?;
         Ok(process)
     }
 
+    /// Validate and enqueue without waiting for an Agent response or a writable pipe.
+    pub fn submit(
+        &mut self,
+        plaintext: &[u8],
+        platform_session_id: &str,
+        dispatch_id: [u8; 16],
+    ) -> Result<(), ProcessError> {
+        if plaintext.is_empty() || plaintext.len() > MAX_ACP_MESSAGE_BYTES {
+            return Err(ProcessError::Limit);
+        }
+        if let Some(bound) = &self.platform_session_id {
+            if bound != platform_session_id {
+                return Err(ProcessError::Protocol);
+            }
+        } else {
+            self.platform_session_id = Some(platform_session_id.to_owned());
+        }
+        let mut message: Value =
+            serde_json::from_slice(plaintext).map_err(|_| ProcessError::Protocol)?;
+        if !message.is_object() || message.get("jsonrpc").and_then(Value::as_str) != Some("2.0") {
+            return Err(ProcessError::Protocol);
+        }
+        let method = message
+            .get("method")
+            .and_then(Value::as_str)
+            .map(str::to_owned);
+        let Some(method) = method else {
+            return self.submit_permission(message, dispatch_id);
+        };
+        if message.get("result").is_some() || message.get("error").is_some() {
+            return Err(ProcessError::Protocol);
+        }
+        if method == "session/cancel" {
+            if message.get("id").is_some()
+                || message
+                    .get("params")
+                    .and_then(Value::as_object)
+                    .is_none_or(|params| params.len() != 1)
+                || message.pointer("/params/sessionId").and_then(Value::as_str)
+                    != Some(platform_session_id)
+            {
+                return Err(ProcessError::Protocol);
+            }
+            self.cancel_permissions()?;
+            message["params"]["sessionId"] = Value::String(self.agent_session_id.clone());
+            return self.queue(&message, Some(dispatch_id));
+        }
+        let id = message
+            .get("id")
+            .filter(|value| valid_id(value))
+            .cloned()
+            .ok_or(ProcessError::Protocol)?;
+        if self
+            .requests
+            .values()
+            .any(|request| request.original_id == id)
+        {
+            return Err(ProcessError::Protocol);
+        }
+        if self.requests.len() >= QUEUE_DEPTH || self.immediate.len() >= QUEUE_DEPTH {
+            return Err(ProcessError::Limit);
+        }
+        if message.pointer("/params/sessionId").and_then(Value::as_str) != Some(platform_session_id)
+        {
+            return Err(ProcessError::Protocol);
+        }
+        if method == "_mss/session/describe" {
+            let mut session = self.session_info.clone();
+            session["sessionId"] = Value::String(platform_session_id.to_owned());
+            return self.immediate_result(id, json!({
+                "initialize": self.initialized, "session": session,
+                "bridge": {"duplex": true, "turnCancellation": self.initialized.pointer("/_meta/mss/turnCancellation").and_then(Value::as_bool).unwrap_or(true), "protocolVersion": 1, "processEpoch": self.process_epoch.to_string()}
+            }), dispatch_id);
+        }
+        if !matches!(
+            method.as_str(),
+            "session/prompt"
+                | "session/set_config_option"
+                | "session/set_mode"
+                | "session/set_model"
+        ) {
+            return self.immediate_error(id, -32601, "UNSUPPORTED_SESSION_METHOD", dispatch_id);
+        }
+        if method == "session/prompt" {
+            let parsed: PromptRequest = serde_json::from_value(message["params"].clone())
+                .map_err(|_| ProcessError::Protocol)?;
+            if parsed.prompt.is_empty() {
+                return Err(ProcessError::Protocol);
+            }
+        }
+        if !self.requests.is_empty() {
+            return self.immediate_error(id, -32000, "TURN_IN_PROGRESS", dispatch_id);
+        }
+        if method != "session/prompt" && !self.configuration_allowed(&method, &message["params"]) {
+            return self.immediate_error(id, -32602, "UNSUPPORTED_CONFIGURATION", dispatch_id);
+        }
+        let wire_id = self.allocate_id("request")?;
+        message["id"] = Value::String(wire_id.clone());
+        message["params"]["sessionId"] = Value::String(self.agent_session_id.clone());
+        self.queue(&message, None)?;
+        if method == "session/prompt" {
+            self.active_turn = Some(wire_id.clone());
+        }
+        let timeout = if method == "session/prompt" {
+            TURN_TIMEOUT
+        } else {
+            REQUEST_TIMEOUT
+        };
+        self.requests.insert(
+            wire_id,
+            RequestBinding {
+                original_id: id,
+                dispatch_id,
+                requested_value: message
+                    .pointer("/params/modeId")
+                    .or_else(|| message.pointer("/params/modelId"))
+                    .cloned(),
+                method,
+                deadline: Instant::now() + timeout,
+            },
+        );
+        Ok(())
+    }
+
+    /// At most one event per call. Gateway drains a bounded fair batch across sessions.
+    pub fn poll(&mut self) -> Result<Option<AgentEvent>, ProcessError> {
+        if let Some(event) = self.immediate.pop_front() {
+            return Ok(Some(event));
+        }
+        if self
+            .requests
+            .values()
+            .any(|request| Instant::now() >= request.deadline)
+        {
+            return Err(ProcessError::Timeout);
+        }
+        let expired: Vec<String> = self
+            .permissions
+            .iter()
+            .filter(|(_, permission)| Instant::now() >= permission.deadline)
+            .map(|(id, _)| id.clone())
+            .collect();
+        for id in expired {
+            self.cancel_permission(&id)?;
+        }
+        if let Some(event) = self.immediate.pop_front() {
+            return Ok(Some(event));
+        }
+        let receiver = self.receiver.as_ref().ok_or(ProcessError::Transport)?;
+        match receiver.try_recv() {
+            Ok(TransportEvent::Message(bytes)) => self.process_message(bytes).map(Some),
+            Ok(TransportEvent::Written(id)) => Ok(Some(AgentEvent {
+                message: Vec::new(),
+                completed_dispatch: Some(id),
+            })),
+            Ok(TransportEvent::Failure(error)) => Err(error),
+            Err(TryRecvError::Empty) => Ok(None),
+            Err(TryRecvError::Disconnected) => Err(ProcessError::Transport),
+        }
+    }
+
+    pub fn pending_dispatches(&self) -> Vec<[u8; 16]> {
+        self.requests
+            .values()
+            .map(|value| value.dispatch_id)
+            .collect()
+    }
+
+    /// Compatibility helper for a local diagnostic only; never called by Gateway.
     pub fn prompt(
         &mut self,
         plaintext: &[u8],
         platform_session_id: &str,
     ) -> Result<Vec<Vec<u8>>, ProcessError> {
-        if plaintext.is_empty() || plaintext.len() > MAX_ACP_MESSAGE_BYTES {
-            return Err(ProcessError::Limit);
-        }
-        let mut request: Value =
-            serde_json::from_slice(plaintext).map_err(|_| ProcessError::Protocol)?;
-        if request.get("jsonrpc").and_then(Value::as_str) != Some("2.0")
-            || request.get("method").and_then(Value::as_str) != Some("session/prompt")
-        {
+        let value: Value = serde_json::from_slice(plaintext).map_err(|_| ProcessError::Protocol)?;
+        if value.get("method").and_then(Value::as_str) != Some("session/prompt") {
             return Err(ProcessError::Protocol);
         }
-        let request_id = request
-            .get("id")
-            .filter(|value| !value.is_null())
-            .cloned()
-            .ok_or(ProcessError::Protocol)?;
-        let prompt: PromptRequest = serde_json::from_value(
-            request
-                .get("params")
-                .cloned()
-                .ok_or(ProcessError::Protocol)?,
-        )
-        .map_err(|_| ProcessError::Protocol)?;
-        if prompt.session_id.0.as_ref() != platform_session_id || prompt.prompt.is_empty() {
-            return Err(ProcessError::Protocol);
-        }
-        request
-            .get_mut("params")
-            .and_then(Value::as_object_mut)
-            .ok_or(ProcessError::Protocol)?
-            .insert(
-                "sessionId".to_owned(),
-                Value::String(self.agent_session_id.clone()),
-            );
-        self.send(&request)?;
-
-        let deadline = Instant::now() + PROMPT_TIMEOUT;
+        let dispatch_id = [1; 16];
+        self.submit(plaintext, platform_session_id, dispatch_id)?;
         let mut messages = Vec::new();
-        for _ in 0..MAX_TURN_MESSAGES {
-            let mut message = self.receive(deadline)?;
-            if message.get("jsonrpc").and_then(Value::as_str) != Some("2.0") {
+        loop {
+            if let Some(event) = self.poll()? {
+                if !event.message.is_empty() {
+                    messages.push(event.message);
+                }
+                if event.completed_dispatch == Some(dispatch_id) {
+                    return Ok(messages);
+                }
+                if messages.len() >= MAX_TURN_MESSAGES {
+                    return Err(ProcessError::Limit);
+                }
+            } else {
+                thread::sleep(Duration::from_millis(5));
+            }
+        }
+    }
+
+    fn process_message(&mut self, bytes: Vec<u8>) -> Result<AgentEvent, ProcessError> {
+        let mut message: Value =
+            serde_json::from_slice(&bytes).map_err(|_| ProcessError::Protocol)?;
+        if !message.is_object() || message.get("jsonrpc").and_then(Value::as_str) != Some("2.0") {
+            return Err(ProcessError::Protocol);
+        }
+        if let Some(method) = message
+            .get("method")
+            .and_then(Value::as_str)
+            .map(str::to_owned)
+        {
+            if message.get("result").is_some() || message.get("error").is_some() {
                 return Err(ProcessError::Protocol);
             }
-            if message.get("method").and_then(Value::as_str) == Some("session/update") {
-                if message.get("id").is_some() || message.get("result").is_some() {
-                    return Err(ProcessError::Protocol);
-                }
-                let notification: SessionNotification = serde_json::from_value(
-                    message
-                        .get("params")
-                        .cloned()
-                        .ok_or(ProcessError::Protocol)?,
-                )
-                .map_err(|_| ProcessError::Protocol)?;
-                if notification.session_id.0.as_ref() != self.agent_session_id {
-                    return Err(ProcessError::Protocol);
-                }
-                message
-                    .get_mut("params")
-                    .and_then(Value::as_object_mut)
-                    .ok_or(ProcessError::Protocol)?
-                    .insert(
-                        "sessionId".to_owned(),
-                        Value::String(platform_session_id.to_owned()),
-                    );
-                messages.push(serialize_bounded(&message)?);
-                continue;
-            }
-            if message.get("method").is_some()
-                || message.get("id") != Some(&request_id)
-                || message.get("result").is_none()
+            if message.pointer("/params/sessionId").and_then(Value::as_str)
+                != Some(self.agent_session_id.as_str())
             {
                 return Err(ProcessError::Protocol);
             }
-            serde_json::from_value::<PromptResponse>(
-                message
-                    .get("result")
-                    .cloned()
+            if method == "session/request_permission" {
+                return self.open_permission(message);
+            }
+            if method != "session/update"
+                || message.get("id").is_some()
+                || !message
+                    .pointer("/params/update")
+                    .is_some_and(Value::is_object)
+            {
+                return Err(ProcessError::Protocol);
+            }
+            if message
+                .pointer("/params/update/sessionUpdate")
+                .and_then(Value::as_str)
+                == Some("config_option_update")
+            {
+                if let Some(options) = message
+                    .pointer("/params/update/configOptions")
+                    .filter(|value| value.is_array())
+                {
+                    self.session_info["configOptions"] = options.clone();
+                }
+            }
+            if message
+                .pointer("/params/update/sessionUpdate")
+                .and_then(Value::as_str)
+                == Some("current_mode_update")
+            {
+                if let Some(mode) = message
+                    .pointer("/params/update/currentModeId")
+                    .filter(|value| value.is_string())
+                {
+                    self.session_info["modes"]["currentModeId"] = mode.clone();
+                }
+            }
+            message["params"]["sessionId"] = Value::String(
+                self.platform_session_id
+                    .clone()
                     .ok_or(ProcessError::Protocol)?,
-            )
-            .map_err(|_| ProcessError::Protocol)?;
-            messages.push(serialize_bounded(&message)?);
-            return Ok(messages);
+            );
+            return Ok(AgentEvent {
+                message: serialize_bounded(&message)?,
+                completed_dispatch: None,
+            });
         }
-        Err(ProcessError::Limit)
+        if message.get("result").is_some() == message.get("error").is_some() {
+            return Err(ProcessError::Protocol);
+        }
+        let wire_id = message
+            .get("id")
+            .and_then(Value::as_str)
+            .ok_or(ProcessError::Protocol)?
+            .to_owned();
+        let request = self
+            .requests
+            .remove(&wire_id)
+            .ok_or(ProcessError::Protocol)?;
+        if request.method == "session/prompt" {
+            if self.active_turn.as_deref() != Some(wire_id.as_str()) {
+                return Err(ProcessError::Protocol);
+            }
+            self.active_turn = None;
+            self.cancel_permissions()?;
+        } else if request.method == "session/set_config_option" {
+            if let Some(options) = message
+                .pointer("/result/configOptions")
+                .filter(|value| value.is_array())
+            {
+                self.session_info["configOptions"] = options.clone();
+            }
+        }
+        if message.get("error").is_none() {
+            if let Some(value) = request.requested_value {
+                match request.method.as_str() {
+                    "session/set_mode" => self.session_info["modes"]["currentModeId"] = value,
+                    "session/set_model" => self.session_info["models"]["currentModelId"] = value,
+                    _ => {}
+                }
+            }
+        }
+        message["id"] = request.original_id;
+        Ok(AgentEvent {
+            message: serialize_bounded(&message)?,
+            completed_dispatch: Some(request.dispatch_id),
+        })
+    }
+
+    fn open_permission(&mut self, mut message: Value) -> Result<AgentEvent, ProcessError> {
+        if self.active_turn.is_none() || self.permissions.len() >= 16 {
+            return Err(ProcessError::Protocol);
+        }
+        let original_id = message
+            .get("id")
+            .filter(|id| valid_id(id))
+            .cloned()
+            .ok_or(ProcessError::Protocol)?;
+        if self
+            .permissions
+            .values()
+            .any(|value| value.original_id == original_id)
+        {
+            return Err(ProcessError::Protocol);
+        }
+        let options = message
+            .pointer("/params/options")
+            .and_then(Value::as_array)
+            .ok_or(ProcessError::Protocol)?;
+        if options.is_empty()
+            || options.len() > 16
+            || !message
+                .pointer("/params/toolCall")
+                .is_some_and(Value::is_object)
+        {
+            return Err(ProcessError::Protocol);
+        }
+        let mut option_ids = BTreeSet::new();
+        for option in options {
+            let id = option
+                .get("optionId")
+                .and_then(Value::as_str)
+                .ok_or(ProcessError::Protocol)?;
+            if id.is_empty() || id.len() > 128 || !option_ids.insert(id.to_owned()) {
+                return Err(ProcessError::Protocol);
+            }
+            if !matches!(
+                option.get("kind").and_then(Value::as_str),
+                Some("allow_once" | "allow_always" | "reject_once" | "reject_always")
+            ) {
+                return Err(ProcessError::Protocol);
+            }
+        }
+        let id = self.allocate_id("permission")?;
+        message["id"] = Value::String(id.clone());
+        message["params"]["sessionId"] = Value::String(
+            self.platform_session_id
+                .clone()
+                .ok_or(ProcessError::Protocol)?,
+        );
+        self.permissions.insert(
+            id,
+            PermissionBinding {
+                original_id,
+                option_ids,
+                deadline: Instant::now() + APPROVAL_TIMEOUT,
+            },
+        );
+        Ok(AgentEvent {
+            message: serialize_bounded(&message)?,
+            completed_dispatch: None,
+        })
+    }
+
+    fn submit_permission(
+        &mut self,
+        mut message: Value,
+        dispatch_id: [u8; 16],
+    ) -> Result<(), ProcessError> {
+        let id = message
+            .get("id")
+            .and_then(Value::as_str)
+            .ok_or(ProcessError::Protocol)?
+            .to_owned();
+        if !message.as_object().is_some_and(|object| {
+            object.len() == 3
+                && object.contains_key("jsonrpc")
+                && object.contains_key("id")
+                && object.contains_key("result")
+        }) || !message
+            .get("result")
+            .and_then(Value::as_object)
+            .is_some_and(|object| object.len() == 1 && object.contains_key("outcome"))
+        {
+            return Err(ProcessError::Protocol);
+        }
+        let permission = self.permissions.get(&id).ok_or(ProcessError::Protocol)?;
+        if Instant::now() >= permission.deadline {
+            return Err(ProcessError::Protocol);
+        }
+        match message
+            .pointer("/result/outcome/outcome")
+            .and_then(Value::as_str)
+        {
+            Some("selected") => {
+                if message
+                    .pointer("/result/outcome")
+                    .and_then(Value::as_object)
+                    .is_none_or(|object| object.len() != 2)
+                {
+                    return Err(ProcessError::Protocol);
+                }
+                let option = message
+                    .pointer("/result/outcome/optionId")
+                    .and_then(Value::as_str)
+                    .ok_or(ProcessError::Protocol)?;
+                if !permission.option_ids.contains(option) {
+                    return Err(ProcessError::Protocol);
+                }
+            }
+            Some("cancelled") => {
+                if message
+                    .pointer("/result/outcome")
+                    .and_then(Value::as_object)
+                    .is_none_or(|object| object.len() != 1)
+                {
+                    return Err(ProcessError::Protocol);
+                }
+            }
+            _ => return Err(ProcessError::Protocol),
+        }
+        message["id"] = permission.original_id.clone();
+        self.queue(&message, Some(dispatch_id))?;
+        self.permissions.remove(&id);
+        Ok(())
+    }
+
+    fn cancel_permissions(&mut self) -> Result<(), ProcessError> {
+        let ids: Vec<String> = self.permissions.keys().cloned().collect();
+        for id in ids {
+            self.cancel_permission(&id)?;
+        }
+        Ok(())
+    }
+
+    fn cancel_permission(&mut self, id: &str) -> Result<(), ProcessError> {
+        let permission = self.permissions.get(id).ok_or(ProcessError::Protocol)?;
+        self.queue(&json!({"jsonrpc": "2.0", "id": permission.original_id, "result": {"outcome": {"outcome": "cancelled"}}}), None)?;
+        self.permissions.remove(id);
+        self.immediate.push_back(AgentEvent {
+            message: serialize_bounded(&json!({"jsonrpc": "2.0", "method": "_mss/permission/closed", "params": {"requestId": id, "sessionId": self.platform_session_id}}))?,
+            completed_dispatch: None,
+        });
+        Ok(())
+    }
+
+    fn configuration_allowed(&self, method: &str, params: &Value) -> bool {
+        let keys: &[&str] = match method {
+            "session/set_config_option" => &["sessionId", "configId", "value"],
+            "session/set_mode" => &["sessionId", "modeId"],
+            "session/set_model" => &["sessionId", "modelId"],
+            _ => return false,
+        };
+        if !params.as_object().is_some_and(|object| {
+            object.len() == keys.len() && keys.iter().all(|key| object.contains_key(*key))
+        }) {
+            return false;
+        }
+        match method {
+            "session/set_config_option" => {
+                let Some(id) = params.get("configId").and_then(Value::as_str) else {
+                    return false;
+                };
+                let Some(value) = params.get("value").and_then(Value::as_str) else {
+                    return false;
+                };
+                self.session_info
+                    .get("configOptions")
+                    .and_then(Value::as_array)
+                    .is_some_and(|options| {
+                        options.iter().any(|option| {
+                            option.get("id").and_then(Value::as_str) == Some(id)
+                                && option.get("options").and_then(Value::as_array).is_some_and(
+                                    |values| {
+                                        values.iter().any(|item| {
+                                            item.get("value").and_then(Value::as_str) == Some(value)
+                                                || item
+                                                    .get("options")
+                                                    .and_then(Value::as_array)
+                                                    .is_some_and(|group| {
+                                                        group.iter().any(|item| {
+                                                            item.get("value")
+                                                                .and_then(Value::as_str)
+                                                                == Some(value)
+                                                        })
+                                                    })
+                                        })
+                                    },
+                                )
+                        })
+                    })
+            }
+            "session/set_mode" => self
+                .session_info
+                .pointer("/modes/availableModes")
+                .and_then(Value::as_array)
+                .is_some_and(|modes| {
+                    modes
+                        .iter()
+                        .any(|mode| mode.get("id") == params.get("modeId"))
+                }),
+            "session/set_model" => self
+                .session_info
+                .pointer("/models/availableModels")
+                .and_then(Value::as_array)
+                .is_some_and(|models| {
+                    models
+                        .iter()
+                        .any(|model| model.get("modelId") == params.get("modelId"))
+                }),
+            _ => false,
+        }
+    }
+
+    fn immediate_result(
+        &mut self,
+        id: Value,
+        result: Value,
+        dispatch_id: [u8; 16],
+    ) -> Result<(), ProcessError> {
+        self.immediate.push_back(AgentEvent {
+            message: serialize_bounded(&json!({"jsonrpc": "2.0", "id": id, "result": result}))?,
+            completed_dispatch: Some(dispatch_id),
+        });
+        Ok(())
+    }
+    fn immediate_error(
+        &mut self,
+        id: Value,
+        code: i32,
+        message: &str,
+        dispatch_id: [u8; 16],
+    ) -> Result<(), ProcessError> {
+        self.immediate.push_back(AgentEvent {
+            message: serialize_bounded(
+                &json!({"jsonrpc": "2.0", "id": id, "error": {"code": code, "message": message}}),
+            )?,
+            completed_dispatch: Some(dispatch_id),
+        });
+        Ok(())
+    }
+    fn allocate_id(&mut self, kind: &str) -> Result<String, ProcessError> {
+        self.next_id = self.next_id.checked_add(1).ok_or(ProcessError::Limit)?;
+        Ok(format!(
+            "aba/{}/{kind}/{}",
+            self.process_epoch, self.next_id
+        ))
     }
 
     fn initialize(&mut self, workspace_path: &std::path::Path) -> Result<(), ProcessError> {
         let initialize_id = Value::String("aba-initialize".to_owned());
-        self.send(&serde_json::json!({
-            "jsonrpc": "2.0",
-            "id": initialize_id,
-            "method": "initialize",
-            "params": InitializeRequest::new(ProtocolVersion::V1),
-        }))?;
+        self.queue(&json!({"jsonrpc": "2.0", "id": initialize_id, "method": "initialize", "params": InitializeRequest::new(ProtocolVersion::V1)}), None)?;
         let deadline = Instant::now() + START_TIMEOUT;
         let response = self.receive(deadline)?;
         let result = response_result(&response, &initialize_id)?;
         let initialized: InitializeResponse =
-            serde_json::from_value(result).map_err(|_| ProcessError::Protocol)?;
+            serde_json::from_value(result.clone()).map_err(|_| ProcessError::Protocol)?;
         if initialized.protocol_version != ProtocolVersion::V1 {
             return Err(ProcessError::Protocol);
         }
-
+        self.initialized = result;
         let session_id = Value::String("aba-session-new".to_owned());
-        self.send(&serde_json::json!({
-            "jsonrpc": "2.0",
-            "id": session_id,
-            "method": "session/new",
-            "params": NewSessionRequest::new(workspace_path),
-        }))?;
-        let response = self.receive(deadline)?;
+        self.queue(&json!({"jsonrpc": "2.0", "id": session_id, "method": "session/new", "params": NewSessionRequest::new(workspace_path)}), None)?;
+        let response = self.receive(Instant::now() + START_TIMEOUT)?;
         let result = response_result(&response, &session_id)?;
         let created: NewSessionResponse =
-            serde_json::from_value(result).map_err(|_| ProcessError::Protocol)?;
+            serde_json::from_value(result.clone()).map_err(|_| ProcessError::Protocol)?;
         if created.session_id.0.is_empty() || created.session_id.0.len() > 256 {
             return Err(ProcessError::Protocol);
         }
         self.agent_session_id = created.session_id.0.to_string();
+        self.session_info = result;
         Ok(())
     }
 
-    fn send(&mut self, value: &Value) -> Result<(), ProcessError> {
-        let encoded = serialize_bounded(value)?;
-        self.stdin
-            .write_all(&encoded)
-            .and_then(|()| self.stdin.write_all(b"\n"))
-            .and_then(|()| self.stdin.flush())
-            .map_err(|_| ProcessError::Transport)
+    fn queue(&self, value: &Value, receipt: Option<[u8; 16]>) -> Result<(), ProcessError> {
+        self.writer
+            .as_ref()
+            .ok_or(ProcessError::Transport)?
+            .try_send(WriteCommand {
+                bytes: serialize_bounded(value)?,
+                receipt,
+            })
+            .map_err(|error| match error {
+                std::sync::mpsc::TrySendError::Full(_) => ProcessError::Limit,
+                std::sync::mpsc::TrySendError::Disconnected(_) => ProcessError::Transport,
+            })
     }
-
     fn receive(&self, deadline: Instant) -> Result<Value, ProcessError> {
         let remaining = deadline
             .checked_duration_since(Instant::now())
             .ok_or(ProcessError::Timeout)?;
-        let receiver = self.receiver.as_ref().ok_or(ProcessError::Transport)?;
-        let bytes = match receiver.recv_timeout(remaining) {
-            Ok(Ok(bytes)) => bytes,
-            Ok(Err(ReaderError::Transport)) | Err(RecvTimeoutError::Disconnected) => {
-                return Err(ProcessError::Transport);
+        match self
+            .receiver
+            .as_ref()
+            .ok_or(ProcessError::Transport)?
+            .recv_timeout(remaining)
+        {
+            Ok(TransportEvent::Message(bytes)) => {
+                serde_json::from_slice(&bytes).map_err(|_| ProcessError::Protocol)
             }
-            Ok(Err(ReaderError::Limit)) => return Err(ProcessError::Limit),
-            Err(RecvTimeoutError::Timeout) => return Err(ProcessError::Timeout),
-        };
-        if bytes.is_empty() {
-            return Err(ProcessError::Protocol);
+            Ok(TransportEvent::Failure(error)) => Err(error),
+            Err(RecvTimeoutError::Timeout) => Err(ProcessError::Timeout),
+            _ => Err(ProcessError::Transport),
         }
-        if bytes.len() > MAX_ACP_MESSAGE_BYTES {
-            return Err(ProcessError::Limit);
-        }
-        serde_json::from_slice(&bytes).map_err(|_| ProcessError::Protocol)
     }
 }
 
 impl Drop for AgentProcess {
     fn drop(&mut self) {
         self.receiver.take();
+        self.writer.take();
         terminate_child(&mut self.child);
-        if let Some(reader) = self.reader.take() {
-            let _ = reader.join();
+        for thread in self.threads.drain(..) {
+            // A hostile escaped descendant must not block the Gateway in an unbounded join.
+            if thread.is_finished() {
+                let _ = thread.join();
+            }
         }
     }
 }
 
+fn valid_id(value: &Value) -> bool {
+    match value {
+        Value::String(text) => !text.is_empty() && text.len() <= 256,
+        Value::Number(number) => number
+            .as_i64()
+            .is_some_and(|value| (-9_007_199_254_740_991..=9_007_199_254_740_991).contains(&value)),
+        _ => false,
+    }
+}
 fn response_result(response: &Value, expected_id: &Value) -> Result<Value, ProcessError> {
     if response.get("jsonrpc").and_then(Value::as_str) != Some("2.0")
         || response.get("id") != Some(expected_id)
@@ -289,65 +791,12 @@ fn response_result(response: &Value, expected_id: &Value) -> Result<Value, Proce
         .cloned()
         .ok_or(ProcessError::Protocol)
 }
-
 fn serialize_bounded(value: &Value) -> Result<Vec<u8>, ProcessError> {
     let encoded = serde_json::to_vec(value).map_err(|_| ProcessError::Protocol)?;
-    if encoded.len() > MAX_ACP_MESSAGE_BYTES {
+    if encoded.is_empty() || encoded.len() > MAX_ACP_MESSAGE_BYTES {
         return Err(ProcessError::Limit);
     }
     Ok(encoded)
-}
-
-fn read_agent_stdout(
-    stdout: std::process::ChildStdout,
-    sender: &SyncSender<Result<Vec<u8>, ReaderError>>,
-) {
-    let mut reader = BufReader::new(stdout);
-    loop {
-        match read_line_bounded(&mut reader) {
-            Ok(Some(line)) => {
-                if sender.send(Ok(line)).is_err() {
-                    return;
-                }
-            }
-            Ok(None) => {
-                let _ = sender.send(Err(ReaderError::Transport));
-                return;
-            }
-            Err(error) => {
-                let _ = sender.send(Err(error));
-                return;
-            }
-        }
-    }
-}
-
-fn read_line_bounded(reader: &mut impl BufRead) -> Result<Option<Vec<u8>>, ReaderError> {
-    let mut line = Vec::new();
-    loop {
-        let available = reader.fill_buf().map_err(|_| ReaderError::Transport)?;
-        if available.is_empty() {
-            return if line.is_empty() {
-                Ok(None)
-            } else {
-                Err(ReaderError::Transport)
-            };
-        }
-        let newline = available.iter().position(|byte| *byte == b'\n');
-        let consumed = newline.map_or(available.len(), |position| position + 1);
-        let content_length = newline.unwrap_or(available.len());
-        if line.len().saturating_add(content_length) > MAX_READER_LINE_BYTES {
-            return Err(ReaderError::Limit);
-        }
-        line.extend_from_slice(&available[..content_length]);
-        reader.consume(consumed);
-        if newline.is_some() {
-            if line.last() == Some(&b'\r') {
-                line.pop();
-            }
-            return Ok(Some(line));
-        }
-    }
 }
 
 fn canonical_safe_file(path: &std::path::Path) -> Result<std::path::PathBuf, ProcessError> {

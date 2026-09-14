@@ -1,3 +1,4 @@
+import { EncryptedLocalVault, type LocalCipher } from './local-vault';
 import {
   assertIdentityUsable,
   createEndpointIdentity,
@@ -21,9 +22,12 @@ export interface InboxFrame {
   readonly sessionId: string;
 }
 
-interface StoredInboxFrame extends Omit<InboxFrame, 'sequence'> {
+interface StoredInboxFrame extends Omit<InboxFrame, 'sequence' | 'plaintext'> {
   readonly id: string;
   readonly sequence: string;
+  readonly sealed?: LocalCipher;
+  /** Read-only migration input from pre-Remote versions; never written again. */
+  readonly plaintext?: Uint8Array;
 }
 
 export interface SecureStoreProbe {
@@ -138,6 +142,7 @@ export class IndexedDbSecureStore {
     try {
       await this.create(probeId, 'Secure store capability probe');
       await this.delete(probeId);
+      await this.migrateLegacyInbox();
       return {
         assurance: 'web-software',
         detail: '不可导出私钥可作为 CryptoKey 句柄持久保存并重新使用。',
@@ -224,19 +229,26 @@ export class IndexedDbSecureStore {
     }
   }
 
+  public localVault(): EncryptedLocalVault { return new EncryptedLocalVault(this.factory, `${this.databaseName}-content-v1`); }
+
   public async putInboxFrame(frame: InboxFrame): Promise<'duplicate' | 'stored'> {
     validateInboxFrame(frame);
+    const id = inboxFrameId(frame.sessionId, frame.direction, frame.sequence);
+    const sealed = await this.localVault().seal(inboxCipherScope(id, frame.contentHash, frame.messageId), frame.plaintext);
     const database = await this.open();
     const transaction = database.transaction(SESSION_INBOX_STORE, 'readwrite');
     try {
       const objectStore = transaction.objectStore(SESSION_INBOX_STORE);
-      const id = inboxFrameId(frame.sessionId, frame.direction, frame.sequence);
       const existing = await requestResult(
         objectStore.get(id) as IDBRequest<StoredInboxFrame | undefined>,
       );
       if (existing !== undefined) {
         if (!equalBytes(existing.messageId, frame.messageId) || !equalBytes(existing.contentHash, frame.contentHash)) {
           throw new Error('HC inbox sequence conflict');
+        }
+        if (existing.plaintext !== undefined) {
+          const { plaintext: _legacy, ...metadata } = existing;
+          objectStore.put({ ...metadata, sealed });
         }
         await transactionComplete(transaction);
         return 'duplicate';
@@ -246,11 +258,11 @@ export class IndexedDbSecureStore {
         throw new Error('HC inbox capacity reached');
       }
       objectStore.put({
-        ...frame,
+        direction: frame.direction, receivedAt: frame.receivedAt, sessionId: frame.sessionId,
         contentHash: frame.contentHash.slice(),
         id,
         messageId: frame.messageId.slice(),
-        plaintext: frame.plaintext.slice(),
+        sealed,
         sequence: frame.sequence.toString(),
       } satisfies StoredInboxFrame);
       await transactionComplete(transaction);
@@ -264,6 +276,55 @@ export class IndexedDbSecureStore {
       throw error;
     } finally {
       database.close();
+    }
+  }
+
+  /** Read a bounded page. Cursors are sequences in one direction, never a display-message count. */
+  public async readSessionInbox(sessionId: string, afterSequence = 0n, limit = 128, direction: 1 | 2 = 2): Promise<readonly InboxFrame[]> {
+    if (!/^[0-9a-f]{32}$/u.test(sessionId) || afterSequence < 0n || afterSequence >= 0xffff_ffff_ffff_ffffn || !Number.isInteger(limit) || limit < 1 || limit > 128 || ![1, 2].includes(direction)) throw new Error('Invalid inbox query');
+    const database = await this.open();
+    let values: StoredInboxFrame[];
+    try {
+      const tx = database.transaction(SESSION_INBOX_STORE, 'readonly');
+      const range = IDBKeyRange.bound(inboxFrameId(sessionId, direction, afterSequence + 1n), inboxFrameId(sessionId, direction, 0xffff_ffff_ffff_ffffn));
+      values = await requestResult(tx.objectStore(SESSION_INBOX_STORE).getAll(range, limit) as IDBRequest<StoredInboxFrame[]>);
+      await transactionComplete(tx);
+    } finally { database.close(); }
+    const result: InboxFrame[] = [];
+    for (const value of values) {
+      const sequence = BigInt(value.sequence);
+      if (value.sessionId !== sessionId || value.direction !== direction || value.id !== inboxFrameId(sessionId, direction, sequence)) throw new Error('Stored inbox binding mismatch');
+      const plaintext = value.sealed === undefined ? value.plaintext : await this.localVault().unseal(inboxCipherScope(value.id, value.contentHash, value.messageId), value.sealed);
+      if (plaintext === undefined) throw new Error('Local inbox content unavailable');
+      const frame: InboxFrame = { sessionId: value.sessionId, direction: value.direction, sequence, contentHash: value.contentHash, messageId: value.messageId, receivedAt: value.receivedAt, plaintext };
+      validateInboxFrame(frame);
+      if (value.plaintext !== undefined) await this.putInboxFrame(frame);
+      result.push(frame);
+    }
+    return result;
+  }
+
+  /** Migrate existing plaintext before the browser is reported ready. No key export or network access. */
+  public async migrateLegacyInbox(): Promise<void> {
+    let cursor: IDBValidKey | null = null;
+    for (;;) {
+      const database = await this.open();
+      let values: StoredInboxFrame[];
+      try {
+        const tx = database.transaction(SESSION_INBOX_STORE, 'readonly');
+        values = await requestResult(tx.objectStore(SESSION_INBOX_STORE).getAll(cursor === null ? undefined : IDBKeyRange.lowerBound(cursor, true), 16) as IDBRequest<StoredInboxFrame[]>);
+        await transactionComplete(tx);
+      } finally { database.close(); }
+      if (values.length === 0) return;
+      for (const value of values) {
+        if (value.plaintext !== undefined) {
+          const { id, sequence, sealed: _sealed, ...legacy } = value;
+          const parsed = BigInt(sequence);
+          if (id !== inboxFrameId(value.sessionId, value.direction, parsed)) throw new Error('Legacy inbox binding mismatch');
+          await this.putInboxFrame({ ...legacy, plaintext: value.plaintext, sequence: parsed });
+        }
+        cursor = value.id;
+      }
     }
   }
 
@@ -301,7 +362,7 @@ function validateInboxFrame(frame: InboxFrame): void {
   if (
     !/^[0-9a-f]{32}$/u.test(frame.sessionId) ||
     ![1, 2].includes(frame.direction) ||
-    frame.sequence <= 0n ||
+    frame.sequence <= 0n || frame.sequence > 0xffff_ffff_ffff_ffffn ||
     frame.messageId.length !== 16 ||
     frame.messageId.every((byte) => byte === 0) ||
     frame.contentHash.length !== 32 ||
@@ -320,4 +381,9 @@ function inboxFrameId(sessionId: string, direction: 1 | 2, sequence: bigint): st
 
 function equalBytes(left: Uint8Array, right: Uint8Array): boolean {
   return left.length === right.length && left.every((value, index) => value === right[index]);
+}
+
+function inboxCipherScope(id: string, hash: Uint8Array, messageId: Uint8Array): string {
+  const hex = (bytes: Uint8Array) => Array.from(bytes, (value) => value.toString(16).padStart(2, '0')).join('');
+  return `inbox/${id}/${hex(hash)}/${hex(messageId)}`;
 }

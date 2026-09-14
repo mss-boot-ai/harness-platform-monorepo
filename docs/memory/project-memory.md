@@ -6,6 +6,14 @@
 
 ## 1. 项目身份与当前检查点
 
+### 2026-09-14 当前进展
+
+用户当前指定开发分支是 `design/device-fabric-foundation`，对应 Draft PR #3；PR #1、#2 已合并。HC 同安装端点的持久多会话/刷新恢复子切片已在 `a0dad3fdbfb9a15b701f4973c48b8d2158072442` 通过 102 个 HC 单元测试、两个断网工具测试及全部 12 项 PR 检查。实际认证浏览器使用生产 HC bundle、Admin/Gateway/ABA 二进制和确定性 ACP 测试程序。完整证据及失败修复链见[验证报告](../roadmap/verification/2026-09-14-hc-remote-conversations.md)。
+
+执行主机重启恢复、权威 workspace fencing、独立设备授权/租约、此增量的真实模型验收与生产部署仍未完成。以下 2026-09-04 的分支、PR 和阶段值是历史基线，不能覆盖本段、远端 Git 或最新验证报告。
+
+### 2026-09-04 历史基线
+
 ```text
 repository:      mss-boot-ai/harness-platform-monorepo
 main:            design and long-term memory baseline
