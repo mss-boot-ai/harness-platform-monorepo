@@ -28,7 +28,8 @@ export async function startRemoteStack() {
   const children = []; const sockets = new Set(); const logs = [];
   let wireObserver = () => true;
   const transportErrors = [];
-  const password = `C3!aZ9${randomBytes(24).toString('base64url')}`;
+  const password = process.env.HC_TEST_PASSWORD || `C3!aZ9${randomBytes(24).toString('base64url')}`;
+  assert.ok(password.length >= 24, 'Use a long, test-only password for the isolated browser stack');
   const authKey = randomBytes(32).toString('base64url');
   const identityKey = randomBytes(32).toString('base64url');
   const username = 'harness-c3-admin';
