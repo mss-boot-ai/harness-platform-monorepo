@@ -16,11 +16,12 @@ const loader = await createServer({ root: path.join(root, 'hc/web'), configFile:
 const { decodeWireMessage, WirePacketSchema } = await loader.ssrLoadModule('/e2e/protocol.ts');
 const output = process.env.HC_BROWSER_OUTPUT ?? path.join(root, 'hc/web/browser-evidence/remote');
 await mkdir(output, { recursive: true });
-const report = { runtime: 'deterministic ACP fixture; no live model', source: process.env.GITHUB_SHA ?? 'local', scenarios: [], limitations: [
+const report = { runtime: 'deterministic ACP fixture; no live model', source: process.env.HC_BROWSER_SOURCE_SHA ?? process.env.GITHUB_SHA ?? 'local',
+  checkout: process.env.GITHUB_SHA ?? 'local', scenarios: [], limitations: [
   'Same browser installation only; independent-device authorization and persistent Host restart recovery remain unverified.',
   'Storage corruption/quota/key-loss refusal also has unit coverage; this browser run does not claim every storage fault combination.',
 ] };
-let stack; let browser;
+let stack; let browser; let page;
 const delay = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 async function until(predicate, label, milliseconds = 30_000) {
   const deadline = Date.now() + milliseconds;
@@ -31,7 +32,7 @@ try {
   stack = await startRemoteStack();
   browser = await chromium.launch({ headless: true });
   const context = await browser.newContext({ viewport: { width: 1440, height: 1000 }, locale: 'zh-CN', reducedMotion: 'reduce' });
-  let page = await context.newPage(); const errors = []; const registrations = [];
+  page = await context.newPage(); const errors = []; const registrations = [];
   const observePage = (target) => {
     target.on('pageerror', (error) => errors.push(error.message));
     target.on('request', (request) => { if (new URL(request.url()).pathname === '/admin/api/harness/v1/hc/endpoints' && request.method() === 'POST') registrations.push('registered'); });
@@ -105,7 +106,7 @@ try {
   await savedDraft();
   await selection('permission');
   assert.equal(await page.getByRole('textbox', { name: '消息', exact: true }).inputValue(), 'draft B retained');
-  await page.reload({ waitUntil: 'networkidle' });
+  await page.reload({ waitUntil: 'domcontentloaded' });
   await page.getByRole('region', { name: '工具权限请求', exact: true }).waitFor({ timeout: 30_000 });
   assert.equal(await page.getByRole('textbox', { name: '消息', exact: true }).inputValue(), 'draft B retained');
   assert.equal(registrations.length, 1, 'Refresh must reuse the existing endpoint');
@@ -129,7 +130,7 @@ try {
     await send('wait'); await until(() => fault.hit, `${mode} boundary reached`);
     if (mode === 'after-ack') await page.getByText('消息已安全送达，正在等待执行结果。', { exact: true }).waitFor();
     const captured = fault.captured; assert.ok(captured);
-    await page.reload({ waitUntil: 'networkidle' });
+    await page.reload({ waitUntil: 'domcontentloaded' });
     await page.getByRole('button', { name: '停止本轮', exact: true }).waitFor({ timeout: 30_000 });
     await until(async () => (await stack.audit('workspace-a')).length === before + 1, `${mode} execution count`);
     const attempts = sent.filter((item) => item.message === captured.message);
@@ -166,7 +167,7 @@ try {
   await until(async () => (await sessionFor('workspace-b')).status === 'CLOSED', 'only B closes');
   assert.equal((await sessionFor('workspace-a')).status, 'ACTIVE');
   await stack.adminRequest(`/admin/api/harness/v1/endpoints/${a.hcEndpointId}/revoke`, 'POST', {});
-  await page.reload({ waitUntil: 'networkidle' });
+  await page.reload({ waitUntil: 'domcontentloaded' });
   await page.getByText(/已有登录无法恢复/).first().waitFor();
   assert.equal(registrations.length, 1);
   report.scenarios.push('Close B preserves A; revocation rejects refresh without re-registration or new task: passed.');
@@ -183,6 +184,11 @@ try {
   console.log(`Production HC browser acceptance passed: ${report.scenarios.length} scenario groups; actual Gateway/ABA, deterministic ACP, no live-model claim.`);
 } catch (error) {
   report.status = 'failed'; report.error = String(error?.stack ?? error).replaceAll(stack?.password ?? '\0', '[redacted]').replace(/\b[A-Za-z0-9_-]{32,}\b/gu, '[redacted]');
+  if (page && !page.isClosed()) {
+    report.visibleConversations = await page.locator('.conversation-item').count().catch(() => -1);
+    report.notices = await page.locator('.chat-notice, .chat-error').allTextContents().catch(() => []);
+    await page.screenshot({ path: path.join(output, 'failed-page.png') }).catch(() => undefined);
+  }
   console.error(report.error); process.exitCode = 1;
 } finally {
   await browser?.close(); await loader.close(); await stack?.stop();

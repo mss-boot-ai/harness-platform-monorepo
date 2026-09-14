@@ -33,6 +33,20 @@ async function fixture() {
 }
 const chunk = (sessionId: string, text: string) => ({ jsonrpc: '2.0', method: 'session/update', params: { sessionId, update: { sessionUpdate: 'agent_message_chunk', content: { type: 'text', text } } } });
 describe('endpoint conversation coordination', () => {
+  it('fences delayed control signatures on replacement without poisoning either conversation', async () => {
+    const f = await fixture(); await f.manager.load();
+    let release: () => void = () => undefined; let entered = false;
+    const gate = new Promise<void>((resolve) => { release = resolve; });
+    const sign = crypto.subtle.sign.bind(crypto.subtle);
+    vi.spyOn(crypto.subtle, 'sign').mockImplementationOnce(async (...args) => { entered = true; await gate; return sign(...args); });
+    const old = f.manager.bind(connection(f.socket)); await vi.waitFor(() => expect(entered).toBe(true));
+    const next = new Socket(); const replacing = f.manager.bind(connection(next, 2n));
+    release(); await Promise.all([old, replacing]);
+    expect(f.socket.sent).toHaveLength(0); expect(f.manager.snapshot().online).toBe(true);
+    expect(f.manager.snapshot().conversations.every((item) => item.fault === null && item.data.blocked === null)).toBe(true);
+    const sequences = next.sent.map((bytes) => decodeWireMessage(WirePacketSchema, bytes)).flatMap((packet) => packet.body.case === 'control' ? [packet.body.value.controlSequence] : []);
+    expect(sequences).toEqual([1n, 2n]);
+  });
   it('preserves an unsent packet under backpressure and replays only its original bytes after reconnect', async () => {
     const f = await fixture(); await f.manager.load(); await f.manager.bind(connection(f.socket));
     f.socket.bufferedAmount = 4 * 1024 * 1024 + 1;

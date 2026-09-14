@@ -54,3 +54,13 @@ Source `fe7997e724e5cf22105fe3df36a48dafe9eed702` passed local lint/typecheck, a
 ## Independent review: backpressure repair
 
 A full socket buffer or synchronous socket-send failure now detaches transport and exposes a recoverable delivery state. The already persisted packet remains in the outbox; a verified replacement connection uses existing exact-byte replay. The UI distinguishes a saved request awaiting delivery from a confirmed delivery awaiting execution. The regression asserts no first transmission under backpressure, unchanged packet bytes/sequence after recovery, and no CloseSession side effect.
+
+Source `3cdae17113990d6e9e7261520cc32fb43a1a280f` passed local lint/typecheck, all 94 tests and production build after push.
+
+## Independent review: fault lifetime repair
+
+Expected connection replacement/shutdown is now a typed transport interruption. A verified receive or resume operation interrupted at its control-send boundary retains valid durable state without creating a permanent integrity fault. Failed control encoding or sending retires that connection rather than skipping a consumed sequence on a live connection. Delayed control-signature tests verify that an old connection sends nothing and the replacement starts its own sequence at one.
+
+Integrity/binding/conflict failures are quarantined within the serialized conversation queue. Their bounded safe status is stored in the encrypted snapshot, remains sticky across later observations, and prevents replay/new encryption after reconstruction. If saving the status fails, the current view remains fail-closed and CAS never overwrites a newer record. The complete outbox is validated before any operation is replayed. Regressions cover a verified conflicting duplicate, reload, CAS failure, and a malformed later outbox entry.
+
+The repaired browser run for `fe7997e724e5cf22105fe3df36a48dafe9eed702` passed the original pre-reload draft assertion but workflow `34839096247` timed out waiting for `networkidle` after navigation had completed. The acceptance test now waits for DOM loading and its explicit permission/conversation state assertions; it does not extend the timeout or remove those assertions. Reports distinguish source HEAD from the actual PR merge checkout, and failures retain a screenshot plus safe status notices for diagnosis.

@@ -3,7 +3,7 @@ import {
   type EndpointIdentity, type ReadyGatewayConnection,
 } from '@harness/hc-core';
 import type { ABAEndpointSummary, EndpointSessionSummary } from '../api';
-import { ConversationController, type ConversationTransport, type ConversationView } from './conversation-controller';
+import { ConversationController, ConversationTransportInterrupted, type ConversationTransport, type ConversationView } from './conversation-controller';
 import { ConversationStore, hex, isTerminal, MAX_CONVERSATIONS, newConversation,
   type ConversationWorkspace, type CreationIntent, type StoredConversation, type StoredWorkspace } from './conversation-store';
 import type { ConfigOption, RpcId } from './runtime-state';
@@ -106,14 +106,18 @@ export class ConversationManager {
     }, control: (encode) => {
       const epoch = this.epoch; const connection = this.connection;
       const operation = this.controlQueue.then(async () => {
-        if (!this.current(epoch) || connection === null || connection.socket.readyState !== 1) throw new Error('Connection changed before control');
+        if (!this.current(epoch) || connection === null || connection.socket.readyState !== 1) throw new ConversationTransportInterrupted('Connection changed before control');
         if (this.controlSequence >= 0xffff_ffff_ffff_ffffn) throw new Error('Control sequence exhausted');
         const bytes = await encode(++this.controlSequence);
-        if (!this.current(epoch) || connection !== this.connection || connection.socket.readyState !== 1) throw new Error('Connection changed during control');
-        if (connection.socket.bufferedAmount > MAX_BUFFER_BYTES) { this.disconnect(); this.fail('连接控制消息积压，请重新连接以恢复会话。'); throw new Error('Connection backpressure'); }
-        connection.socket.send(new Uint8Array(bytes).buffer);
+        if (!this.current(epoch) || connection !== this.connection || connection.socket.readyState !== 1) throw new ConversationTransportInterrupted('Connection changed during control');
+        if (connection.socket.bufferedAmount > MAX_BUFFER_BYTES) { this.disconnect(); this.fail('连接控制消息积压，请重新连接以恢复会话。'); throw new ConversationTransportInterrupted('Connection backpressure'); }
+        try { connection.socket.send(new Uint8Array(bytes).buffer); }
+        catch { this.disconnect(); this.fail('控制消息发送中断，请重新连接以恢复会话。'); throw new ConversationTransportInterrupted('Control transport interrupted'); }
       });
-      this.controlQueue = operation.catch(() => undefined); return operation;
+      this.controlQueue = operation.catch(() => {
+        // A failed encoder may already have consumed a control sequence. Never skip it on a live connection.
+        if (this.current(epoch) && this.connection === connection) { this.disconnect(); this.fail('连接控制状态已中断，请重新连接后恢复。'); }
+      }); return operation;
     } };
   }
   private add(stored: StoredConversation): ConversationController {
@@ -166,7 +170,7 @@ export class ConversationManager {
         this.restoring = false; this.flush();
         await Promise.all([...this.controllers.entries()].filter(([id]) => this.allowed.has(id)).map(async ([id, controller]) => {
           try { await controller.resume(); await this.describe(id); }
-          catch { this.recovery[id] = '会话恢复未确认，已暂停此对话的操作。请检查执行状态。'; }
+          catch (cause) { if (!(cause instanceof ConversationTransportInterrupted) && this.current(epoch)) this.recovery[id] = '会话恢复未确认，已暂停此对话的操作。请检查执行状态。'; }
         }));
         this.emit();
       } catch (cause) {
@@ -211,7 +215,7 @@ export class ConversationManager {
           this.flush();
           await Promise.all([...this.controllers.entries()].map(async ([id, controller]) => {
             try { if (restored.has(id)) await controller.resume(); await this.describe(id); }
-            catch { this.recovery[id] = '会话恢复未确认，请检查连接与执行状态。'; this.emit(); }
+            catch (cause) { if (!(cause instanceof ConversationTransportInterrupted) && this.current(epoch)) { this.recovery[id] = '会话恢复未确认，请检查连接与执行状态。'; this.emit(); } }
           }));
         }
       } catch (cause) { if (this.current(epoch)) { this.disconnect(); this.fail('当前会话授权复核失败，已暂停连接。请重新连接或登录以核对授权并恢复原始消息。'); } throw cause; }
@@ -244,7 +248,11 @@ export class ConversationManager {
       if (!this.allowed.has(id) || this.recovery[id] !== undefined) { this.retain(bytes); return; }
       const routedId = id;
       // Core validates signatures, channel, generation and endpoint after this untrusted routing hint.
-      void controller.receive(bytes).then(() => this.describe(routedId)).catch(() => { this.recovery[routedId] = '消息验证或保存失败，此对话已暂停。'; this.emit(); });
+      const epoch = this.epoch;
+      void controller.receive(bytes).then(() => this.describe(routedId)).catch((cause: unknown) => {
+        if (cause instanceof ConversationTransportInterrupted || !this.current(epoch)) return;
+        this.allowed.delete(routedId); this.recovery[routedId] = '消息验证或保存失败，此对话已暂停。'; this.emit();
+      });
     } catch { this.disconnect(); this.fail('连接消息无法安全识别，已暂停恢复。'); }
   }
   private flush(): void { const buffered = this.buffer; this.buffer = []; this.bufferBytes = 0; for (const bytes of buffered) this.receive(bytes); }

@@ -82,6 +82,7 @@ jobs:
           HC_TEST_GATEWAY_BINARY: ${{ runner.temp }}/harness-gateway
           HARNESS_TEST_ABA_BINARY: ${{ github.workspace }}/aba/target/debug/aba
           HC_BROWSER_OUTPUT: ${{ github.workspace }}/hc/web/browser-evidence/remote
+          HC_BROWSER_SOURCE_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
         run: node hc/web/e2e/remote-conversations.mjs
       - name: Retain sanitized browser acceptance evidence
         if: always()

@@ -16,6 +16,8 @@ export interface ConversationTransport {
   readonly send: (packet: Uint8Array) => boolean;
   readonly control: (encode: (controlSequence: bigint) => Promise<Uint8Array>) => Promise<void>;
 }
+/** Expected transport replacement/cancellation does not invalidate already verified durable content. */
+export class ConversationTransportInterrupted extends Error {}
 export interface ConversationView {
   readonly data: Conversation; readonly pending: number; readonly fault: string | null;
 }
@@ -49,13 +51,20 @@ export class ConversationController {
     return operation;
   }
   private async persist(value: Conversation): Promise<void> {
-    const next = { ...value, updatedAt: this.transport.now() };
+    const next = { ...value, blocked: value.blocked ?? this.fault, updatedAt: this.transport.now() };
     try {
       const revision = await this.store.write(next, this.stored.revision);
       this.stored = { revision, value: next }; this.emit();
     } catch (cause) {
       this.fault = '本地加密记录保存失败，已暂停发送。请保留此页并检查存储空间；不会覆盖较新的记录。';
       this.emit(); throw cause;
+    }
+  }
+  private async quarantine(message: string): Promise<void> {
+    this.fault = message; this.emit();
+    try { await this.persist({ ...this.stored.value, blocked: message }); }
+    catch {
+      this.fault = '安全状态未能保存，当前会话已停止操作。请保留此页并检查存储；不会覆盖较新的记录。'; this.emit();
     }
   }
   private writable(value: Conversation): void {
@@ -166,8 +175,9 @@ export class ConversationController {
     if (encoded.length === 0 || encoded.length > 1_048_576) return Promise.reject(new Error('Packet exceeds receive limit'));
     const input = new Uint8Array(encoded);
     return this.enqueue(async () => {
+      try {
       const value = this.stored.value;
-      if (isTerminal(value.session.status)) return;
+      if (isTerminal(value.session.status) || value.blocked !== null || this.fault !== null) return;
       const packet = fromBinary(WirePacketSchema, input);
       if (packet.body.case === 'error') {
         const error = await openABAUncertainErrorPacket(value.aba.signingPublicJwk, input);
@@ -210,9 +220,12 @@ export class ConversationController {
         // Semantic state/cursor is durable before ACK; replay cannot add another message.
         this.transport.send(await createHCAckFramePacket(this.identity, this.binding(), Direction.ABA_TO_HC, sequence(this.stored.value.inbound)));
       } finally { frame.plaintext.fill(0); }
-    }, input.length).catch((cause: unknown) => {
-      this.fault = '会话消息验证或保存失败，已暂停新操作。请检查连接与本地存储，不会自动重发为新任务。'; this.emit(); throw cause;
-    });
+      } catch (cause) {
+        if (cause instanceof ConversationTransportInterrupted) return;
+        await this.quarantine('会话完整性或保存状态异常，已暂停操作。刷新后仍需核对执行状态，不会自动补传或新建任务。');
+        throw cause;
+      }
+    }, input.length);
   }
   private async ackKey(): Promise<void> {
     const keys = this.stored.value.keys;
@@ -223,16 +236,19 @@ export class ConversationController {
   /** Run after live authorization/status verification on a new connection. */
   public resume(): Promise<void> {
     return this.enqueue(async () => {
+      try {
       const value = this.stored.value;
       if (isTerminal(value.session.status) || value.keys === null) return;
+      if (value.reservation !== null || value.blocked !== null || this.fault !== null) return;
       if (value.session.status === 'WAITING_KEY') { await this.ackKey(); return; }
       if (value.session.status !== 'ACTIVE' && value.session.status !== 'UNCERTAIN') return;
       await this.transport.control((controlSequence) => createHCResumeStatePacket(this.identity, this.binding(), controlSequence, sequence(value.inbound), value.keys?.material.generation));
       if (sequence(value.inbound) > 0n) this.transport.send(await createHCAckFramePacket(this.identity, this.binding(), Direction.ABA_TO_HC, sequence(value.inbound)));
-      if (value.session.status !== 'ACTIVE' || value.reservation !== null || value.blocked !== null || this.fault !== null) return;
+      if (value.session.status !== 'ACTIVE') return;
       if (value.keys.material.expiresAtMs <= BigInt(this.transport.now())) {
         await this.persist({ ...value, blocked: '会话密钥已到期；保留历史，只读显示。需要新的授权密钥才能继续。' }); return;
       }
+      const packets: Uint8Array[] = [];
       for (const entry of value.outbox) {
         if (entry.createdAt < this.transport.now() - 295_000 || entry.createdAt > this.transport.now() + 30_000) {
           await this.persist({ ...this.stored.value, blocked: '存在超过安全补传窗口的未确认请求。请核对执行状态，不会重新创建操作。' }); return;
@@ -242,7 +258,14 @@ export class ConversationController {
             hex(packet.body.value.senderEndpointId) !== value.session.hcEndpointId || hex(packet.body.value.receiverEndpointId) !== value.aba.id ||
             packet.body.value.sequence !== sequence(entry.sequence) || hex(packet.body.value.messageId) !== entry.messageId ||
             !sameBytes(packet.body.value.keyId, value.keys.material.keyId)) throw new Error('Durable outbox binding mismatch');
-        this.transport.send(bytes);
+        packets.push(bytes);
+      }
+      // Validate every saved packet before replaying any operation from this snapshot.
+      for (const bytes of packets) this.transport.send(bytes);
+      } catch (cause) {
+        if (cause instanceof ConversationTransportInterrupted) return;
+        await this.quarantine('会话恢复记录未通过验证，已暂停操作。请核对执行状态，不会自动重新生成请求。');
+        throw cause;
       }
     });
   }
