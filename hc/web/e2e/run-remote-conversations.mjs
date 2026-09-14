@@ -152,7 +152,7 @@ export async function startRemoteStack() {
       return (await adminRequest('/admin/api/harness/v1/endpoints?limit=100')).items.find((item) => item.name === 'C3 acceptance ABA' && item.lastSeenAt);
     }, 'ABA authenticated connection');
     console.log('Isolated Thin Host login, ABA enrollment and Gateway connection are ready (deterministic ACP fixture).');
-    return { base, username, password, directory, stop, adminRequest, transportErrors, observeWire: (observer) => { wireObserver = observer; },
+    return { base, username, password, directory, stop, adminRequest, transportErrors, disconnectClients: () => { for (const socket of sockets) socket.destroy(); }, observeWire: (observer) => { wireObserver = observer; },
       async audit(workspace) { assert.ok(['workspace-a', 'workspace-b'].includes(workspace)); try { return (await readFile(path.join(directory, workspace, '.hc-e2e-executions'), 'utf8')).trim().split('\n').filter(Boolean).map((line) => JSON.parse(line)); } catch (error) { if (error.code === 'ENOENT') return []; throw error; } },
       async assertOpaque(canary) {
         const needles = [canary, Buffer.from(canary).toString('base64'), Buffer.from(canary).toString('base64url')];
@@ -165,5 +165,6 @@ export async function startRemoteStack() {
 }
 if (process.argv[1] && import.meta.url === pathToFileURL(path.resolve(process.argv[1])).href) {
   const stack = await startRemoteStack(); console.log(`HC_BROWSER_TEST_URL=${stack.base}`);
+  process.on('SIGUSR2', () => stack.disconnectClients());
   await new Promise((resolve) => { process.once('SIGINT', resolve); process.once('SIGTERM', resolve); }); await stack.stop();
 }
