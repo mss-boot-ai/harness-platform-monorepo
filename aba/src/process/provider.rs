@@ -4,11 +4,12 @@ use std::collections::BTreeSet;
 use std::io::{BufReader, Read, Write};
 use std::net::{Shutdown, TcpListener, TcpStream};
 use std::os::fd::AsRawFd as _;
+use std::os::unix::fs::OpenOptionsExt as _;
 use std::os::unix::net::{UnixListener, UnixStream};
 use std::path::Path;
 use std::process::Command;
 use std::sync::{
-    Arc,
+    Arc, Mutex,
     atomic::{AtomicUsize, Ordering},
 };
 use std::thread;
@@ -54,7 +55,16 @@ pub(super) fn start_host_proxy(socket: &Path) -> Result<(), ProcessError> {
     let base = provider_base(&base)?;
     let model = std::env::var("HARNESS_CODEX_MODEL").map_err(failed)?;
     let models = std::env::var("HARNESS_CODEX_MODELS").unwrap_or(model.clone());
-    let policy = Arc::new(ProviderPolicy::new(&model, &models)?);
+    let mut policy = ProviderPolicy::new(&model, &models)?;
+    policy.audit = Some(Mutex::new(
+        std::fs::OpenOptions::new()
+            .create_new(true)
+            .append(true)
+            .mode(0o600)
+            .open(socket.with_extension("audit.jsonl"))
+            .map_err(failed)?,
+    ));
+    let policy = Arc::new(policy);
     if key.is_empty() || key.len() > 4096 || key.bytes().any(|byte| byte < 0x20 || byte == 0x7f) {
         return Err(ProcessError::UnsafeProfile);
     }
@@ -114,6 +124,7 @@ struct Request {
 struct ProviderPolicy {
     models: BTreeSet<String>,
     requests: AtomicUsize,
+    audit: Option<Mutex<std::fs::File>>,
 }
 impl ProviderPolicy {
     fn new(model: &str, models: &str) -> Result<Self, ProcessError> {
@@ -133,7 +144,53 @@ impl ProviderPolicy {
         Ok(Self {
             models,
             requests: AtomicUsize::new(0),
+            audit: None,
         })
+    }
+    fn audit(&self, code: &'static str, shape: Option<&serde_json::Value>) {
+        let Some(file) = &self.audit else {
+            return;
+        };
+        // Only fixed control-field presence and closed tool-kind enums; never body text,
+        // model values, definitions, arguments, upstream URLs, credentials or error chains.
+        let known: Vec<_> = [
+            "context_management",
+            "prompt",
+            "cache_control",
+            "user",
+            "conversation",
+            "previous_response_id",
+            "background",
+            "max_tokens",
+            "max_completion_tokens",
+            "response_format",
+        ]
+        .into_iter()
+        .filter(|name| shape.is_some_and(|value| value.get(name).is_some()))
+        .collect();
+        let mut tool_kinds = BTreeSet::new();
+        fn kinds(value: &serde_json::Value, output: &mut BTreeSet<&'static str>) {
+            if let Some(items) = value.as_array() {
+                for item in items.iter().take(64) {
+                    output.insert(match item.get("type").and_then(serde_json::Value::as_str) {
+                        Some("function") => "function",
+                        Some("custom") => "custom",
+                        Some("namespace") => "namespace",
+                        Some("tool_search") => "tool_search",
+                        _ => "other",
+                    });
+                }
+            }
+        }
+        if let Some(tools) = shape.and_then(|value| value.get("tools")) {
+            kinds(tools, &mut tool_kinds);
+        }
+        if let Ok(bytes) = serde_json::to_vec(
+            &serde_json::json!({"code":code,"known_controls_present":known,"tool_kinds":tool_kinds}),
+        ) && let Ok(mut file) = file.lock()
+        {
+            let _ = file.write_all(&bytes).and_then(|()| file.write_all(b"\n"));
+        }
     }
     fn authorize(&self, request: &mut Request) -> Result<(), ProcessError> {
         if request.method == "POST" {
@@ -349,7 +406,16 @@ fn proxy_request(
         deadline: Instant::now() + Duration::from_secs(30),
     }))
     .and_then(|mut request| {
-        policy.authorize(&mut request)?;
+        if let Err(error) = policy.authorize(&mut request) {
+            policy.audit(
+                "POLICY_REJECTED",
+                serde_json::from_slice::<serde_json::Value>(&request.body)
+                    .ok()
+                    .as_ref(),
+            );
+            return Err(error);
+        }
+        policy.audit("REQUEST_ACCEPTED", None);
         Ok(request)
     });
     let request = match request {
@@ -381,9 +447,10 @@ fn proxy_request(
     let sending = builder.bearer_auth(key).header("Accept", "text/event-stream, application/json")
         .header("Content-Type", "application/json").body(request.body).send();
     let mut response = tokio::select! {
-        response = sending => response.map_err(failed)?,
-        _ = disconnected(stream) => return Err(ProcessError::Transport),
-    };
+            response = sending => response.map_err(|error| { policy.audit("UPSTREAM_TRANSPORT_FAILED", None); failed(error) })?,
+            _ = disconnected(stream) => { policy.audit("DOWNSTREAM_ABANDONED", None); return Err(ProcessError::Transport); },
+        };
+        policy.audit(if response.status().is_success() { "UPSTREAM_2XX" } else { "UPSTREAM_REJECTED" }, None);
     let content_type = response
         .headers()
         .get("content-type")

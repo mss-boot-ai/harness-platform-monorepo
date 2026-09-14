@@ -333,7 +333,12 @@ fn execute(cli: Cli) -> Result<(), Box<dyn std::error::Error>> {
                                     == Some("end_turn")
                             })
                         {
-                            return Err("isolated real-provider exercise did not confirm the expected result".into());
+                            return Err(if number == 1 {
+                                "isolated provider model reply failed"
+                            } else {
+                                "isolated provider read-only file tool failed"
+                            }
+                            .into());
                         }
                     }
                     println!("Isolated provider reply and read-only workspace tool confirmed.");
