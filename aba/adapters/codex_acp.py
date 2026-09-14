@@ -142,6 +142,7 @@ class CodexACP:
         self.effort = "low"
         self.session_id = "codex-" + uuid.uuid4().hex
         self.thread_id = ""
+        self.materialized = False
         self.turn_id: str | None = None
         self.request_id: Any = None
         self.cancel_requested = False
@@ -236,16 +237,32 @@ class CodexACP:
                 failure(request_id, "UNSUPPORTED_CONFIGURATION")
                 return
             try:
-                result = self.server.request("thread/resume", {"threadId": self.thread_id, **self.thread_options()})
-                if (result.get("thread", {}).get("id") != self.thread_id or result.get("model") != self.model
+                previous_thread = self.thread_id
+                if self.materialized:
+                    # resume of an already loaded thread returns its OLD config.
+                    # Unload this idle thread before applying overrides to its durable rollout.
+                    detached = self.server.request("thread/unsubscribe", {"threadId": previous_thread})
+                    if detached.get("status") != "unsubscribed":
+                        raise ValueError("Thread detach was not confirmed")
+                    result = self.server.request("thread/resume", {"threadId": previous_thread, **self.thread_options()})
+                else:
+                    # A never-run thread has no rollout to resume. No user turn is replayed.
+                    result = self.server.request("thread/start", self.thread_options())
+                confirmed_thread = result.get("thread", {}).get("id")
+                if (not isinstance(confirmed_thread, str) or self.materialized and confirmed_thread != previous_thread or result.get("model") != self.model
                     or result.get("modelProvider") != "harness" or result.get("cwd") != str(self.workspace)
                     or result.get("reasoningEffort") != self.effort or result.get("approvalPolicy") != "on-request"
                     or result.get("sandbox", {}).get("type") != ("readOnly" if self.mode == "read-only" else "workspaceWrite")):
                     raise ValueError("Configuration acknowledgement is invalid")
+                self.thread_id = confirmed_thread
+                if not self.materialized:
+                    self.server.request("thread/unsubscribe", {"threadId": previous_thread})
                 emit({"jsonrpc": "2.0", "id": request_id, "result": {"configOptions": self.options()}})
             except RpcRejected:
                 self.model, self.effort, self.mode = original
-                failure(request_id, "CONFIGURATION_REJECTED")
+                self.stopped = True
+                self.server.close()
+                failure(request_id, "CONFIGURATION_REJECTED", True)
             except Exception:
                 self.stopped = True
                 self.server.close()
@@ -279,6 +296,7 @@ class CodexACP:
                 if not isinstance(turn.get("id"), str) or self.turn_id not in (None, turn["id"]):
                     raise ValueError("Turn binding is invalid")
                 self.turn_id = turn["id"]
+                self.materialized = True
                 cancelled = self.cancel_requested
             if cancelled:
                 self.interrupt()
@@ -407,6 +425,7 @@ class CodexACP:
                 turn_id = params.get("turn", {}).get("id")
                 if isinstance(turn_id, str) and self.turn_id in (None, turn_id):
                     self.turn_id = turn_id
+                    self.materialized = True
                 return
             if "id" in message and isinstance(method, str) and method.endswith("/requestApproval"):
                 self.approval(message)

@@ -37,6 +37,7 @@ class CodexAdapterTest(unittest.TestCase):
         runtime.server = Server()
         runtime.workspace = Path(self.directory.name)
         runtime.session_id, runtime.thread_id, runtime.turn_id, runtime.request_id = "session", "thread", "turn", "prompt"
+        runtime.materialized = True
         runtime.cancel_requested = runtime.interrupt_sent = runtime.stopped = False
         runtime.pending_permissions, runtime.file_changes = {}, {}
         runtime.lock = threading.RLock()
@@ -102,6 +103,20 @@ class CodexAdapterTest(unittest.TestCase):
         self.runtime.configure("config", "effort", "high")
         self.assertTrue(self.runtime.stopped)
         self.assertEqual(self.packets[-1]["error"]["data"]["executionState"], "unknown")
+
+    def test_configuration_unloads_idle_thread_before_acknowledging_effective_value(self):
+        self.runtime.request_id = None
+        calls = []
+        def request(method, params):
+            calls.append(method)
+            if method == "thread/unsubscribe":
+                return {"status": "unsubscribed"}
+            return {"thread": {"id": "thread"}, "model": "test-model", "modelProvider": "harness", "cwd": str(self.runtime.workspace),
+                "reasoningEffort": "high", "approvalPolicy": "on-request", "sandbox": {"type": "readOnly"}}
+        self.runtime.server.request = request
+        self.runtime.configure("config", "effort", "high")
+        self.assertEqual(calls, ["thread/unsubscribe", "thread/resume"])
+        self.assertEqual(self.packets[-1]["result"]["configOptions"][1]["currentValue"], "high")
 
     def test_unknown_server_requests_fail_closed_without_hanging(self):
         self.runtime.event({"id": 9, "method": "item/tool/requestUserInput", "params": {"threadId": "thread"}})
