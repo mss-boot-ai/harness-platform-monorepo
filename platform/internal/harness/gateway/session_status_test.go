@@ -67,4 +67,11 @@ func TestEndpointStatusAndCreationCancellationUseExactScopedIDs(t *testing.T) {
 	if response := call("/gateway/v1/sessions/"+session.ID.String()+"/status", key, map[string]any{}); response.Code != 404 {
 		t.Fatalf("foreign endpoint status exposed: %d", response.Code)
 	}
+	response := call("/gateway/v1/sessions/status", key, map[string]any{"sessionIds": []string{gatewayID(71).String(), gatewayID(72).String(), gatewayID(80).String()}})
+	var batch struct {
+		Items []endpointSessionResponse `json:"items"`
+	}
+	if err := json.Unmarshal(response.Body.Bytes(), &batch); err != nil || response.Code != 200 || len(batch.Items) != 1 || batch.Items[0].SessionID != gatewayID(71).String() {
+		t.Fatalf("scoped exact batch response: %d %s", response.Code, response.Body.String())
+	}
 }

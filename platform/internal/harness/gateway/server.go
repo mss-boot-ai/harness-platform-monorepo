@@ -176,6 +176,7 @@ func NewHandler(config Config, persistence Persistence, random io.Reader, now fu
 	mux.HandleFunc("OPTIONS /gateway/v1/endpoints/abas", server.preflight)
 	mux.HandleFunc("POST /gateway/v1/catalog", server.publishCatalog)
 	mux.HandleFunc("POST /gateway/v1/sessions/{sessionId}/status", server.endpointSessionStatus)
+	mux.HandleFunc("POST /gateway/v1/sessions/status", server.endpointSessionStatuses)
 	mux.HandleFunc("POST /gateway/v1/session-operations/{operationKey}", server.sessionCreationStatus)
 	mux.HandleFunc("POST /gateway/v1/session-operations/{operationKey}/cancel", server.cancelSessionCreation)
 	return server.cors(mux), nil

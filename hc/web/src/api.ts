@@ -280,6 +280,15 @@ export async function getEndpointSession(identity: EndpointIdentity, registratio
   if (!/^[0-9a-f]{32}$/u.test(sessionId)) throw new HcApiError('Session ID is invalid', 'HC_INVALID_SESSION_ID', 400);
   return parseEndpointSession(await gatewayOperation(identity, registration, `/gateway/v1/sessions/${sessionId}/status`));
 }
+export async function getEndpointSessionStatuses(identity: EndpointIdentity, registration: RegistrationSession, sessionIds: readonly string[]): Promise<readonly EndpointSessionSummary[]> {
+  if (sessionIds.length > 64 || sessionIds.some((id) => !/^[0-9a-f]{32}$/u.test(id))) throw new HcApiError('Session IDs are invalid', 'HC_INVALID_SESSION_ID', 400);
+  const raw = objectValue(await gatewayOperation(identity, registration, '/gateway/v1/sessions/status', { sessionIds }), 'session states');
+  if (!Array.isArray(raw.items) || raw.items.length > sessionIds.length) throw new HcApiError('Session states are invalid', 'HC_INVALID_RESPONSE', 500);
+  return raw.items.map(parseEndpointSession).map((session) => {
+    if (!sessionIds.includes(session.sessionId) || session.hcEndpointId !== registration.endpointId) throw new HcApiError('Session response scope is invalid', 'HC_INVALID_RESPONSE', 500);
+    return session;
+  });
+}
 
 export interface SessionCreationState {
   readonly state: 'not-found' | 'pending' | 'created' | 'cancelled';
@@ -292,15 +301,16 @@ export async function inspectSessionCreation(identity: EndpointIdentity, registr
   return { state: raw.state as SessionCreationState['state'], session: raw.state === 'created' ? parseEndpointSession(raw.session) : null };
 }
 
-function gatewayOperation(identity: EndpointIdentity, registration: RegistrationSession, path: string): Promise<unknown> {
+function gatewayOperation(identity: EndpointIdentity, registration: RegistrationSession, path: string, payload: Record<string, unknown> = {}): Promise<unknown> {
   return withGatewayNonceLock(async () => {
     const operationKey = crypto.randomUUID();
-    const challenge = await gatewaySessionRequest(path, registration.accessToken, operationKey, '{}');
+    const body = JSON.stringify(payload);
+    const challenge = await gatewaySessionRequest(path, registration.accessToken, operationKey, body);
     const nonce = challenge.headers.get('DPoP-Nonce');
     if (challenge.status !== 401 || nonce === null || nonce === '') throw await gatewayFailure(challenge);
     const proof = await createDpopProof({ accessToken: registration.accessToken, htm: 'POST', htu: new URL(path, window.location.origin).toString(), nonce,
       privateKey: identity.signing.privateKey, publicJwk: identity.signing.publicJwk });
-    const response = await gatewaySessionRequest(path, registration.accessToken, operationKey, '{}', proof.proof);
+    const response = await gatewaySessionRequest(path, registration.accessToken, operationKey, body, proof.proof);
     if (!response.ok) throw await gatewayFailure(response);
     return response.json();
   });

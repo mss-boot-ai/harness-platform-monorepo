@@ -48,6 +48,45 @@ func (server *Server) endpointSessionStatus(writer http.ResponseWriter, request 
 	writeJSON(writer, http.StatusOK, endpointSessionView(session))
 }
 
+func (server *Server) endpointSessionStatuses(writer http.ResponseWriter, request *http.Request) {
+	endpoint, _, ok := server.authenticateHCRequest(writer, request)
+	if !ok {
+		return
+	}
+	var input struct {
+		SessionIDs []string `json:"sessionIds"`
+	}
+	if err := decodeGatewayJSON(writer, request, &input); err != nil || len(input.SessionIDs) > 64 {
+		writeGatewayError(writer, http.StatusBadRequest, "INVALID_REQUEST", "bounded session IDs are required")
+		return
+	}
+	items := make([]endpointSessionResponse, 0, len(input.SessionIDs))
+	seen := make(map[domain.ID]bool, len(input.SessionIDs))
+	for _, raw := range input.SessionIDs {
+		id, err := domain.ParseID(raw)
+		if err != nil {
+			writeDomainError(writer, err)
+			return
+		}
+		if seen[id] {
+			continue
+		}
+		seen[id] = true
+		session, err := server.persistence.GetSession(request.Context(), id)
+		if domain.HasCode(err, domain.CodeNotFound) {
+			continue
+		}
+		if err != nil {
+			writeSessionLookupError(writer, err)
+			return
+		}
+		if session.HCEndpointID == endpoint.ID && session.OwnerUserID == endpoint.OwnerUserID && session.TenantID == endpoint.TenantID {
+			items = append(items, endpointSessionView(session))
+		}
+	}
+	writeJSON(writer, http.StatusOK, map[string]any{"items": items})
+}
+
 func (server *Server) sessionCreationStatus(writer http.ResponseWriter, request *http.Request) {
 	server.sessionCreationOperation(writer, request, false)
 }
