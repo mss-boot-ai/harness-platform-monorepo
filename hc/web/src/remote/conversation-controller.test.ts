@@ -1,4 +1,4 @@
-import { fromBinary } from '@bufbuild/protobuf';
+import { decodeWireMessage as fromBinary } from '@harness/hc-core';
 import { WirePacketSchema } from '@harness/hc-core';
 import { ConversationController } from './conversation-controller';
 import { controllerFixture, testNow } from './conversation-fixture';

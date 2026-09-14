@@ -1,4 +1,4 @@
-import { fromBinary } from '@bufbuild/protobuf';
+import { decodeWireMessage as fromBinary } from '@harness/hc-core';
 import {
   base64UrlDecode, base64UrlEncode, createHCAckFramePacket, createHCResumeStatePacket, createHCToABAFramePacket,
   createSessionKeyPackageAckPacket, Direction, openABAAckFramePacket, openABAToHCFramePacket,

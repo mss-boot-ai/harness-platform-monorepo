@@ -1,5 +1,5 @@
 // Deterministic protocol test helpers, not a production entry point or model integration.
-import { create, toBinary } from '@bufbuild/protobuf';
+import { createWireMessage as create, encodeWireMessage as toBinary } from '@harness/hc-core';
 import { IDBFactory } from 'fake-indexeddb';
 import { AckFrameSchema, buildAckTranscript, buildFrameAAD, createEndpointIdentity, deriveSessionDirectionKeys, Direction,
   EncryptedFrameSchema, EncryptedLocalVault, FrameType, sessionChannelId, signP1363LowS, WirePacketSchema,

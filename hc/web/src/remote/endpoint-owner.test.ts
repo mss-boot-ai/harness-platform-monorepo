@@ -3,9 +3,9 @@ function fakeLocks() {
   let held = false;
   const queue: (() => void)[] = [];
   const calls: LockOptions[] = [];
-  const request: LockManager['request'] = ((name: string, options: LockOptions, callback: LockGrantedCallback) => {
+  const request: LockManager['request'] = ((name: string, options: LockOptions, callback: LockGrantedCallback<void>) => {
     calls.push(options);
-    return new Promise((resolve, reject) => {
+    return new Promise<void>((resolve, reject) => {
       const run = () => {
         if (options.signal?.aborted) { reject(new Error('aborted')); next(); return; }
         held = true;

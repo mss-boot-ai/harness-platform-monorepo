@@ -47,3 +47,18 @@ describe('encrypted local vault', () => {
     await expect(vault.write('session/b', encoder.encode('other'), null)).rejects.toThrow('key was lost');
   });
 });
+
+it('uses strict durable transactions before acknowledging key and cursor writes', async () => {
+  const factory = new IDBFactory(); const name = 'vault-durable';
+  const vault = new EncryptedLocalVault(factory, name);
+  await vault.write('session/a', encoder.encode('initial'), null);
+  const db = await database(factory, name);
+  const prototype: IDBDatabase = Object.getPrototypeOf(db) as IDBDatabase;
+  const calls = vi.spyOn(prototype, 'transaction');
+  db.close();
+  await vault.write('session/a', encoder.encode('new cursor'), 1);
+  await vault.delete('session/a', 2);
+  const writes = calls.mock.calls.filter((call) => call[1] === 'readwrite');
+  expect(writes.length).toBeGreaterThanOrEqual(3);
+  expect(writes.every((call) => call[2]?.durability === 'strict')).toBe(true);
+});
