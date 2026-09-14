@@ -1,5 +1,28 @@
 # ABA host service
 
+## Current Remote runtime
+
+The reviewed Codex path uses `aba-codex.toml.example` and the pinned
+`aba/adapters/requirements-codex.txt` (`openai-codex==0.147.0`). Install the adapter
+from the same release at `/opt/harness/bin/codex-acp` with its dedicated
+`/opt/harness/codex-venv`. Load a root-owned mode-0600 `/etc/harness-aba/codex.env`
+through the example systemd drop-in. It contains only the locally authorized
+`HARNESS_CODEX_API_BASE_URL`, `HARNESS_CODEX_API_KEY`, `HARNESS_CODEX_MODEL`, and
+optional `HARNESS_CODEX_MODELS`; never copy browser/ChatGPT login state.
+
+The example publishes two real allowlisted directories. Create and grant the
+dedicated ABA account access to them before validation. Its fresh-execution
+allowlist intentionally selects the verified Codex runtime. Preserve the previous
+DeepSeek configuration, native records and all existing endpoint identities in the
+private release backup; do not erase old Run history or replay its user operations.
+
+Before cutover, run the actual binary's `runtime probe` with this configuration
+and a dedicated scratch workspace under the same systemd restrictions. Then test
+the authenticated HC entrypoint through the real Gateway/ABA/runtime; the Python
+adapter probe and health checks alone do not constitute that end-to-end result.
+
+## Existing DeepSeek layout
+
 These units keep the development ABA directly on the 242 host while Platform and Gateway
 run in Kubernetes. `harness-gateway-port-forward` binds only `127.0.0.1:18082`; this is the
 same origin configured as Gateway `NativeExternalOrigin`, so the loopback-only development

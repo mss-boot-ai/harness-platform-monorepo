@@ -1,0 +1,3 @@
+[Service]
+EnvironmentFile=/etc/harness-aba/codex.env
+ReadWritePaths=/srv/harness-workspaces/harness-remote-acceptance

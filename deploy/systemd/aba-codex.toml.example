@@ -1,0 +1,33 @@
+schema_version = 1
+publish_catalog = true
+
+[platform]
+url = "http://127.0.0.1:18082"
+
+[limits]
+max_sessions = 4
+max_packet_bytes = 1048576
+max_inflight_per_channel = 1024
+journal_max_bytes = 67108864
+
+[[runtime]]
+id = "codex"
+display_name = "Codex"
+command = "/opt/harness/bin/codex-acp"
+args = []
+env_allow = ["HOME", "PATH", "HARNESS_CODEX_API_BASE_URL", "HARNESS_CODEX_API_KEY", "HARNESS_CODEX_MODEL", "HARNESS_CODEX_MODELS"]
+max_sessions = 2
+
+[[workspace]]
+id = "harness-platform"
+display_name = "Harness Platform"
+path = "/srv/harness-workspaces/harness-platform"
+allowed_runtimes = ["codex"]
+follow_symlinks = false
+
+[[workspace]]
+id = "remote-acceptance"
+display_name = "Remote 验收工作区"
+path = "/srv/harness-workspaces/harness-remote-acceptance"
+allowed_runtimes = ["codex"]
+follow_symlinks = false
