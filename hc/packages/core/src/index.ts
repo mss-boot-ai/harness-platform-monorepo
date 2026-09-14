@@ -10,3 +10,4 @@ export * from './registration';
 export * from './secure-store';
 export * from './generated/mss/awp/v1/wire_pb';
 export * from './local-vault';
+export * from './outbound-ack';
