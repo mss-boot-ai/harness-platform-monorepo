@@ -125,6 +125,7 @@ struct ProviderPolicy {
     models: BTreeSet<String>,
     requests: AtomicUsize,
     audit: Option<Mutex<std::fs::File>>,
+    audit_count: AtomicUsize,
 }
 impl ProviderPolicy {
     fn new(model: &str, models: &str) -> Result<Self, ProcessError> {
@@ -145,12 +146,22 @@ impl ProviderPolicy {
             models,
             requests: AtomicUsize::new(0),
             audit: None,
+            audit_count: AtomicUsize::new(0),
         })
     }
     fn audit(&self, code: &'static str, shape: Option<&serde_json::Value>) {
         let Some(file) = &self.audit else {
             return;
         };
+        if self
+            .audit_count
+            .fetch_update(Ordering::AcqRel, Ordering::Acquire, |count| {
+                (count < 512).then_some(count + 1)
+            })
+            .is_err()
+        {
+            return;
+        }
         // Only fixed control-field presence and closed tool-kind enums; never body text,
         // model values, definitions, arguments, upstream URLs, credentials or error chains.
         let known: Vec<_> = [
@@ -759,7 +770,20 @@ mod tests {
             stream.read_exact(&mut byte)?;
             header.push(byte[0]);
         }
-        String::from_utf8(header).map_err(std::io::Error::other)
+        let header = String::from_utf8(header).map_err(std::io::Error::other)?;
+        let length = header
+            .lines()
+            .find_map(|line| {
+                line.to_ascii_lowercase()
+                    .strip_prefix("content-length:")
+                    .and_then(|value| value.trim().parse::<usize>().ok())
+            })
+            .unwrap_or(0);
+        if length > MAX_BODY {
+            return Err(std::io::ErrorKind::InvalidData.into());
+        }
+        stream.read_exact(&mut vec![0; length])?;
+        Ok(header)
     }
 
     #[test]
