@@ -197,10 +197,9 @@ class CodexACP:
         return values
 
     def sandbox(self) -> dict[str, Any]:
-        access = {"type": "restricted", "includePlatformDefaults": True, "readableRoots": [str(self.workspace)]}
         if self.mode == "read-only":
-            return {"type": "readOnly", "access": access}
-        return {"type": "workspaceWrite", "writableRoots": [str(self.workspace)], "readOnlyAccess": access, "networkAccess": False,
+            return {"type": "readOnly", "networkAccess": False}
+        return {"type": "workspaceWrite", "writableRoots": [str(self.workspace)], "networkAccess": False,
             "excludeTmpdirEnvVar": True, "excludeSlashTmp": True}
 
     def thread_options(self) -> dict[str, Any]:
