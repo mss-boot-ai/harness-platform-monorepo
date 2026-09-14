@@ -1,5 +1,7 @@
 # C3b: conversation persistence and refresh contract
 
+Implementation evidence: [2026-09-14 HC integration report](../roadmap/verification/2026-09-14-hc-remote-conversations.md). Same-installation production-browser recovery is verified for the listed scenarios; independent devices and Host restart recovery remain separate, unfinished gates.
+
 - 2026-09-14, implementation plan under ADR-0007; not a verified feature yet.
 - The existing Remote design remains the product target. This slice integrates the previously verified encrypted vault into actual HC lifecycles.
 

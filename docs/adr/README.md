@@ -18,6 +18,8 @@
 - [ADR-0003：默认 Opaque 加密与独立 AWP](0003-opaque-encryption-and-awp.md)
 - [ADR-0004：Platform 使用 mss-boot-admin v1.3.7 Thin Host import 模式](0004-platform-thin-host-import-mode.md)
 - [ADR-0005：HC 注册使用 Admin Browser Session 边界](0005-hc-registration-admin-session-boundary.md)
+- [ADR-0006：Device Fabric 与可信执行](0006-device-fabric-and-trusted-execution.md) — Draft
+- [ADR-0007：Remote Session Host 与完整产品交付](0007-remote-session-host-and-product-completion.md) — 用户授权实施；PR 尚未合并，不等于全部功能已完成
 
 ## 模板
 

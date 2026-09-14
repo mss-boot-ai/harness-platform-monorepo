@@ -33,6 +33,8 @@
 
 ## 2. 文档权威顺序
 
+当前 Remote 工作入口：[产品/技术方案](remote/README.md)、[交付矩阵](remote/DELIVERY.md)、[HC C3 验证报告](roadmap/verification/2026-09-14-hc-remote-conversations.md)。报告明确区分同一浏览器安装的恢复与未完成的跨设备、Host 恢复和生产验收。
+
 发生冲突时按以下顺序处理：
 
 1. 用户最新明确指令。

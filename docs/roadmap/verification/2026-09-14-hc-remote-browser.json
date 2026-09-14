@@ -1,0 +1,20 @@
+{
+  "runtime": "deterministic ACP fixture; no live model",
+  "source": "a0dad3fdbfb9a15b701f4973c48b8d2158072442",
+  "checkout": "7b9071dfc6d818c41e050a7d36ae5fcfa37d0435",
+  "scenarios": [
+    "Two live conversations, independent model/drafts/events, refresh during permission, one approval, cancel and continue: passed.",
+    "before-forward: original packet continuity and one fixture execution across browser refresh passed.",
+    "before-ack: original packet continuity and one fixture execution across browser refresh passed.",
+    "after-ack: original packet continuity and one fixture execution across browser refresh passed.",
+    "Second tab cannot rotate/connect; successor restores both histories and continues the same endpoint: passed.",
+    "Canary absent from Platform database/WAL/Admin/Gateway output; ordinary localStorage remains empty: passed.",
+    "Close B preserves A; revocation rejects refresh without re-registration or new task: passed.",
+    "Unavailable Web Locks fails closed before any login/refresh/ticket/connection: passed."
+  ],
+  "limitations": [
+    "Same browser installation only; independent-device authorization and persistent Host restart recovery remain unverified.",
+    "Storage corruption/quota/key-loss refusal also has unit coverage; this browser run does not claim every storage fault combination."
+  ],
+  "status": "passed"
+}

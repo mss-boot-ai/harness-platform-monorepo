@@ -1,5 +1,7 @@
 # C3c durable conversation controller
 
+Continuation: the production HC integration is now verified as a bounded same-installation slice. See [the 2026-09-14 report](../roadmap/verification/2026-09-14-hc-remote-conversations.md); the original checkpoint below records its earlier, not-yet-integrated state.
+
 - 2026-09-14; parent `ce76fb1c3b2d16e17803ba4298ec723110aaf2d2`.
 - Source checkpoint: not yet connected to the production React entrypoint.
 

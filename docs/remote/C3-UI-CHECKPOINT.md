@@ -3,7 +3,9 @@
 - Date: 2026-09-14.
 - Branch: `design/device-fabric-foundation`, PR #3.
 - Starting source: `717a85351beed69834ef810c5cf9aaeb09dc78d7`.
-- State: coordination source locally tested; production React integration authored; browser acceptance pending.
+- State: Verified HC same-installation slice on `a0dad3fdbfb9a15b701f4973c48b8d2158072442`; broader Remote gates remain unfinished.
+
+Current evidence: [final validation report](../roadmap/verification/2026-09-14-hc-remote-conversations.md). All 12 PR checks passed, including authenticated production-browser recovery against actual Admin/Gateway/ABA and a deterministic ACP subprocess. The sections below retain the historical authored/failure/repair states rather than rewriting them as early successes.
 
 The endpoint coordinator keeps one durable controller per conversation, routes bounded incoming packets by their untrusted identifiers before core signature/binding verification, and serializes connection-control messages across conversations. Connection replacement fences stale continuations and drains the old controller queues before exposing a replacement transport.
 

@@ -1,5 +1,7 @@
 # C3b encrypted snapshot checkpoint
 
+Continuation: these snapshots are now on the verified production HC path. See [the 2026-09-14 report](../roadmap/verification/2026-09-14-hc-remote-conversations.md) for exact SHA, browser evidence and remaining Host/device gates. The original checkpoint below remains historical evidence.
+
 - Date: 2026-09-14.
 - Parent: `2e9bbeb123a77be1d4037e29b45aa6bdc712a9a3`.
 - Scope: saved source, not yet integrated into the React conversation lifecycle.
