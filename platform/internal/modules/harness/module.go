@@ -67,6 +67,7 @@ func readiness(ctx context.Context, db *gorm.DB) error {
 		store.M2ConnectionMigrationID,
 		store.ReliabilityMigrationID,
 		store.PortableBinaryMigrationID,
+		store.CatalogMigrationID,
 	); err != nil {
 		return err
 	}
@@ -132,6 +133,7 @@ func registerRoutes(protectedAPI *gin.RouterGroup, runtime business.Runtime) err
 				store.M2ConnectionMigrationID.String(),
 				store.ReliabilityMigrationID.String(),
 				store.PortableBinaryMigrationID.String(),
+				store.CatalogMigrationID.String(),
 			},
 		})
 	})

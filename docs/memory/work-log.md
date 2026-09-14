@@ -6,6 +6,16 @@
 
 ---
 
+## 2026-09-14 23:12 +08:00 — Remote 产品故障复现与执行目录后端检查点
+
+仓库 `mss-boot-ai/harness-platform-monorepo`，分支 `codex/remote-project-workspace-recovery`，起点为已部署 main `1227b392e664959c987865e14c55758a1c620952`。用户要求补全项目选择、真实对话与失败恢复，并以开发阶段统一契约推进完整 Remote。
+
+已提交并 push 的需求检查点为 `75d39b63fae86471ca274161174241d5f553893a`（`docs: define development Remote product recovery contract`），文档结构检查通过；Markdown 专用 lint 与链接工具未安装。实机稳定元数据表明失败轮次为 provider HTTP 504，旧适配器随后退出；同时复现了浏览器重新登录的 Endpoint 注册冲突。
+
+ChatGPT 已通过连接器完成首轮源码规划。当前编写 ABA-only DPoP 执行目录发布、连接代次 fencing、owner/tenant 隔离、目录有效期和显式迁移；此检查点不代表 ABA 发布、HC 选择器或真实模型故障已修复。目录后端将在本次源码 commit/push 后执行 Go 回归，完整功能与部署证据随后追加。
+
+工具准备：官方 release `mss v1.3.7` 已校验校验和；nvm Node 24.20.0、gvm Go 1.26.6。首次 doctor 使用默认 Node 22 被拒绝，切到 nvm Node 24 后 `mss doctor --strict` 通过；没有为此修改依赖版本。
+
 ## 2026-09-14 20:10 +08:00 — HC 持久会话页面接入与浏览器恢复验证
 
 仓库 `mss-boot-ai/harness-platform-monorepo`，用户指定分支 `design/device-fabric-foundation`，Draft PR #3。本轮由 `717a85351beed69834ef810c5cf9aaeb09dc78d7` 继续，所有代码检查点先最小检查、commit/push，再执行完整验证。最终已验证实现源 `a0dad3fdbfb9a15b701f4973c48b8d2158072442`，提交消息 `fix(hc): retain failed drafts independently across conversation switches`。

@@ -38,7 +38,7 @@ func RegisterPortableBinaryMigration(runner *migration.Migration) error {
 	if runner == nil {
 		return errors.New("harness portable binary migration runner is required")
 	}
-	return runner.Register(PortableBinaryMigrationID, func(db *gorm.DB, version string) error {
+	if err := runner.Register(PortableBinaryMigrationID, func(db *gorm.DB, version string) error {
 		if version != PortableBinaryMigrationID.String() {
 			return errors.New("harness portable binary migration version mismatch")
 		}
@@ -46,7 +46,10 @@ func RegisterPortableBinaryMigration(runner *migration.Migration) error {
 			return err
 		}
 		return runner.CreateVersion(db, version)
-	})
+	}); err != nil {
+		return err
+	}
+	return RegisterCatalogMigration(runner)
 }
 
 func CreatePortableBinarySchema(db *gorm.DB) error {

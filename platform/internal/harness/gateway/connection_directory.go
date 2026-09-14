@@ -24,6 +24,8 @@ type connectionDirectory interface {
 	send(domain.ID, []byte) error
 	sendNextControl(domain.ID, func(uint64) ([]byte, error)) error
 	online(domain.ID) bool
+	generation(domain.ID) (uint64, bool)
+	withGeneration(domain.ID, uint64, func() error) error
 	withCurrent(*activeConnection, func() error) error
 }
 
@@ -179,8 +181,44 @@ func (directory *memoryConnectionDirectory) sendNextControl(
 }
 
 func (directory *memoryConnectionDirectory) online(endpointID domain.ID) bool {
+	_, online := directory.generation(endpointID)
+	return online
+}
+
+func (directory *memoryConnectionDirectory) generation(endpointID domain.ID) (uint64, bool) {
 	lane := directory.lane(endpointID, false)
-	return lane != nil && lane.current.Load() != nil
+	if lane == nil {
+		return 0, false
+	}
+	current := lane.current.Load()
+	if current == nil {
+		return 0, false
+	}
+	select {
+	case <-current.done:
+		return 0, false
+	default:
+		return current.generation, true
+	}
+}
+
+func (directory *memoryConnectionDirectory) withGeneration(endpointID domain.ID, generation uint64, operation func() error) error {
+	lane := directory.lane(endpointID, false)
+	if lane == nil || operation == nil {
+		return errConnectionFenced
+	}
+	lane.mu.Lock()
+	defer lane.mu.Unlock()
+	current := lane.current.Load()
+	if current == nil || current.generation != generation {
+		return errConnectionFenced
+	}
+	select {
+	case <-current.done:
+		return errConnectionFenced
+	default:
+		return operation()
+	}
 }
 
 func (connection *activeConnection) enqueue(packet []byte) error {

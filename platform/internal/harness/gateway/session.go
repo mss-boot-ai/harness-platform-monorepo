@@ -55,14 +55,14 @@ func (server *Server) listABAEndpoints(writer http.ResponseWriter, request *http
 	}
 	items := make([]map[string]any, 0, len(values))
 	for _, value := range values {
-		if value.Type != domain.EndpointTypeABA || value.Status != domain.EndpointStatusActive ||
-			!server.connections.online(value.ID) {
+		if value.Type != domain.EndpointTypeABA || value.Status != domain.EndpointStatusActive {
 			continue
 		}
 		items = append(items, map[string]any{
 			"id": value.ID.String(), "name": value.Name, "type": value.Type,
 			"status": value.Status, "lastSeenAt": value.LastSeenAt,
 			"signingJkt": value.SigningJKT, "signingPublicJwk": value.SigningPublicJWK,
+			"catalog": server.executionCatalogView(request, value),
 		})
 	}
 	writeJSON(writer, http.StatusOK, map[string]any{"items": items})
@@ -174,6 +174,14 @@ func (server *Server) authenticateHCRequest(
 	writer http.ResponseWriter,
 	request *http.Request,
 ) (domain.Endpoint, domain.EndpointCredential, bool) {
+	return server.authenticateProfileRequest(writer, request, false)
+}
+
+func (server *Server) authenticateProfileRequest(
+	writer http.ResponseWriter,
+	request *http.Request,
+	abaPublication bool,
+) (domain.Endpoint, domain.EndpointCredential, bool) {
 	now := server.now().UTC()
 	token, tokenHash, ok := parseAuthorization(request)
 	if !ok {
@@ -185,7 +193,12 @@ func (server *Server) authenticateHCRequest(
 		writeDomainError(writer, err)
 		return domain.Endpoint{}, domain.EndpointCredential{}, false
 	}
-	if (endpoint.Type != domain.EndpointTypeHCWeb && endpoint.Type != domain.EndpointTypeHCReference) ||
+	if abaPublication {
+		if endpoint.Type != domain.EndpointTypeABA || strings.TrimSpace(request.Header.Get("Origin")) != "" || !slices.Contains(credential.Scopes, "endpoint:connect") {
+			writeGatewayError(writer, http.StatusForbidden, "CATALOG_PUBLISH_FORBIDDEN", "only the execution endpoint can publish its catalog")
+			return domain.Endpoint{}, domain.EndpointCredential{}, false
+		}
+	} else if (endpoint.Type != domain.EndpointTypeHCWeb && endpoint.Type != domain.EndpointTypeHCReference) ||
 		strings.TrimSpace(request.Header.Get("Origin")) != server.config.AllowedOrigin ||
 		!slices.Contains(credential.Scopes, "session:manage") {
 		writeGatewayError(writer, http.StatusForbidden, "SESSION_CREATE_FORBIDDEN", "endpoint cannot create sessions")
@@ -212,7 +225,7 @@ func (server *Server) authenticateHCRequest(
 	verifier := dpop.Verifier{Replay: storeReplayCache{persistence: server.persistence, maxEntries: server.config.ReplayMaxEntries}}
 	_, err = verifier.Verify(request.Context(), proofHeaders[0], dpop.Requirements{
 		AccessToken: token, ExpectedJKT: endpoint.SigningJKT, ExpectedNonceHash: nonceHash,
-		HTM: request.Method, HTU: server.config.ExternalOrigin + request.URL.RequestURI(), Now: now,
+		HTM: request.Method, HTU: server.endpointExternalOrigin(endpoint.Type) + request.URL.RequestURI(), Now: now,
 	})
 	if err != nil {
 		server.writeDPoPError(writer, request.Context(), endpoint.ID, now, err)

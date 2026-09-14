@@ -58,6 +58,8 @@ type Persistence interface {
 	AdvanceAck(context.Context, domain.AckCursor) (domain.AckCursor, error)
 	ReplayEndpointFrames(context.Context, domain.ID, domain.ID, uint64, domain.Direction, uint64, []domain.SequenceRange, int) ([]domain.EncryptedFrame, error)
 	UseDPoPReplay(context.Context, string, string, time.Time, time.Time, int64) error
+	PublishExecutionCatalog(context.Context, domain.PublishedCatalog) error
+	GetExecutionCatalog(context.Context, string, string, domain.ID, time.Time) (domain.PublishedCatalog, error)
 }
 
 type persistencePinger interface {
@@ -170,6 +172,7 @@ func NewHandler(config Config, persistence Persistence, random io.Reader, now fu
 	mux.HandleFunc("OPTIONS /gateway/v1/sessions/{sessionId}/close", server.preflight)
 	mux.HandleFunc("POST /gateway/v1/endpoints/abas", server.listABAEndpoints)
 	mux.HandleFunc("OPTIONS /gateway/v1/endpoints/abas", server.preflight)
+	mux.HandleFunc("POST /gateway/v1/catalog", server.publishCatalog)
 	return server.cors(mux), nil
 }
 
