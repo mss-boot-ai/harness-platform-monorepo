@@ -6,6 +6,7 @@ import json
 import os
 from pathlib import Path
 import queue
+import signal
 import subprocess
 import sys
 import threading
@@ -129,9 +130,9 @@ class CodexACP:
         from codex_cli_bin import bundled_codex_path, bundled_path_dir
 
         self.workspace = workspace
-        base = os.environ.get("MSS_HARNESS_API_BASE_URL", "").strip().rstrip("/")
+        base = os.environ.get("HARNESS_CODEX_API_BASE_URL", "").strip().rstrip("/")
         parsed = urlsplit(base)
-        if parsed.scheme != "https" or not parsed.hostname or parsed.username or parsed.password or parsed.query or parsed.fragment or not os.environ.get("MSS_HARNESS_API_KEY"):
+        if parsed.scheme != "https" or not parsed.hostname or parsed.username or parsed.password or parsed.query or parsed.fragment or not os.environ.get("HARNESS_CODEX_API_KEY"):
             raise ValueError("Model provider configuration is unavailable")
         self.model = os.environ.get("HARNESS_CODEX_MODEL", "gpt-5.6-luna").strip()
         allowed = os.environ.get("HARNESS_CODEX_MODELS", self.model).split(",")
@@ -156,7 +157,7 @@ class CodexACP:
         self.lock = threading.RLock()
         overrides = {
             "model_provider": "harness", "model_providers.harness.name": "Harness model gateway",
-            "model_providers.harness.base_url": base, "model_providers.harness.env_key": "MSS_HARNESS_API_KEY",
+            "model_providers.harness.base_url": base, "model_providers.harness.env_key": "HARNESS_CODEX_API_KEY",
             "model_providers.harness.wire_api": "responses", "shell_environment_policy.ignore_default_excludes": False,
             "web_search": "disabled",
         }
@@ -498,6 +499,9 @@ def read() -> dict[str, Any] | None:
 
 
 def main() -> int:
+    # Let normal supervisor shutdown execute the App Server cleanup in finally.
+    signal.signal(signal.SIGTERM, lambda *_: sys.exit(0))
+    signal.signal(signal.SIGINT, lambda *_: sys.exit(0))
     runtime = None
     try:
         first = read()

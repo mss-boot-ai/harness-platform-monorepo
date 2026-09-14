@@ -10,6 +10,7 @@ import json
 import os
 from pathlib import Path
 import queue
+import signal
 import subprocess
 import sys
 import tempfile
@@ -26,7 +27,7 @@ def main() -> int:
         workspace = Path(directory)
         (workspace / "README.md").write_text("Acceptance fixture: PROJECT_FILE_MARKER_2718\n", encoding="utf-8")
         process = subprocess.Popen([sys.executable, args.adapter], cwd=workspace, stdin=subprocess.PIPE,
-            stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, text=True, encoding="utf-8")
+            stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, text=True, encoding="utf-8", start_new_session=True)
         messages = queue.Queue(maxsize=1024)
         def reader():
             try:
@@ -108,7 +109,7 @@ def main() -> int:
             try:
                 process.wait(timeout=5)
             except subprocess.TimeoutExpired:
-                process.kill()
+                os.killpg(process.pid, signal.SIGKILL)
                 process.wait(timeout=5)
 
 
