@@ -10,6 +10,13 @@ through the example systemd drop-in. It contains only the locally authorized
 `HARNESS_CODEX_API_BASE_URL`, `HARNESS_CODEX_API_KEY`, `HARNESS_CODEX_MODEL`, and
 optional `HARNESS_CODEX_MODELS`; never copy browser/ChatGPT login state.
 
+The Codex drop-in retains the base restrictions and adds `AF_NETLINK`: its Linux
+sandbox needs a `NETLINK_ROUTE` socket to initialize loopback inside the isolated
+network namespace. Without it, ordinary file tools fail and request escalation.
+This does not add capabilities or remove `NoNewPrivileges`, filesystem protection,
+the dedicated service account, or the runtime's sandbox/approval rules. Validate
+the actual service restrictions, not only an unconstrained command-line probe.
+
 The example publishes two real allowlisted directories. Create and grant the
 dedicated ABA account access to them before validation. Its fresh-execution
 allowlist intentionally selects the verified Codex runtime. Preserve the previous

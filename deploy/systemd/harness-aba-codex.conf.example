@@ -1,3 +1,5 @@
 [Service]
 EnvironmentFile=/etc/harness-aba/codex.env
 ReadWritePaths=/srv/harness-workspaces/harness-remote-acceptance
+RestrictAddressFamilies=
+RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6 AF_NETLINK
