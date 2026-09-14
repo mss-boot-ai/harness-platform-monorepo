@@ -72,6 +72,12 @@ spec:
                 secretKeyRef:
                   name: harness-platform-runtime
                   key: HARNESS_ADMIN_IDENTITY_KEY
+            - name: HARNESS_REDIS_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: harness-redis
+                  key: HARNESS_REDIS_PASSWORD
+                  optional: true
           ports:
             - name: http
               containerPort: 8080

@@ -2,6 +2,11 @@
 set -Eeuo pipefail
 
 manifest_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+harness_application_config="${HARNESS_APPLICATION_CONFIG:-${manifest_dir}/application.yml}"
+if [[ ! -f "${harness_application_config}" || -L "${harness_application_config}" ]]; then
+  echo 'error: HARNESS_APPLICATION_CONFIG must be a reviewed regular configuration file' >&2
+  exit 2
+fi
 harness_namespace="harness-dev"
 harness_context="${HARNESS_KUBE_CONTEXT:-}"
 harness_kubectl="${KUBECTL:-kubectl}"
@@ -202,7 +207,7 @@ sed 's|name: harness-platform-migrate$|name: harness-platform-migrate-preflight|
 harness_configmap_rendered="$(mktemp /tmp/harness-configmap.XXXXXX.yaml)"
 "${harness_kubectl}" "${harness_kube_args[@]}" -n "${harness_namespace}" \
   create configmap harness-platform-config \
-  --from-file=application.yml="${manifest_dir}/application.yml" \
+  --from-file=application.yml="${harness_application_config}" \
   --dry-run=client -o yaml >"${harness_configmap_rendered}"
 
 "${harness_kubectl}" "${harness_kube_args[@]}" apply --dry-run=server \

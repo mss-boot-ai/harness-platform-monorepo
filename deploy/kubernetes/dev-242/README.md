@@ -57,6 +57,14 @@ Use that pattern only after the inventory proves K3s/containerd is the active ru
 
 ## Secrets, migration and rollout
 
+For an existing deployment, compare and preserve its current application configuration before
+cutover. `HARNESS_APPLICATION_CONFIG` may point to the reviewed root-only snapshot instead of
+the repository example. In particular, an already configured Redis-backed browser session
+service must not silently disappear during an image upgrade. The API and migration Pods
+retain the optional `harness-redis/HARNESS_REDIS_PASSWORD` Secret reference; this overlay does
+not create, restart or replace an existing Redis deployment or its credentials. If the
+reviewed configuration requires Redis, verify that service and Secret before deployment.
+
 Run as an administrator on the target host. The bootstrap script creates random database and
 Admin signing material, stores a recoverable copy under a root-only directory, and sends no
 secret value to stdout. It never injects the initial Admin password into a long-running Pod.

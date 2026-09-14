@@ -51,6 +51,12 @@ spec:
                 secretKeyRef:
                   name: harness-platform-runtime
                   key: HARNESS_ADMIN_IDENTITY_KEY
+            - name: HARNESS_REDIS_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: harness-redis
+                  key: HARNESS_REDIS_PASSWORD
+                  optional: true
             - name: MSS_ADMIN_INITIAL_PASSWORD
               valueFrom:
                 secretKeyRef:
