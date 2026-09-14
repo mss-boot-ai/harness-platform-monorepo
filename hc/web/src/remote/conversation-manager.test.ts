@@ -259,7 +259,8 @@ describe('endpoint conversation coordination', () => {
     const a = f.manager.snapshot().runs.find((item) => item.data.session.sessionId === f.a.session.sessionId);
     const b = f.manager.snapshot().runs.find((item) => item.data.session.sessionId === f.b.session.sessionId);
     expect(a?.data.messages[1]?.text).toBe('reply A'); expect(b?.data.messages[1]?.text).toBe('reply B');
-    expect(a?.data.draft).toBe('draft A'); expect(b?.data.draft).toBe('draft B');
+    expect(f.manager.snapshot().conversations.find((entry) => entry.id === f.a.session.sessionId)?.draft).toBe('draft A');
+    expect(f.manager.snapshot().conversations.find((entry) => entry.id === f.b.session.sessionId)?.draft).toBe('draft B');
     await f.manager.select(null); expect(f.api.close).not.toHaveBeenCalled();
     expect((await f.a.store.read(f.b.session.sessionId))?.value.messages[1]?.text).toBe('reply B');
   });
