@@ -41,13 +41,15 @@ export function GatewaySetup({ access, store, onReady }: {
         if (mounted.current && socket.current === ready.socket) {
           socket.current = null; setConnection(null); onReady(null);
           if (Date.now() - connectedAt >= 30_000) retries.current = 0;
-          if (![1000, 1002, 1003, 1007].includes(event.code)) schedule();
+          // Gateway also closes normally when its old endpoint credential expires.
+          // Explicit local disconnect/unmount is fenced by stopped/current socket.
+          if (![1002, 1003, 1007].includes(event.code)) schedule();
         }
       }, { once: true });
       socket.current = ready.socket; setConnection(ready); onReady(ready);
     } catch (cause) {
       if (current()) setError(cause instanceof HcApiError ? `${cause.message}（${cause.code}）` : '无法建立安全连接，请检查网络、登录和浏览器端点状态。');
-      if (current() && (cause instanceof TypeError || cause instanceof HcApiError && (cause.status >= 500 || cause.status === 429))) schedule();
+      if (current() && (cause instanceof TypeError || cause instanceof DOMException && cause.name === 'TimeoutError' || cause instanceof HcApiError && (cause.status >= 500 || cause.status === 429))) schedule();
     } finally { if (current()) setBusy(false); }
   }, [access, store, onReady, schedule]);
   useEffect(() => { reconnect.current = issue; }, [issue]);
