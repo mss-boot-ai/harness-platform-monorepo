@@ -48,8 +48,7 @@ func (server *Server) processEndpointError(
 		return domain.ID{}, err
 	}
 	if related.Direction != domain.DirectionHCToABA || related.ReceiverEndpointID != endpoint.ID ||
-		session.ABAEndpointID != endpoint.ID || session.HCEndpointID != related.SenderEndpointID ||
-		(session.Status != domain.SessionStatusActive && session.Status != domain.SessionStatusUncertain) {
+		session.ABAEndpointID != endpoint.ID || session.HCEndpointID != related.SenderEndpointID {
 		return domain.ID{}, errors.New("ErrorFrame session binding is invalid")
 	}
 	transcript, err := errorFrameTranscript(frame)
@@ -64,11 +63,27 @@ func (server *Server) processEndpointError(
 	if err != nil || !awpcrypto.VerifyP1363LowS(publicKey, transcript, frame.GetSignature()) {
 		return domain.ID{}, errors.New("ErrorFrame signature is invalid")
 	}
+	if session.Status == domain.SessionStatusDraining || session.Status == domain.SessionStatusClosed {
+		return domain.ID{}, nil
+	}
+	if session.Status != domain.SessionStatusActive && session.Status != domain.SessionStatusUncertain {
+		return domain.ID{}, errors.New("ErrorFrame session is not active or uncertain")
+	}
 	if session.Status == domain.SessionStatusActive {
-		if _, err := server.persistence.UpdateSession(ctx, session.ID, func(value *domain.Session) error {
+		updated, err := server.persistence.UpdateSession(ctx, session.ID, func(value *domain.Session) error {
+			if value.Status == domain.SessionStatusUncertain || value.Status == domain.SessionStatusDraining || value.Status == domain.SessionStatusClosed {
+				return nil
+			}
+			if value.Status != domain.SessionStatusActive {
+				return domain.NewProblem(domain.CodeInvalidState, "uncertain session transition changed", nil)
+			}
 			return value.MarkUncertain(now)
-		}); err != nil {
+		})
+		if err != nil {
 			return domain.ID{}, err
+		}
+		if updated.Status != domain.SessionStatusUncertain {
+			return domain.ID{}, nil
 		}
 	}
 	return session.HCEndpointID, nil

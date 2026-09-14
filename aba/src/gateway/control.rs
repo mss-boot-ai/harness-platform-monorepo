@@ -117,7 +117,11 @@ impl ControlState {
             pending.cancelled = true;
         }
         let mut cursors = Vec::with_capacity(self.sessions.len());
-        for session in self.sessions.values().filter(|session| session.active) {
+        for session in self
+            .sessions
+            .values()
+            .filter(|session| session.active && !session.uncertain)
+        {
             cursors.push(ChannelCursor {
                 channel_id: session_channel_id(
                     &session.material.session_id,
@@ -148,6 +152,12 @@ impl ControlState {
             )?);
         }
         for session in self.sessions.values().filter(|session| session.active) {
+            if session.uncertain {
+                if let Some(message_id) = session.uncertain_message_id {
+                    packets.push(signed_uncertain_error(message_id, identity)?);
+                }
+                continue; // Never resume, ACK or replay a fenced unknown execution.
+            }
             let channel_id = session_channel_id(
                 &session.material.session_id,
                 endpoint_id,
@@ -161,9 +171,6 @@ impl ControlState {
                     channel_id,
                     now_ms,
                 )?);
-            }
-            if let Some(message_id) = session.uncertain_message_id {
-                packets.push(signed_uncertain_error(message_id, identity)?);
             }
             packets.extend(
                 self.journal
@@ -1547,6 +1554,19 @@ mod tests {
                 )
                 .is_err()
         );
+        let unknown = state
+            .sessions
+            .get_mut(&[24; 16])
+            .ok_or("missing test session")?;
+        unknown.uncertain = true;
+        unknown.uncertain_message_id = Some([88; 16]);
+        unknown.hc_frame_sequence = 1;
+        let resumed = state.begin_connection(&endpoint_id, &identity, now)?;
+        assert_eq!(resumed.len(), 1);
+        assert!(matches!(
+            WirePacket::decode(resumed[0].as_slice())?.body,
+            Some(wire_packet::Body::Error(_))
+        ));
         Ok(())
     }
 

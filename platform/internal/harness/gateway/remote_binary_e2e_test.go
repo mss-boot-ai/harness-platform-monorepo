@@ -103,7 +103,17 @@ func TestRemoteActualABAGatewayDuplex(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	handler, err := NewHandler(Config{AllowedOrigin: "http://127.0.0.1:8001", ExternalOrigin: base, NativeExternalOrigin: base, Trust: trust}, persistence, rand.Reader, time.Now)
+	abaConnections := make(chan *activeConnection, 8)
+	handler, err := NewHandler(Config{AllowedOrigin: "http://127.0.0.1:8001", ExternalOrigin: base, NativeExternalOrigin: base, Trust: trust,
+		onReadyConnection: func(connection *activeConnection) {
+			if connection.endpointID == aba.ID {
+				select {
+				case abaConnections <- connection:
+				default:
+				}
+			}
+		},
+	}, persistence, rand.Reader, time.Now)
 	if err != nil {
 		listener.Close()
 		t.Fatal(err)
@@ -352,6 +362,38 @@ func TestRemoteActualABAGatewayDuplex(t *testing.T) {
 	if bytes.Contains(saved, []byte(canary)) || strings.Contains(stderr.String(), canary) {
 		t.Fatal("private prompt leaked into server metadata or ABA diagnostics")
 	}
+	client.prompt("crash-turn", "crash")
+	for {
+		packet := client.packet()
+		if frame := packet.GetError(); frame != nil {
+			if frame.GetCode() != awpv1.ErrorCode_ERROR_CODE_LOCAL_DISPATCH_UNCERTAIN {
+				t.Fatal("unexpected crash outcome")
+			}
+			break
+		}
+	}
+	var originalABA *activeConnection
+	select {
+	case originalABA = <-abaConnections:
+	case <-time.After(time.Second):
+		t.Fatal("missing original ABA connection")
+	}
+	originalABA.close(websocket.CloseGoingAway, "controlled test reconnect after uncertainty")
+	var reconnectedABA *activeConnection
+	select {
+	case reconnectedABA = <-abaConnections:
+	case <-time.After(10 * time.Second):
+		t.Fatal("ABA did not reconnect after uncertain execution")
+	}
+	select {
+	case <-reconnectedABA.done:
+		t.Fatal("uncertain Run poisoned the new ABA connection")
+	case <-time.After(400 * time.Millisecond):
+	}
+	unknown, err := persistence.GetSession(t.Context(), client.session)
+	if err != nil || unknown.Status != domain.SessionStatusUncertain {
+		t.Fatal("reconnect must retain uncertainty")
+	}
 	closed := client.request("/gateway/v1/sessions/"+client.session.String()+"/close", map[string]any{}, "remote-close-fixture-0001")
 	if closed.Code != http.StatusOK && closed.Code != http.StatusAccepted {
 		t.Fatalf("close status=%d body=%s", closed.Code, closed.Body.String())
@@ -359,7 +401,7 @@ func TestRemoteActualABAGatewayDuplex(t *testing.T) {
 	for attempt := 0; attempt < 100; attempt++ {
 		current, err := persistence.GetSession(t.Context(), client.session)
 		if err == nil && current.Status == domain.SessionStatusClosed {
-			t.Log("actual ABA + Gateway + HPKE + config + streaming + reverse permission + ping + cancel/continue + reconnect + replay passed (deterministic ACP)")
+			t.Log("actual ABA + Gateway + HPKE + config + streaming + reverse permission + ping + cancel/continue + reconnect + replay + uncertain reconnect + confirmed close passed (deterministic ACP)")
 			return
 		}
 		time.Sleep(20 * time.Millisecond)

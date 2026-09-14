@@ -91,7 +91,7 @@ func (server *Server) processEncryptedFrame(
 	}
 	// A close races with already-signed output and ACKs on a shared connection.
 	// Verify its route/signature, but neither store nor relay it after the fence.
-	if session.Status == domain.SessionStatusDraining || session.Status == domain.SessionStatusClosed {
+	if session.Status == domain.SessionStatusDraining || session.Status == domain.SessionStatusClosed || session.Status == domain.SessionStatusUncertain || session.Status == domain.SessionStatusRekeyRequired || session.Status == domain.SessionStatusFailed {
 		return nil
 	}
 	if session.Status != domain.SessionStatusActive {
@@ -121,7 +121,7 @@ func (server *Server) processEncryptedFrame(
 	); err != nil {
 		if domain.HasCode(err, domain.CodeInvalidState) {
 			current, lookupErr := server.persistence.GetSession(ctx, session.ID)
-			if lookupErr == nil && (current.Status == domain.SessionStatusDraining || current.Status == domain.SessionStatusClosed) {
+			if lookupErr == nil && (current.Status == domain.SessionStatusDraining || current.Status == domain.SessionStatusClosed || current.Status == domain.SessionStatusUncertain || current.Status == domain.SessionStatusRekeyRequired || current.Status == domain.SessionStatusFailed) {
 				return nil
 			}
 		}

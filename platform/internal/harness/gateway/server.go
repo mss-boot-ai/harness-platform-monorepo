@@ -70,6 +70,8 @@ type persistencePinger interface {
 }
 
 type Config struct {
+	// Test-only transport fault hook; never populated by the public configuration.
+	onReadyConnection    func(*activeConnection)
 	AllowedOrigin        string
 	ExternalOrigin       string
 	NativeExternalOrigin string

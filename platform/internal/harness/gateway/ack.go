@@ -85,7 +85,7 @@ func (server *Server) processAckFrame(
 	if err != nil || !awpcrypto.VerifyP1363LowS(publicKey, transcript, ack.GetSignature()) {
 		return domain.ID{}, errors.New("ACK signature is invalid")
 	}
-	if session.Status == domain.SessionStatusDraining || session.Status == domain.SessionStatusClosed {
+	if session.Status == domain.SessionStatusDraining || session.Status == domain.SessionStatusClosed || session.Status == domain.SessionStatusUncertain || session.Status == domain.SessionStatusRekeyRequired || session.Status == domain.SessionStatusFailed {
 		return domain.ID{}, nil
 	}
 	if session.Status != domain.SessionStatusActive {

@@ -75,8 +75,8 @@ func (server *Server) processResumeState(
 				!resumeFrameReceiverMatches(endpoint.Type, session, frame) {
 				return errors.New("stored replay frame route is invalid")
 			}
-			if session.Status == domain.SessionStatusDraining || session.Status == domain.SessionStatusClosed {
-				if endpoint.Type == domain.EndpointTypeABA && !closing[session.ID] {
+			if session.Status == domain.SessionStatusDraining || session.Status == domain.SessionStatusClosed || session.Status == domain.SessionStatusUncertain || session.Status == domain.SessionStatusRekeyRequired || session.Status == domain.SessionStatusFailed {
+				if (session.Status == domain.SessionStatusDraining || session.Status == domain.SessionStatusClosed) && endpoint.Type == domain.EndpointTypeABA && !closing[session.ID] {
 					_ = server.sendCloseTunnelRequest(session, server.now().UTC())
 					closing[session.ID] = true
 				}

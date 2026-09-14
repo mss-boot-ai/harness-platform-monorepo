@@ -102,6 +102,9 @@ func (server *Server) websocket(writer http.ResponseWriter, request *http.Reques
 	defer server.connections.remove(active)
 	defer active.close(websocket.CloseNormalClosure, "connection closed")
 	go active.runWriter()
+	if server.config.onReadyConnection != nil {
+		server.config.onReadyConnection(active)
+	}
 	if endpoint.Type == domain.EndpointTypeABA {
 		pending, err := server.persistence.PendingEndpointClosures(request.Context(), endpoint)
 		if err != nil {
