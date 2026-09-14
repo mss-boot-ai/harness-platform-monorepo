@@ -21,6 +21,7 @@ export interface ConversationAPI {
 }
 export interface ConversationEntryView extends ConversationEntry { readonly fault: string | null }
 export interface CreatedRun { readonly conversationId: string; readonly runId: string }
+export interface WorkspaceOccupant { readonly conversationId: string | null; readonly runId: string | null; readonly title: string; readonly status: string }
 export class ConversationActionCancelled extends Error {}
 export interface ManagerView {
   readonly status: 'loading' | 'ready' | 'failed'; readonly online: boolean; readonly creating: boolean;
@@ -356,13 +357,23 @@ export class ConversationManager {
     return controller;
   }
   public workspaceConflict(abaId: string, workspaceId: string, except?: string): boolean {
+    return this.workspaceOccupants(abaId, workspaceId, except).length > 0;
+  }
+  public workspaceOccupants(abaId: string, workspaceId: string, except?: string): readonly WorkspaceOccupant[] {
     const exceptRun = except === undefined ? undefined : this.entries.get(except)?.value.activeRunId ?? except;
-    return [...this.controllers.entries()].some(([id, controller]) => {
-      const view = controller.snapshot(); const value = view.data;
-      return id !== exceptRun && !this.knownClosed.has(id) && value.aba.id === abaId && value.session.workspaceId === workspaceId && !isTerminal(value.session.status) &&
-        (view.pending > 0 || value.awaiting !== null || value.blocked !== null || value.session.status === 'UNCERTAIN' || value.requests.length > 0);
-    }) || this.unrecoverable.some((value) => !this.knownClosed.has(value.sessionId) && value.abaEndpointId === abaId && value.workspaceId === workspaceId) ||
-      [...this.entries.values()].some(({ value }) => value.id !== except && value.creation?.abaEndpointId === abaId && value.creation.workspaceId === workspaceId);
+    const result: WorkspaceOccupant[] = [];
+    const add = (session: EndpointSessionSummary) => {
+      if (session.sessionId === exceptRun || this.knownClosed.has(session.sessionId) || isTerminal(session.status) || session.abaEndpointId !== abaId || session.workspaceId !== workspaceId) return;
+      const entry = [...this.entries.values()].find(({ value }) => value.activeRunId === session.sessionId)?.value;
+      const first = this.controllers.get(session.sessionId)?.snapshot().data.messages.find((message) => message.role === 'user')?.text;
+      result.push({ conversationId: entry?.id ?? null, runId: session.sessionId, title: entry?.title ?? first?.slice(0, 60) ?? '已有运行', status: session.status });
+    };
+    for (const controller of this.controllers.values()) add(controller.snapshot().data.session);
+    for (const session of this.unrecoverable) if (!this.controllers.has(session.sessionId)) add(session);
+    for (const { value } of this.entries.values()) if (value.id !== except && value.creation?.abaEndpointId === abaId && value.creation.workspaceId === workspaceId) {
+      result.push({ conversationId: value.id, runId: null, title: value.title ?? '创建待确认的对话', status: 'CREATING' });
+    }
+    return result;
   }
   public prompt(id: string, text: string, expectedRunId?: string): Promise<void> {
     const controller = this.actionable(id, expectedRunId); const value = controller.snapshot().data;

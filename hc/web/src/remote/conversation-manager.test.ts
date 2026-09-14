@@ -16,9 +16,15 @@ function connection(socket: Socket, generation = 1n): ReadyGatewayConnection {
 }
 const managers: ConversationManager[] = [];
 afterEach(async () => { await Promise.all(managers.splice(0).map((manager) => manager.dispose())); });
-async function fixture() {
+async function fixture(released = false) {
   const a = await controllerFixture();
   const b = await controllerFixture({ identity: a.identity, sessionId: '04'.repeat(16), abaId: '05'.repeat(16), workspaceId: 'other' });
+  if (released) {
+    a.session = { ...a.session, status: 'CLOSED' }; a.value = { ...a.value, session: a.session, keys: null };
+    b.session = { ...b.session, status: 'CLOSED' }; b.value = { ...b.value, session: b.session, keys: null };
+    const previous = await a.store.read(a.session.sessionId); if (previous === null) throw new Error('Missing fixture');
+    await a.store.write(a.value, previous.revision);
+  }
   await a.store.write(b.value, null);
   let sessions: readonly EndpointSessionSummary[] = [a.session, b.session];
   let nextSession = 6;
@@ -43,6 +49,18 @@ async function fixture() {
 }
 const chunk = (sessionId: string, text: string) => ({ jsonrpc: '2.0', method: 'session/update', params: { sessionId, update: { sessionUpdate: 'agent_message_chunk', content: { type: 'text', text } } } });
 describe('endpoint conversation coordination', () => {
+  it('exposes idle and archived workspace ownership until the original runtime is confirmed closed', async () => {
+    const f = await fixture(); await f.manager.load(); await f.manager.bind(connection(f.socket));
+    const target = { abaEndpointId: f.a.value.aba.id, workspaceId: 'fixture', runtimeProfileId: 'fixture' };
+    const next = await f.manager.newConversation(target, 'new context');
+    expect(f.manager.workspaceOccupants(target.abaEndpointId, target.workspaceId, next)[0]?.conversationId).toBe(f.a.session.sessionId);
+    await f.manager.archive(f.a.session.sessionId, true);
+    await expect(f.manager.create({ ...target, draft: 'new context' }, false, next)).rejects.toThrow('busy');
+    expect(f.api.create).not.toHaveBeenCalled(); expect(f.api.close).not.toHaveBeenCalled();
+    await f.manager.close(f.a.session.sessionId);
+    expect(f.manager.workspaceConflict(target.abaEndpointId, target.workspaceId, next)).toBe(false);
+    expect((await f.manager.create({ ...target, draft: 'new context' }, false, next)).conversationId).toBe(next);
+  });
   it('waits for confirmed host shutdown and preserves the close operation while draining', async () => {
     const f = await fixture(); await f.manager.load(); await f.manager.bind(connection(f.socket));
     const id = f.a.session.sessionId;
@@ -70,7 +88,7 @@ describe('endpoint conversation coordination', () => {
     expect(f.manager.executionClosed(id)).toBe(true);
   });
   it('creates a local conversation independently of old runs and scopes failed creation to it', async () => {
-    const f = await fixture(); await f.manager.load(); await f.manager.bind(connection(f.socket));
+    const f = await fixture(true); await f.manager.load(); await f.manager.bind(connection(f.socket));
     const input = { abaEndpointId: f.a.value.aba.id, workspaceId: 'fixture', runtimeProfileId: 'fixture', draft: 'first draft' };
     vi.mocked(f.api.create).mockRejectedValueOnce(new Error('response lost'));
     await expect(f.manager.create(input)).rejects.toThrow('response lost');
@@ -87,7 +105,7 @@ describe('endpoint conversation coordination', () => {
     expect(f.api.close).not.toHaveBeenCalled();
   });
   it('releases a proven rejected creation but retains its local draft', async () => {
-    const f = await fixture(); await f.manager.load(); await f.manager.bind(connection(f.socket));
+    const f = await fixture(true); await f.manager.load(); await f.manager.bind(connection(f.socket));
     const input = { abaEndpointId: f.a.value.aba.id, workspaceId: 'fixture', runtimeProfileId: 'fixture', draft: 'keep rejected draft' };
     vi.mocked(f.api.create).mockRejectedValueOnce(new HcApiError('Target rejected', 'EXECUTION_TARGET_NOT_ALLOWED', 400));
     await expect(f.manager.create(input)).rejects.toThrow('Target rejected');
@@ -98,7 +116,7 @@ describe('endpoint conversation coordination', () => {
     expect(vi.mocked(f.api.create).mock.calls[0]![0].id).not.toBe(vi.mocked(f.api.create).mock.calls[1]![0].id);
   });
   it('cancels an in-flight creation without late adoption or automatic prompt dispatch', async () => {
-    const f = await fixture(); await f.manager.load(); await f.manager.bind(connection(f.socket));
+    const f = await fixture(true); await f.manager.load(); await f.manager.bind(connection(f.socket));
     let finish: (session: EndpointSessionSummary) => void = () => undefined;
     vi.mocked(f.api.create).mockImplementationOnce(() => new Promise((resolve) => { finish = resolve; }));
     const creating = f.manager.create({ abaEndpointId: f.a.value.aba.id, workspaceId: 'fixture', runtimeProfileId: 'fixture', draft: 'cancelled draft' }).catch((error: unknown) => error);
@@ -184,7 +202,7 @@ describe('endpoint conversation coordination', () => {
     expect(f.api.close).not.toHaveBeenCalled();
   });
   it('keeps a new creation grant when an older list response finishes and routes its key package', async () => {
-    const f = await fixture(); await f.manager.load(); await f.manager.bind(connection(f.socket));
+    const f = await fixture(true); await f.manager.load(); await f.manager.bind(connection(f.socket));
     let release: (sessions: readonly EndpointSessionSummary[]) => void = () => undefined;
     vi.mocked(f.api.sessions).mockImplementationOnce(() => new Promise((resolve) => { release = resolve; }));
     const refreshing = f.manager.refresh(); await vi.waitFor(() => expect(f.api.sessions).toHaveBeenCalledTimes(2));
@@ -255,7 +273,7 @@ describe('endpoint conversation coordination', () => {
     expect((await f.a.store.readWorkspace()).value.selectedId).toBe(f.a.session.sessionId);
   });
   it('does not steal a newer navigation choice when an earlier create response completes', async () => {
-    const f = await fixture(); await f.manager.load(); await f.manager.bind(connection(f.socket));
+    const f = await fixture(true); await f.manager.load(); await f.manager.bind(connection(f.socket));
     let finish: (session: EndpointSessionSummary) => void = () => undefined;
     vi.mocked(f.api.create).mockImplementationOnce(() => new Promise((resolve) => { finish = resolve; }));
     const creating = f.manager.create({ abaEndpointId: f.a.session.abaEndpointId, runtimeProfileId: 'fixture', workspaceId: 'fixture', draft: 'new session' });
@@ -304,7 +322,7 @@ describe('endpoint conversation coordination', () => {
     expect(f.manager.snapshot().runs.find((item) => item.data.session.sessionId === f.a.session.sessionId)?.data.outbound).toBe('1');
   });
   it('retains an ambiguous creation intent and retries only its original idempotency identity', async () => {
-    const f = await fixture(); await f.manager.load(); await f.manager.bind(connection(f.socket));
+    const f = await fixture(true); await f.manager.load(); await f.manager.bind(connection(f.socket));
     const input = { abaEndpointId: f.a.value.aba.id, workspaceId: 'fixture', runtimeProfileId: 'fixture', draft: 'keep this draft' };
     vi.mocked(f.api.create).mockRejectedValueOnce(new Error('response lost'));
     await f.manager.draft(null, input.draft);

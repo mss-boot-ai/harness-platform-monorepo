@@ -10,7 +10,8 @@ export function RuntimeConfiguration({ state, pending, disabled, onChange, onRef
   const labels: Readonly<Record<string, string>> = { model: '模型', thought_level: '推理强度', mode: '会话权限模式' };
   return <section className="runtime-configuration" aria-label="会话配置">
     <div className="section-heading"><h3>会话配置</h3><span className="status-pill">{state.status === 'ready' ? `已确认 · ${state.configRevision}` : state.status === 'pending' ? '读取中' : '未就绪'}</span></div>
-    {state.status !== 'ready' ? <p>正在读取执行端实际能力。未支持的配置不会显示为可选项。</p> : state.config.length === 0 ? <p>该 Agent 没有提供可修改的会话配置。</p> : null}
+    {state.status === 'failed' ? <p>执行端状态未知或已停止。以下仅为历史配置，不能视为当前生效值。</p>
+      : state.status !== 'ready' ? <p>正在读取执行端实际能力。未支持的配置不会显示为可选项。</p> : state.config.length === 0 ? <p>该 Agent 没有提供可修改的会话配置。</p> : null}
     {state.config.map((option) => <label key={option.id}>{labels[option.category] ?? option.name}
       <select aria-label={labels[option.category] ?? option.name} value={option.value} disabled={disabled || pending !== null || state.status !== 'ready'}
         onChange={(event) => onChange(option, event.target.value)}>

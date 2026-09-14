@@ -5,6 +5,14 @@ export interface ExecutionTarget {
   readonly workspaceId: string;
   readonly runtimeProfileId: string;
 }
+
+export function startupFailureMessage(code?: string): string {
+  if (code === 'WORKSPACE_BUSY') return '此项目仍由另一个运行占用。请返回占用它的对话，确认结束并释放项目后再开始。';
+  if (code === 'RUNTIME_BUSY' || code === 'RESOURCE_BUSY') return '执行设备或 Agent 已达到运行上限。请先确认结束不再使用的运行，或选择其他设备。';
+  if (code === 'AGENT_START_EXPIRED') return 'Agent 启动超过期限。草稿已保留，请检查执行设备后创建新的运行。';
+  if (code === 'RUNTIME_NOT_ALLOWED' || code === 'WORKSPACE_NOT_ALLOWED' || code === 'LOCAL_POLICY_REJECTED') return '执行设备的本地配置拒绝了该项目与 Agent 组合。请刷新项目并选择有效组合。';
+  return 'Agent 未能启动。草稿和历史已保留，请检查执行设备后继续或新建对话。';
+}
 export interface CatalogRuntime { readonly id: string; readonly displayName: string }
 export interface CatalogWorkspace { readonly id: string; readonly displayName: string; readonly runtimeIds: readonly string[] }
 export interface ExecutionCatalog {

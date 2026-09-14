@@ -46,6 +46,8 @@ export interface ABAEndpointSummary {
 }
 
 export interface EndpointSessionSummary {
+
+  readonly startupFailureCode?: string;
   readonly abaEndpointId: string;
   readonly createdAt: string;
   readonly hcEndpointId: string;
@@ -493,6 +495,7 @@ function parseEndpointSession(input: unknown): EndpointSessionSummary {
     typeof value.hcEndpointId !== 'string' ||
     !/^[0-9a-f]{32}$/u.test(value.hcEndpointId) ||
     typeof value.runtimeProfileId !== 'string' ||
+    (value.startupFailureCode !== undefined && (typeof value.startupFailureCode !== 'string' || !/^[A-Z][A-Z0-9_]{0,63}$/u.test(value.startupFailureCode))) ||
     typeof value.workspaceId !== 'string' ||
     !Array.isArray(value.requestedCapabilities) ||
     !value.requestedCapabilities.every((item) => typeof item === 'string') ||

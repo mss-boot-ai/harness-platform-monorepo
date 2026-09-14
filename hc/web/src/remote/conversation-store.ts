@@ -83,6 +83,7 @@ async function decodeKeys(raw: unknown, session: EndpointSessionSummary): Promis
 function validatePublicState(raw: unknown, endpoint: string, identity: EndpointIdentity): asserts raw is Conversation {
   const value = record(raw); const session = record(value?.session); const aba = record(value?.aba);
   if (value === null || session === null || aba === null) throw new Error('Invalid conversation shape');
+  if (session.startupFailureCode !== undefined && (typeof session.startupFailureCode !== 'string' || !/^[A-Z][A-Z0-9_]{0,63}$/u.test(session.startupFailureCode))) throw new Error('Invalid startup failure code');
   if (value.version !== 1 || session?.hcEndpointId !== endpoint || session?.abaEndpointId !== aba?.id || aba?.type !== 'ABA' ||
       value?.signingJkt !== identity.signing.thumbprint || value?.kemJkt !== identity.kem.thumbprint ||
       typeof session.sessionId !== 'string' || typeof aba.id !== 'string' ||

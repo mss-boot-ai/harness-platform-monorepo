@@ -10,8 +10,9 @@ import type { RegisterEndpointShutdown } from './remote/endpoint-owner';
 import { RuntimeActivity, RuntimeConfiguration, type PendingConfig } from './remote/RuntimeControls';
 import { editDraft, finishDraft, type DraftEdits } from './remote/draft-edits';
 import { TargetPicker } from './remote/TargetPicker';
-import { executionTargetState, firstExecutionTarget } from './remote/execution-target';
+import { executionTargetState, firstExecutionTarget, startupFailureMessage } from './remote/execution-target';
 import { RecoveryActions } from './remote/RecoveryActions';
+import { WorkspaceOccupancy } from './remote/WorkspaceOccupancy';
 
 const loading: ManagerView = { status: 'loading', online: false, creating: false, workspace: null, selectedId: null, conversations: [],
   runs: [], storageIssues: [], endpoints: [], unrecoverable: [], recovery: {}, error: null, pendingWrites: 0 };
@@ -98,8 +99,8 @@ export function SessionSetup({ connection, access, registration, secureStore, in
   const pendingConfig: PendingConfig | null = pendingRequest?.option === undefined || pendingRequest.requestedValue === undefined ? null : {
     id: pendingRequest.id, option: pendingRequest.option, value: pendingRequest.requestedValue };
   const full = value !== undefined && (value.messages.length >= MAX_MESSAGES || value.messages.reduce((sum, message) => sum + message.text.length, 0) >= 1_048_576);
-  const workspaceBusy = value === undefined ? manager?.workspaceConflict(actualABA, workspaceId.trim(), selectedId ?? undefined) === true
-    : manager?.workspaceConflict(value.aba.id, value.session.workspaceId, selectedId ?? undefined) === true;
+  const occupants = manager?.workspaceOccupants(value?.aba.id ?? actualABA, value?.session.workspaceId ?? workspaceId.trim(), selectedId ?? undefined) ?? [];
+  const workspaceBusy = occupants.length > 0;
   const canSubmit = view.status === 'ready' && view.pendingWrites === 0 && view.online && !readOnly && !responding && !full && !workspaceBusy && !creating &&
     (value === undefined ? (conversation?.creation ?? null) === null && targetState.available
       : value.keys !== null && session?.status === 'ACTIVE' && value.requests.length === 0 &&
@@ -185,7 +186,7 @@ export function SessionSetup({ connection, access, registration, secureStore, in
   </div>;
   const notice = edit?.failed === true ? '本对话草稿尚未保存。请保留此页，不要刷新；切换会话后仍可回来复制。'
     : view.status === 'loading' ? '正在恢复本地加密记录…' : view.pendingWrites > 0 || edit !== undefined ? '正在保存草稿与会话选择，请勿清除浏览器数据。'
-    : recovering ?? conversation?.fault ?? selected?.fault ?? value?.blocked ?? (unsupportedRuntime ? value?.runtime.configError ?? 'Agent 能力尚未就绪，可以检查状态或结束旧运行后继续。' : conversation?.archived ? '此对话已归档，可从对话操作中恢复。' : missingRun ? '这次运行的本地记录不可用，可以检查状态或结束旧运行后继续。' : expired ? '会话密钥已过期，当前只读。需要新的授权密钥才能继续。'
+    : recovering ?? conversation?.fault ?? selected?.fault ?? value?.blocked ?? (session?.status === 'FAILED' ? startupFailureMessage(session.startupFailureCode) : unsupportedRuntime ? value?.runtime.configError ?? 'Agent 能力尚未就绪，可以检查状态或结束旧运行后继续。' : conversation?.archived ? '此对话已归档，可从对话操作中恢复。' : missingRun ? '这次运行的本地记录不可用，可以检查状态或结束旧运行后继续。' : expired ? '会话密钥已过期，当前只读。需要新的授权密钥才能继续。'
       : missingKey ? '本地缺少此会话的恢复密钥，当前只读。请核对执行端状态。'
         : !view.online ? '连接已断开。历史和草稿在此浏览器中加密保留；重新连接后会先核对授权，再恢复原始消息。'
           : workspaceBusy ? '此工作区有另一个会话正在执行或需要确认。草稿已保留，请等待或选择不同工作区。'
@@ -203,12 +204,14 @@ export function SessionSetup({ connection, access, registration, secureStore, in
         disabled={!view.online || readOnly || run.data.session.sessionId !== selectedRunId || run.data.cancelPending || actionBusy}
         onDecision={(id, option) => perform(() => manager!.decide(selectedId!, id, option, run.data.session.sessionId), '权限请求已失效或提交未确认，请核对当前会话。')} />;
     }}
-    recoveryActions={<RecoveryActions key={selectedId ?? 'compose'} conversation={conversation ?? null} blocked={blocked} terminal={terminal} online={view.online} busy={recoveryBusy}
+    recoveryActions={<><WorkspaceOccupancy key={`occupancy-${selectedId}`} occupants={occupants} busy={recoveryBusy} onSelect={selectConversation}
+      onRelease={(occupant) => perform(() => occupant.conversationId === null ? manager!.closeUnrecoverable(occupant.runId!) : manager!.close(occupant.conversationId, occupant.runId!), '执行端尚未确认释放项目，请稍后核对。', selectedId, 'recovery')} />
+      <RecoveryActions key={selectedId ?? 'compose'} conversation={conversation ?? null} blocked={blocked} terminal={terminal} online={view.online} busy={recoveryBusy}
       onCheckCreation={(cancel) => perform(() => manager!.checkCreation(selectedId!, cancel), '原创建尚未确认，请保留草稿并稍后再检查。', selectedId, 'recovery')}
       onInspect={() => perform(() => manager!.inspect(selectedId!), '无法核对当前运行，请稍后重试。', selectedId, 'recovery')}
       onClose={() => perform(() => manager!.close(selectedId!, selectedRunId ?? undefined), '旧运行尚未确认结束。', selectedId, 'recovery')}
       onContinue={() => perform(() => manager!.continueConversation(selectedId!), '旧运行尚未确认结束，暂时无法继续。', selectedId, 'recovery')}
-      onReconnect={onOpenSettings} onNew={newChat} />}
+      onReconnect={onOpenSettings} onNew={newChat} /></>}
     onRenameConversation={(id, title) => perform(() => manager!.rename(id, title), '对话名称未能保存。', id)}
     onArchiveConversation={(id, archived) => perform(() => manager!.archive(id, archived), '归档状态未能保存。', id)}
     onDeleteConversation={(id) => perform(() => manager!.remove(id), '请先结束这份对话的运行并确认投递状态，再删除记录。', id, 'recovery')}
