@@ -28,6 +28,33 @@ def cannot_connect(family, address):
         return True
 
 
+def connected_pair_stays_private(kind, address):
+    left, right = socket.socketpair(socket.AF_UNIX, kind)
+    try:
+        for after_close in [False, True]:
+            if after_close:
+                right.close()
+            try:
+                left.connect(address)
+                return False
+            except OSError:
+                pass
+            for send in [lambda: left.sendto(b"pair-sentinel", address), lambda: left.sendmsg([b"pair-sentinel"], [], 0, address)]:
+                try:
+                    send()
+                    if after_close:
+                        return False
+                    right.settimeout(0.3)
+                    if right.recv(64) != b"pair-sentinel":
+                        return False
+                except OSError:
+                    pass
+        return True
+    finally:
+        left.close()
+        right.close()
+
+
 def probe():
     canary, port, abstract, host_pid_ns, expected_uid = sys.argv[1:]
     facts = {
@@ -44,6 +71,8 @@ def probe():
         "workspace_control_socket_denied": cannot_connect(socket.AF_UNIX, str(Path.cwd() / "host-control-sentinel.sock")),
         "provider_socket_hidden_from_runtime": inaccessible("/run/harness-provider.sock"),
         "upstream_credential_not_in_runtime_env": os.environ.get("HARNESS_CODEX_API_KEY") in (None, "local-isolated-provider"),
+        "stream_pairs_stay_private": connected_pair_stays_private(socket.SOCK_STREAM, str(Path.cwd() / "host-control-sentinel.sock")),
+        "seqpacket_pairs_stay_private": connected_pair_stays_private(socket.SOCK_SEQPACKET, str(Path.cwd() / "host-seqpacket-sentinel.sock")),
         "isolated_home": os.environ.get("HOME") == "/home/runtime",
     }
     pairs = []

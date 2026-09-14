@@ -46,6 +46,13 @@ enum Command {
         directory: PathBuf,
     },
     #[cfg(target_os = "linux")]
+    ScopeReconcile {
+        #[arg(long)]
+        config: PathBuf,
+        #[arg(long)]
+        insecure_loopback_development: bool,
+    },
+    #[cfg(target_os = "linux")]
     #[command(hide = true)]
     ScopeRuntime {
         #[arg(long)]
@@ -159,6 +166,9 @@ enum RuntimeCommand {
         /// Verify a real provider reply and a read-only workspace file tool using synthetic markers.
         #[arg(long)]
         exercise: bool,
+        /// Keep the synthetic probe alive so the deployment verifier can inject Host death.
+        #[arg(long, conflicts_with = "exercise")]
+        hold_for_crash: bool,
     },
 }
 
@@ -187,6 +197,20 @@ fn execute(cli: Cli) -> Result<(), Box<dyn std::error::Error>> {
         #[cfg(target_os = "linux")]
         Command::ScopeInit { directory } => {
             aba::process::supervision::Supervisor::initialize_directory(&directory)?
+        }
+        #[cfg(target_os = "linux")]
+        Command::ScopeReconcile {
+            config,
+            insecure_loopback_development,
+        } => {
+            let config =
+                AgentConfig::load_with_loopback_development(config, insecure_loopback_development)?;
+            let isolation = config
+                .isolation
+                .as_ref()
+                .ok_or("scope reconciliation requires isolation")?;
+            let _supervisor = aba::process::supervision::Supervisor::open(isolation)?;
+            println!("Recorded process scopes reconciled; no runtime was started.");
         }
         #[cfg(target_os = "linux")]
         Command::ScopeExec {
@@ -266,6 +290,7 @@ fn execute(cli: Cli) -> Result<(), Box<dyn std::error::Error>> {
                     workspace,
                     insecure_loopback_development,
                     exercise,
+                    hold_for_crash,
                 },
         }) => {
             let config =
@@ -290,6 +315,14 @@ fn execute(cli: Cli) -> Result<(), Box<dyn std::error::Error>> {
                 rand_core::OsRng.fill_bytes(&mut id);
                 let mut process =
                     AgentProcess::start_supervised(runtime, workspace, &supervisor, id)?;
+                if hold_for_crash {
+                    println!("Synthetic scope probe armed for Host-death injection.");
+                    use std::io::Write as _;
+                    std::io::stdout().flush()?;
+                    loop {
+                        std::thread::sleep(std::time::Duration::from_secs(1));
+                    }
+                }
                 if exercise {
                     if isolation.network != aba::config::IsolationNetwork::CodexProvider {
                         return Err(
@@ -346,6 +379,9 @@ fn execute(cli: Cli) -> Result<(), Box<dyn std::error::Error>> {
                 }
                 process.shutdown()?;
             } else {
+                if hold_for_crash {
+                    return Err("Host-death probe requires configured isolation".into());
+                }
                 if exercise {
                     return Err("real provider exercise requires configured isolation".into());
                 }

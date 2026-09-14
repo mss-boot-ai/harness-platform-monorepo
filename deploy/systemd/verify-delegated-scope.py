@@ -14,6 +14,7 @@ import pwd
 import re
 import shutil
 import socket
+import selectors
 import subprocess
 import time
 
@@ -22,14 +23,18 @@ parser.add_argument("--aba", required=True, type=Path)
 parser.add_argument("--source-sha", required=True)
 parser.add_argument("--provider", action="store_true", help="Also establish the fixed provider path while running hostile fixtures")
 parser.add_argument("--codex", action="store_true", help="Exercise the existing real Codex adapter and provider")
+parser.add_argument("--crash", action="store_true", help="Kill and restart only this synthetic Host unit, then reconcile recorded scopes")
 args = parser.parse_args()
 if os.geteuid() != 0 or not re.fullmatch(r"[0-9a-f]{40}", args.source_sha):
     raise SystemExit("requires authorized deployment identity and full source SHA")
+if args.crash and args.codex:
+    raise SystemExit("crash injection uses the deterministic fixture, never an unbounded live model task")
 user = pwd.getpwnam("harness-aba")  # Lookup only: never creates an account.
 accounts = [(entry.pw_name, entry.pw_uid, entry.pw_gid) for entry in pwd.getpwall()]
 live_identity = subprocess.check_output(["systemctl", "show", "harness-aba.service", "-p", "MainPID", "-p", "InvocationID"], text=True)
 suffix = args.source_sha[:12]
 suffix += "-codex" if args.codex else "-egress" if args.provider else ""
+suffix += "-crash" if args.crash else ""
 unit = "harness-isolation-probe-" + suffix
 base = Path("/opt/harness/isolation-probes") / suffix
 state = Path("/var/lib") / unit
@@ -69,6 +74,11 @@ datagram = socket.socket(socket.AF_UNIX, socket.SOCK_DGRAM)
 datagram.bind(str(workspace / "host-datagram-sentinel.sock"))
 os.chown(workspace / "host-datagram-sentinel.sock", user.pw_uid, user.pw_gid)
 os.chmod(workspace / "host-datagram-sentinel.sock", 0o777)
+seqpacket = socket.socket(socket.AF_UNIX, socket.SOCK_SEQPACKET)
+seqpacket.bind(str(workspace / "host-seqpacket-sentinel.sock"))
+os.chown(workspace / "host-seqpacket-sentinel.sock", user.pw_uid, user.pw_gid)
+os.chmod(workspace / "host-seqpacket-sentinel.sock", 0o777)
+seqpacket.listen(2)
 for address in [("127.0.0.1", tcp.getsockname()[1]), ("172.16.0.42", tcp.getsockname()[1])]:
     with socket.create_connection(address, timeout=2) as connection:
         accepted, _ = tcp.accept()
@@ -129,8 +139,36 @@ command += [str(binary), "runtime", "probe", "--config", str(config), "--runtime
     "--workspace", "fixture", "--insecure-loopback-development"]
 if args.codex:
     command += ["--exercise"]
+if args.crash:
+    command += ["--hold-for-crash"]
 try:
-    result = subprocess.run(command, capture_output=True, text=True, timeout=480 if args.codex else 45)
+    crash_confirmed = False
+    if args.crash:
+        process = subprocess.Popen(command, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
+        selector = selectors.DefaultSelector()
+        selector.register(process.stdout, selectors.EVENT_READ)
+        if not selector.select(35):
+            subprocess.run(["systemctl", "stop", unit + ".service"], timeout=15, check=False)
+            raise RuntimeError("synthetic Host failed to arm before the deadline")
+        line = process.stdout.readline()
+        selector.close()
+        if line.strip() != "Synthetic scope probe armed for Host-death injection.":
+            raise RuntimeError("unexpected synthetic Host startup result")
+        before = json.loads((state / "registry.json").read_text())
+        if len(before["records"]) != 1 or any(item["closed"] for item in before["records"].values()):
+            raise RuntimeError("crash fixture has no live durable scope claim")
+        subprocess.run(["systemctl", "kill", "--kill-who=main", "--signal=KILL", unit + ".service"], check=True, timeout=10)
+        old_output, old_error = process.communicate(timeout=20)
+        (base / "crashed-unit-output.txt").write_text(line + old_output + old_error)
+        if process.returncode == 0:
+            raise RuntimeError("Host crash was not observed")
+        subprocess.run(["systemctl", "reset-failed", unit + ".service"], check=True, timeout=10)
+        at_binary = command.index(str(binary))
+        recovery = command[:at_binary] + [str(binary), "scope-reconcile", "--config", str(config), "--insecure-loopback-development"]
+        result = subprocess.run(recovery, capture_output=True, text=True, timeout=30)
+        crash_confirmed = result.returncode == 0 and "Recorded process scopes reconciled; no runtime was started." in result.stdout
+    else:
+        result = subprocess.run(command, capture_output=True, text=True, timeout=480 if args.codex else 45)
     (base / "unit-output.txt").write_text(result.stdout + result.stderr)
     if result.returncode != 0:
         raise RuntimeError("isolated unit probe failed; retained unit-output.txt")
@@ -146,7 +184,7 @@ try:
         "no_system_bus", "no_cgroup_control", "private_pid_namespace", "host_loopback_denied",
         "host_private_network_denied", "host_abstract_socket_denied", "workspace_control_socket_denied",
         "provider_socket_hidden_from_runtime", "upstream_credential_not_in_runtime_env",
-        "isolated_home", "datagram_pair_cannot_reach_host", "no_host_state_descriptors"}
+        "isolated_home", "datagram_pair_cannot_reach_host", "stream_pairs_stay_private", "seqpacket_pairs_stay_private", "no_host_state_descriptors"}
     if set(facts) != expected or any(type(value) is not bool for value in facts.values()):
         raise RuntimeError("fixture omitted or changed a required assertion")
     registry = json.loads((state / "registry.json").read_text())
@@ -159,7 +197,9 @@ try:
     facts["accounts_unchanged"] = accounts == [(entry.pw_name, entry.pw_uid, entry.pw_gid) for entry in pwd.getpwall()]
     facts["active_aba_untouched"] = (subprocess.run(["systemctl", "is-active", "--quiet", "harness-aba.service"]).returncode == 0
         and live_identity == subprocess.check_output(["systemctl", "show", "harness-aba.service", "-p", "MainPID", "-p", "InvocationID"], text=True))
-    facts["probe_succeeded"] = "ACP runtime probe succeeded." in result.stdout
+    facts["probe_succeeded"] = crash_confirmed if args.crash else "ACP runtime probe succeeded." in result.stdout
+    if args.crash:
+        facts["actual_host_crash_reconciled_without_runtime_restart"] = crash_confirmed
     report = {"source_sha": args.source_sha, "binary_sha256": hashlib.sha256(binary.read_bytes()).hexdigest(),
         "unit": unit, "facts": facts, "scope": "isolated real Codex reply and read-only tool" if args.codex else "deterministic kernel containment; fixed provider path enabled" if args.provider else "deterministic kernel containment, no network",
         "completion": "partial H1 evidence; approval/cancellation/restart matrix and complete Host remain open"}
@@ -172,3 +212,4 @@ finally:
     unix.close()
     pathname.close()
     datagram.close()
+    seqpacket.close()
