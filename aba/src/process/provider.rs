@@ -175,6 +175,25 @@ impl ProviderPolicy {
             "max_tokens",
             "max_completion_tokens",
             "response_format",
+            "model",
+            "input",
+            "instructions",
+            "tools",
+            "tool_choice",
+            "parallel_tool_calls",
+            "reasoning",
+            "text",
+            "stream",
+            "stream_options",
+            "store",
+            "include",
+            "max_output_tokens",
+            "metadata",
+            "service_tier",
+            "prompt_cache_key",
+            "prompt_cache_retention",
+            "safety_identifier",
+            "truncation",
         ]
         .into_iter()
         .filter(|name| shape.is_some_and(|value| value.get(name).is_some()))
@@ -196,8 +215,25 @@ impl ProviderPolicy {
         if let Some(tools) = shape.and_then(|value| value.get("tools")) {
             kinds(tools, &mut tool_kinds);
         }
+        let null_controls: Vec<_> = known
+            .iter()
+            .filter(|name| {
+                shape
+                    .and_then(|value| value.get(**name))
+                    .is_some_and(serde_json::Value::is_null)
+            })
+            .collect();
+        let model_allowed = shape
+            .and_then(|value| value.get("model"))
+            .and_then(serde_json::Value::as_str)
+            .is_some_and(|model| self.models.contains(model));
+        let excessive_output = shape
+            .and_then(|value| value.get("max_output_tokens"))
+            .and_then(serde_json::Value::as_u64)
+            .is_some_and(|value| value > 16_384);
         if let Ok(bytes) = serde_json::to_vec(
-            &serde_json::json!({"code":code,"known_controls_present":known,"tool_kinds":tool_kinds}),
+            &serde_json::json!({"code":code,"known_controls_present":known,"null_controls":null_controls,
+                "tool_kinds":tool_kinds,"model_allowed":model_allowed,"excessive_output":excessive_output}),
         ) && let Ok(mut file) = file.lock()
         {
             let _ = file.write_all(&bytes).and_then(|()| file.write_all(b"\n"));
