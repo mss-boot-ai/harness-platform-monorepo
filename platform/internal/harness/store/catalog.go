@@ -25,7 +25,7 @@ func (store *Store) PublishExecutionCatalog(ctx context.Context, catalog domain.
 	if err != nil {
 		return err
 	}
-	return store.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
+	return store.metadataTransaction(ctx, func(tx *gorm.DB) error {
 		var endpoint endpointRow
 		if err := tx.Clauses(clause.Locking{Strength: "UPDATE"}).First(&endpoint, "id = ? AND owner_user_id = ? AND tenant_id = ?", catalog.EndpointID.String(), catalog.OwnerUserID, catalog.TenantID).Error; err != nil {
 			return notFoundOr("lock catalog endpoint", "catalog endpoint was not found", err)

@@ -22,3 +22,21 @@ func (store *Store) WithTransaction(ctx context.Context, fn func(*Store) error) 
 		return fn(&Store{db: tx})
 	})
 }
+
+// Only database metadata belongs in this callback. Retry rolled-back lock
+// conflicts without replaying an Agent action or any external side effect.
+func (store *Store) metadataTransaction(ctx context.Context, fn func(*gorm.DB) error) error {
+	for attempt := 0; attempt < 8; attempt++ {
+		err := store.db.WithContext(ctx).Transaction(fn)
+		if err == nil || (!isSQLiteConcurrencyError(err) && !isPostgresConcurrencyError(err)) {
+			return err
+		}
+		if attempt == 7 {
+			return normalizeConcurrencyError("metadata update remains contended", err)
+		}
+		if err := waitForSQLiteRetry(ctx, attempt); err != nil {
+			return err
+		}
+	}
+	return errors.New("metadata transaction retry exhausted")
+}

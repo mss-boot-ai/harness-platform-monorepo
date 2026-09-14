@@ -25,7 +25,7 @@ func (store *Store) CancelEndpointSessionCreation(ctx context.Context, cancellat
 		return domain.IdempotencyRecord{}, err
 	}
 	var result domain.IdempotencyRecord
-	err = store.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
+	err = store.metadataTransaction(ctx, func(tx *gorm.DB) error {
 		row := idempotencyToRow(cancellation)
 		insert := tx.Clauses(clause.OnConflict{DoNothing: true}).Create(&row)
 		if insert.Error != nil {
