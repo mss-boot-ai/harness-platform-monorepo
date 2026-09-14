@@ -69,12 +69,18 @@ jobs:
         with:
           go-version-file: platform/go.mod
           cache-dependency-path: platform/go.sum
+      - name: Compile a reproducible integration test binary
+        working-directory: platform
+        run: |
+          mkdir -p "${RUNNER_TEMP}/runtime-review/public-binaries"
+          go test -c -race -o "${RUNNER_TEMP}/runtime-review/public-binaries/gateway.test" ./internal/harness/gateway
+          cp ../aba/target/debug/aba ../aba/tests/fixtures/duplex_agent.py "${RUNNER_TEMP}/runtime-review/public-binaries/"
       - name: Verify actual-binary integration before publishing a candidate
         working-directory: platform
         env:
           HARNESS_TEST_ABA_BINARY: ${{ github.workspace }}/aba/target/debug/aba
           HARNESS_TEST_ACP_FIXTURE: ${{ github.workspace }}/aba/tests/fixtures/duplex_agent.py
-        run: go test -count=1 -race -timeout=120s -run '^TestRemoteActualABAGatewayDuplex$' ./internal/harness/gateway
+        run: '"${RUNNER_TEMP}/runtime-review/public-binaries/gateway.test" -test.v -test.timeout=120s -test.run="^TestRemoteActualABAGatewayDuplex$"'
       - name: Upload verified immutable Git objects, never update refs
         if: success()
         env:
@@ -88,6 +94,12 @@ jobs:
         run: |
           mkdir -p "${RUNNER_TEMP}/runtime-review"
           git rev-parse HEAD > "${RUNNER_TEMP}/runtime-review/source-sha.txt"
+          # Public source-built test programs only. Never archive runtime directories,
+          # environments, endpoint credentials, checkout metadata or model keys.
+          if test -d "${RUNNER_TEMP}/runtime-review/public-binaries"; then
+            cd "${RUNNER_TEMP}/runtime-review/public-binaries"
+            sha256sum * > SHA256SUMS
+          fi
       - uses: actions/upload-artifact@v4
         if: always()
         with:

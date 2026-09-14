@@ -1,7 +1,25 @@
 diff --git a/platform/internal/harness/gateway/remote_binary_e2e_test.go b/platform/internal/harness/gateway/remote_binary_e2e_test.go
 --- a/platform/internal/harness/gateway/remote_binary_e2e_test.go
 +++ b/platform/internal/harness/gateway/remote_binary_e2e_test.go
-@@ -109,7 +109,13 @@
+@@ -98,7 +98,13 @@
+ 		listener.Close()
+ 		t.Fatal(err)
+ 	}
+-	server := httptest.NewUnstartedServer(handler)
++	var requestPaths remoteLockedBuffer
++	observedHandler := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
++		// Only method/path diagnostics: never log request headers, bodies or tickets.
++		_, _ = requestPaths.Write([]byte(r.Method + " " + r.URL.Path + "\n"))
++		handler.ServeHTTP(w, r)
++	})
++	server := httptest.NewUnstartedServer(observedHandler)
+ 	_ = server.Listener.Close()
+ 	server.Listener = listener
+ 	server.Start()
+@@ -106,7 +112,13 @@
+ 	client := &remoteBinaryClient{t: t, server: server, store: persistence, aba: aba, hc: hc, credential: hcCredential,
+ 		public: hcPublic, signing: hcKey, abaSigning: abaKey, token: base64.RawURLEncoding.EncodeToString(bytes.Repeat([]byte{9}, 32))}
+ 
 -	directory := t.TempDir()
 +	directory, err := filepath.EvalSymlinks(t.TempDir())
 +	if err != nil {
@@ -13,6 +31,12 @@ diff --git a/platform/internal/harness/gateway/remote_binary_e2e_test.go b/platf
  	identityPath := filepath.Join(directory, "identity.json")
  	scalar := func(value byte) string {
  		raw := make([]byte, 32)
- 		raw[31] = value
- 		return base64.RawURLEncoding.EncodeToString(raw)
+@@ -160,7 +172,7 @@
+ 		default:
+ 		}
+ 		if time.Now().After(deadline) {
+-			t.Fatal("ABA did not connect before deadline")
++			t.Fatalf("ABA did not connect before deadline; safe stderr=%s; request paths=%s; last discovery status=%d", strings.TrimSpace(stderr.String()), requestPaths.String(), result.Code)
+ 		}
+ 		time.Sleep(30 * time.Millisecond)
  	}
