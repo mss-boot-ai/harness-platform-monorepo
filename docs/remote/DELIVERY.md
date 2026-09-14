@@ -7,6 +7,8 @@
 
 ## 2026-09-14 当前增量状态
 
+2026-09-15：报告问题的恢复检查点已部署为 `b482117a406545e9e6a20a6d641d827b1688244d`。真实 HTTPS HC 已完成具名双项目、多轮/文件、审批、配置、取消/继续和刷新验证，旧 main 浏览器数据另完成升级恢复测试；原身份、存储与失效历史保留。见[部署验收](../roadmap/verification/2026-09-15-dev-242-remote-recovery.md)。这不是完整 Remote 完成，R05/R08/R09/R11/R13/R15 等后续门槛仍开放。
+
 PR #3 已合并为 main `1227b392e664959c987865e14c55758a1c620952`，并协调部署到 dev-242。用户实际使用发现项目选择、发送和失败恢复缺口，当前在 `codex/remote-project-workspace-recovery` 继续完整产品交付；新入口见 [PRODUCT-COMPLETION](PRODUCT-COMPLETION.md)。开发阶段采用统一当前契约，旧报告不再作为已部署真实模型流程完成的证据。
 
 以下首次状态表保留原规划。当前 HC C3 子切片已在 `a0dad3fdbfb9a15b701f4973c48b8d2158072442` 验证：生产页面接入持久会话控制器、同一浏览器端点刷新恢复、双会话配置/草稿/事件隔离、标签页独占与接管、审批/取消后继续、原始密文补传及吊销拒绝。102 个 HC 单元测试、两个断网工具测试和 12 项 PR CI 通过，其中认证浏览器运行实际 Admin/Gateway/ABA 与确定性 ACP 测试程序。见[完整证据](../roadmap/verification/2026-09-14-hc-remote-conversations.md)。

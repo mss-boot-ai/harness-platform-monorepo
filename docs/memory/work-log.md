@@ -6,6 +6,14 @@
 
 ---
 
+## 2026-09-15 05:10 +08:00 — Remote 恢复检查点部署与真实 HC 验收
+
+分支 `codex/remote-project-workspace-recovery`。dev-242 当前应用与 ABA 代码源 `b482117a406545e9e6a20a6d641d827b1688244d`；固定 Codex runtime `0.147.0` 与已配置模型 `gpt-5.6-luna`。原 main、数据库、私有身份及镜像有备份；Gateway 两把签名密钥与 ABA 两把身份密钥比较未变，PVC UID 未变，Redis 与现场应用配置保留。迁移完成，最终 UI CI `34892937928` 和 Remote Integration `34892932995` 全部通过。
+
+实际 systemd 预检发现缺少 AF_NETLINK 导致沙箱文件工具失败，最小修正后完整真实探针通过。上线还发现旧 ConfigMap 覆盖 CSP，差异核对后移除挂载但保留配置备份；防漂移检查源为 `3b17ad31de3f1e20f7c0d3689acce73431e84ddb`。HTTPS/HSTS/CSP 与后续密钥/PVC 核对通过；原切换脚本在安全检查阶段的失败及一次短暂 503 没有隐藏。
+
+内置浏览器实测生产 HC 正常登录、吊销身份的显式恢复、双项目、多轮上下文与真实文件工具；刷新保留待审批及草稿，拒绝未落盘、批准后精确内容落盘；实际工具开始后取消，后续新轮成功。两个验收 Run 已确认关闭并释放容量，原失效 DeepSeek 历史未删除。平台存储/相关日志的限定验收标记扫描未发现明文。完整证据及取消/后台工具状态、Host/跨设备等未完成边界见[报告](../roadmap/verification/2026-09-15-dev-242-remote-recovery.md)。
+
 ## 2026-09-15 02:40 +08:00 — Remote 项目、恢复与真实运行时分层验证
 
 当前分支 `codex/remote-project-workspace-recovery`。目录、Conversation/Run 分离、明确失败/未知结果恢复、重新登录、有界自动重连已接入生产 HC；ABA 异步启动与本地目录锁、目录续发已实现。代码源 `f899537bb6573ab7af0dfa67e5c143aebb5e320a` 的 41 个 Rust 测试与 clippy 通过；HC 源 `334b5ef063c663598865876e58742251dcdf23a0` 的 118 测试及构建通过；官方 `mss verify --all` 通过。
