@@ -6,6 +6,14 @@
 
 ---
 
+## 2026-09-15 02:40 +08:00 — Remote 项目、恢复与真实运行时分层验证
+
+当前分支 `codex/remote-project-workspace-recovery`。目录、Conversation/Run 分离、明确失败/未知结果恢复、重新登录、有界自动重连已接入生产 HC；ABA 异步启动与本地目录锁、目录续发已实现。代码源 `f899537bb6573ab7af0dfa67e5c143aebb5e320a` 的 41 个 Rust 测试与 clippy 通过；HC 源 `334b5ef063c663598865876e58742251dcdf23a0` 的 118 测试及构建通过；官方 `mss verify --all` 通过。
+
+固定 Codex runtime 源 `6ea1d675db6066f2c8aee0b8c32165ed9ba91d5f` 在真实 provider/临时项目通过流式、多轮上下文、文件读取、确认配置、拒绝/批准文件修改、取消与继续。DeepSeek 原配置的 provider 故障不混作成功；未改动原 runner。内置浏览器验证具名双项目、历史/草稿、刷新、重命名/归档，以及两次断网后自动重连且无重复执行。
+
+CI UI 和生产浏览器 job 通过；实际二进制集成的旧 readiness 断言失败，修复 `eeafd33cf59a06b9cb4757f69bab72970e733f97` 后本地 race 连续 5 次通过，新 CI 运行中。所有失败、完整 SHA/命令范围和未完成项见[检查点报告](../roadmap/verification/2026-09-15-remote-project-recovery.md)。dev-242 仍为原 main；准备 ChatGPT 独立复核与协调更新，不宣称完整 Remote 已完成。
+
 ## 2026-09-14 23:12 +08:00 — Remote 产品故障复现与执行目录后端检查点
 
 仓库 `mss-boot-ai/harness-platform-monorepo`，分支 `codex/remote-project-workspace-recovery`，起点为已部署 main `1227b392e664959c987865e14c55758a1c620952`。用户要求补全项目选择、真实对话与失败恢复，并以开发阶段统一契约推进完整 Remote。
