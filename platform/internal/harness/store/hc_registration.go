@@ -3,6 +3,7 @@ package store
 import (
 	"context"
 	"crypto/subtle"
+	"errors"
 	"fmt"
 	"strings"
 	"time"
@@ -11,6 +12,25 @@ import (
 	"gorm.io/gorm"
 	"gorm.io/gorm/clause"
 )
+
+func (store *Store) FindHCRegistrationEndpoint(ctx context.Context, owner, tenant, signingJKT, kemJKT string) (domain.Endpoint, bool, error) {
+	if err := requireStore(store, ctx); err != nil {
+		return domain.Endpoint{}, false, err
+	}
+	var row endpointRow
+	err := store.db.WithContext(ctx).Where("owner_user_id = ? AND tenant_id = ? AND (signing_jkt = ? OR kem_jkt = ?)", owner, tenant, signingJKT, kemJKT).Take(&row).Error
+	if errors.Is(err, gorm.ErrRecordNotFound) {
+		return domain.Endpoint{}, false, nil
+	}
+	if err != nil {
+		return domain.Endpoint{}, false, classifyPersistence(err, "find HC registration identity")
+	}
+	if row.Type != string(domain.EndpointTypeHCWeb) || row.SigningJKT != signingJKT || row.KEMJKT != kemJKT {
+		return domain.Endpoint{}, false, domain.NewProblem(domain.CodeSecurityViolation, "browser keys already belong to a different identity", nil)
+	}
+	endpoint, err := endpointFromRow(row)
+	return endpoint, err == nil, err
+}
 
 func (store *Store) CreateHCRegistrationChallenge(
 	ctx context.Context,
@@ -126,8 +146,28 @@ func (store *Store) ConsumeHCRegistrationChallenge(
 		}
 		refreshRecord := refreshCredentialToRow(refreshCredential)
 		auditRecord := auditToRow(audit, auditMetadata)
-		if err := tx.Create(&endpointRecord).Error; err != nil {
-			return classifyPersistence(err, "create HC endpoint")
+		var current endpointRow
+		lookupErr := tx.Clauses(clause.Locking{Strength: "UPDATE"}).Take(&current, "id = ?", endpointRecord.ID).Error
+		if errors.Is(lookupErr, gorm.ErrRecordNotFound) {
+			if err := tx.Create(&endpointRecord).Error; err != nil {
+				return classifyPersistence(err, "create HC endpoint")
+			}
+		} else if lookupErr != nil {
+			return classifyPersistence(lookupErr, "lock existing HC endpoint")
+		} else {
+			if current.OwnerUserID != owner || current.TenantID != tenant || current.Type != string(domain.EndpointTypeHCWeb) || current.SigningJKT != endpoint.SigningJKT || current.KEMJKT != endpoint.KEMJKT || current.CredentialFamilyID != endpoint.CredentialFamilyID.String() {
+				return domain.NewProblem(domain.CodeSecurityViolation, "existing HC endpoint binding changed", nil)
+			}
+			if current.Status != string(domain.EndpointStatusActive) || current.RevokedAt != nil {
+				return domain.NewProblem(domain.CodeRevoked, "browser identity was revoked", nil)
+			}
+			result := tx.Model(new(endpointRow)).Where("id = ? AND row_version = ? AND status = ?", current.ID, current.RowVersion, string(domain.EndpointStatusActive)).Updates(map[string]any{"updated_at": now, "row_version": current.RowVersion + 1})
+			if result.Error != nil {
+				return classifyPersistence(result.Error, "reauthenticate HC endpoint")
+			}
+			if result.RowsAffected != 1 {
+				return domain.NewProblem(domain.CodeConflict, "browser identity changed concurrently", nil)
+			}
 		}
 		if err := tx.Create(&accessRecord).Error; err != nil {
 			return classifyPersistence(err, "create HC access credential")

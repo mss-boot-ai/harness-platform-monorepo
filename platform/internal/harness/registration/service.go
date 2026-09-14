@@ -24,6 +24,7 @@ const (
 )
 
 type Persistence interface {
+	FindHCRegistrationEndpoint(context.Context, string, string, string, string) (domain.Endpoint, bool, error)
 	CreateHCRegistrationChallenge(context.Context, domain.HCRegistrationChallenge, time.Time, time.Duration) error
 	ConsumeHCRegistrationChallenge(
 		context.Context,
@@ -168,11 +169,27 @@ func (service Service) Register(
 	if err != nil || !awpcrypto.VerifyP1363LowS(publicKey, transcript, proof) {
 		return Registration{}, domain.NewProblem(domain.CodeSecurityViolation, "HC registration proof is invalid", err)
 	}
+	existing, reuse, err := service.Persistence.FindHCRegistrationEndpoint(ctx, owner, tenant, signingJKT, kemJKT)
+	if err != nil {
+		return Registration{}, err
+	}
+	if reuse {
+		if existing.OwnerUserID != owner || existing.TenantID != tenant || existing.Type != domain.EndpointTypeHCWeb || existing.SigningJKT != signingJKT || existing.KEMJKT != kemJKT {
+			return Registration{}, domain.NewProblem(domain.CodeSecurityViolation, "existing HC identity does not match", nil)
+		}
+		if existing.Status != domain.EndpointStatusActive || existing.RevokedAt != nil {
+			return Registration{}, domain.NewProblem(domain.CodeRevoked, "this browser identity is revoked; register a new browser identity", nil)
+		}
+	}
 
 	now := service.now()
 	endpointID, familyID, accessID, refreshID, auditID, err := service.newIDs()
 	if err != nil {
 		return Registration{}, err
+	}
+	if reuse {
+		endpointID = existing.ID
+		familyID = existing.CredentialFamilyID
 	}
 	accessToken, err := service.newToken()
 	if err != nil {
@@ -196,6 +213,10 @@ func (service Service) Register(
 		SigningJKT: signingJKT, KEMJKT: kemJKT, Status: domain.EndpointStatusActive,
 		CredentialFamilyID: familyID, SoftwareVersion: strings.TrimSpace(input.SoftwareVersion),
 		PlatformName: string(input.Assurance), CreatedAt: now, UpdatedAt: now,
+	}
+	if reuse {
+		endpoint = existing
+		endpoint.UpdatedAt = now
 	}
 	accessExpiresAt := now.Add(service.accessTTL())
 	accessCredential := domain.EndpointCredential{

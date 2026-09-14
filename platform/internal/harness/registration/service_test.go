@@ -31,6 +31,14 @@ type capturedRegistration struct {
 type fakePersistence struct {
 	challenge domain.HCRegistrationChallenge
 	captured  *capturedRegistration
+	existing  *domain.Endpoint
+}
+
+func (fake *fakePersistence) FindHCRegistrationEndpoint(_ context.Context, _, _, _, _ string) (domain.Endpoint, bool, error) {
+	if fake.existing == nil {
+		return domain.Endpoint{}, false, nil
+	}
+	return *fake.existing, true, nil
 }
 
 func (fake *fakePersistence) CreateHCRegistrationChallenge(
@@ -162,6 +170,57 @@ func TestServiceRejectsInvalidProofBeforePersistence(t *testing.T) {
 	}
 	if persistence.captured != nil {
 		t.Fatal("invalid proof reached persistence")
+	}
+}
+
+func TestReauthenticationKeepsEndpointAndRejectsRevokedIdentity(t *testing.T) {
+	now := time.Unix(1_800_000_000, 0).UTC()
+	persistence := &fakePersistence{}
+	service := Service{Persistence: persistence, Random: deterministicBytes(2048), Now: func() time.Time { return now }}
+	signingJWK, signingKey := testSigningKey(t)
+	kemJWK := testPublicJWK(t, 2)
+	signingJKT, _ := signingJWK.Thumbprint()
+	kemJKT, _ := kemJWK.Thumbprint()
+	register := func() (Registration, error) {
+		issued, err := service.IssueChallenge(t.Context(), "owner", "tenant", "https://hc.example")
+		if err != nil {
+			t.Fatal(err)
+		}
+		challenge, _ := base64.RawURLEncoding.DecodeString(issued.Challenge)
+		transcript, err := BuildTranscript(TranscriptInput{ChallengeID: issued.ID, Challenge: challenge, SigningJKT: signingJKT, KEMJKT: kemJKT,
+			Origin: "https://hc.example", EndpointName: "Browser", Assurance: AssuranceWebSoftware, SoftwareVersion: "0.1.0"})
+		if err != nil {
+			t.Fatal(err)
+		}
+		proof, err := awpcrypto.SignP1363LowS(signingKey, transcript)
+		if err != nil {
+			t.Fatal(err)
+		}
+		signingJSON, _ := json.Marshal(signingJWK)
+		kemJSON, _ := json.Marshal(kemJWK)
+		return service.Register(t.Context(), "owner", "tenant", "https://hc.example", RegisterInput{ChallengeID: issued.ID, Challenge: issued.Challenge,
+			EndpointName: "Browser", SigningPublicJWK: signingJSON, KEMPublicJWK: kemJSON, Assurance: AssuranceWebSoftware, SoftwareVersion: "0.1.0", Proof: base64.RawURLEncoding.EncodeToString(proof)})
+	}
+	first, err := register()
+	if err != nil {
+		t.Fatal(err)
+	}
+	existing := persistence.captured.endpoint
+	persistence.existing = &existing
+	second, err := register()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if first.EndpointID != second.EndpointID || first.CredentialID == second.CredentialID || persistence.captured.endpoint.CredentialFamilyID != existing.CredentialFamilyID {
+		t.Fatal("reauthentication did not preserve the endpoint and rotate its credential")
+	}
+	existing.Status = domain.EndpointStatusRevoked
+	persistence.captured = nil
+	if _, err := register(); !domain.HasCode(err, domain.CodeRevoked) {
+		t.Fatalf("revoked identity accepted: %v", err)
+	}
+	if persistence.captured != nil {
+		t.Fatal("revoked registration reached persistence")
 	}
 }
 

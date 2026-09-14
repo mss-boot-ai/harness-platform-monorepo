@@ -157,6 +157,59 @@ func TestM2IdentitySchemaIsRepeatable(t *testing.T) {
 	}
 }
 
+func TestHCReauthenticationIsScopedAndCannotRaceRevocation(t *testing.T) {
+	persistence := newTestStore(t)
+	now := time.Unix(1_800_000_000, 0).UTC()
+	hc := endpoint(102, 103, 110, domain.EndpointTypeHCWeb, "owner", now)
+	hc.TenantID = "tenant"
+	consume := func(challengeID, accessID byte) error {
+		challenge := testHCRegistrationChallenge(challengeID, now)
+		if err := persistence.CreateHCRegistrationChallenge(t.Context(), challenge, now, 5*time.Minute); err != nil {
+			t.Fatal(err)
+		}
+		return persistence.ConsumeHCRegistrationChallenge(t.Context(), challenge.ID, challenge.ChallengeHash, "owner", "tenant", challenge.Origin,
+			hc, credential(accessID, hc, now), testRefreshCredential(accessID+1, hc, now), testHCRegistrationAudit(accessID+2, hc, now), now)
+	}
+	if err := consume(100, 120); err != nil {
+		t.Fatal(err)
+	}
+	existing, found, err := persistence.FindHCRegistrationEndpoint(t.Context(), "owner", "tenant", hc.SigningJKT, hc.KEMJKT)
+	if err != nil || !found || existing.ID != hc.ID {
+		t.Fatalf("identity lookup: %v %v", found, err)
+	}
+	if _, found, err := persistence.FindHCRegistrationEndpoint(t.Context(), "owner", "other", hc.SigningJKT, hc.KEMJKT); err != nil || found {
+		t.Fatal("cross-tenant identity was visible")
+	}
+	if _, _, err := persistence.FindHCRegistrationEndpoint(t.Context(), "owner", "tenant", hc.SigningJKT, "different"); !domain.HasCode(err, domain.CodeSecurityViolation) {
+		t.Fatal("partial key replacement accepted")
+	}
+	if err := consume(101, 130); err != nil {
+		t.Fatal(err)
+	}
+	var count int64
+	persistence.db.Model(new(endpointRow)).Count(&count)
+	if count != 1 {
+		t.Fatalf("endpoint duplicated: %d", count)
+	}
+	if err := persistence.db.Model(new(endpointRow)).Where("id = ?", hc.ID.String()).Update("status", string(domain.EndpointStatusRevoked)).Error; err != nil {
+		t.Fatal(err)
+	}
+	if err := consume(104, 140); !domain.HasCode(err, domain.CodeRevoked) {
+		t.Fatalf("revocation race accepted: %v", err)
+	}
+	persistence.db.Model(new(credentialRow)).Count(&count)
+	if count != 2 {
+		t.Fatalf("failed reauthentication issued credentials: %d", count)
+	}
+	var challenge hcRegistrationChallengeRow
+	if err := persistence.db.First(&challenge, "id = ?", tid(104).String()).Error; err != nil {
+		t.Fatal(err)
+	}
+	if challenge.Status != string(domain.HCRegistrationChallengePending) {
+		t.Fatal("failed reauthentication consumed its challenge")
+	}
+}
+
 func testHCRegistrationChallenge(id byte, now time.Time) domain.HCRegistrationChallenge {
 	return domain.HCRegistrationChallenge{
 		ID: tid(id), OwnerUserID: "owner", TenantID: "tenant", Origin: "https://hc.example",
