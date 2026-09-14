@@ -1,17 +1,13 @@
 name: Remote Checkpoint
-
 on:
   pull_request:
     branches: [main]
   workflow_dispatch:
-
 permissions:
   contents: read
-
 concurrency:
   group: remote-checkpoint-${{ github.ref }}
   cancel-in-progress: false
-
 jobs:
   reproducible-source:
     runs-on: ubuntu-24.04
@@ -20,8 +16,7 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
         with:
           persist-credentials: false
-      - name: Verify documentation and archive only tracked source
-        shell: bash
+      - name: Verify documentation and archive tracked source
         run: |
           set -Eeuo pipefail
           ./scripts/check-docs.sh
@@ -30,20 +25,18 @@ jobs:
           git archive --format=tar --prefix=harness/ HEAD | gzip -n > "${RUNNER_TEMP}/remote-checkpoint/source.tar.gz"
           cd "${RUNNER_TEMP}/remote-checkpoint"
           sha256sum source.tar.gz > SHA256SUMS
-      - name: Upload reproducible source checkpoint (no credentials or runtime data)
-        uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v4
         with:
           name: remote-source-${{ github.sha }}
           path: ${{ runner.temp }}/remote-checkpoint/
           if-no-files-found: error
           retention-days: 3
-
   runtime-duplex:
     if: github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository && github.event.pull_request.head.ref == 'design/device-fabric-foundation'
     permissions:
       contents: write
     runs-on: ubuntu-24.04
-    timeout-minutes: 20
+    timeout-minutes: 25
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
         with:
@@ -51,18 +44,19 @@ jobs:
           persist-credentials: false
       - name: Install locked Rust toolchain
         run: rustup toolchain install 1.88.0 --profile minimal --component rustfmt,clippy
-      - name: Apply the reviewed integration patch and format a candidate
+      - name: Prepare the reviewed source candidate
         if: hashFiles('.github/checkpoints/remote.patch') != ''
         run: python3 .github/scripts/prepare_candidate.py prepare
-      - name: Compile and test the exact candidate
+      - name: Compile and test Rust
         working-directory: aba
         run: |
           cargo +1.88.0 test --locked --workspace --all-targets
           cargo +1.88.0 clippy --locked --workspace --all-targets --all-features -- -D warnings
+          cargo +1.88.0 build --locked --bin aba
       - uses: actions/setup-node@v6
         with:
           node-version: '24'
-      - name: Verify the HC candidate against locked dependencies
+      - name: Verify HC against locked dependencies
         run: |
           corepack enable
           corepack prepare pnpm@10.34.5 --activate
@@ -71,7 +65,17 @@ jobs:
           pnpm --dir hc typecheck
           pnpm --dir hc test
           pnpm --dir hc build
-      - name: Upload verified Git objects, never update refs
+      - uses: actions/setup-go@v6
+        with:
+          go-version-file: platform/go.mod
+          cache-dependency-path: platform/go.sum
+      - name: Verify actual-binary integration before publishing a candidate
+        working-directory: platform
+        env:
+          HARNESS_TEST_ABA_BINARY: ${{ github.workspace }}/aba/target/debug/aba
+          HARNESS_TEST_ACP_FIXTURE: ${{ github.workspace }}/aba/tests/fixtures/duplex_agent.py
+        run: go test -count=1 -race -timeout=120s -run '^TestRemoteActualABAGatewayDuplex$' ./internal/harness/gateway
+      - name: Upload verified immutable Git objects, never update refs
         if: success()
         env:
           GH_TOKEN: ${{ github.token }}
@@ -79,26 +83,13 @@ jobs:
           if test -f "${RUNNER_TEMP}/runtime-review/candidate-local.json"; then
             python3 .github/scripts/prepare_candidate.py publish
           fi
-      - name: Retain formatter tooling and review evidence
+      - name: Record candidate metadata
         if: always()
         run: |
-          set -Eeuo pipefail
-          mkdir -p "${RUNNER_TEMP}/runtime-review/formatter/bin" "${RUNNER_TEMP}/runtime-review/formatter/lib"
-          toolchain="$(rustup run 1.88.0 rustc --print sysroot)"
-          cp "${toolchain}/bin/rustfmt" "${RUNNER_TEMP}/runtime-review/formatter/bin/"
-          find "${toolchain}/lib" -maxdepth 1 -type f -name '*.so*' -exec cp {} "${RUNNER_TEMP}/runtime-review/formatter/lib/" \;
+          mkdir -p "${RUNNER_TEMP}/runtime-review"
           git rev-parse HEAD > "${RUNNER_TEMP}/runtime-review/source-sha.txt"
-          # Explicit public build dependencies only, never checkout credentials, npmrc,
-          # local identities, runtime data, or host environments. Retain only when a
-          # candidate was prepared; used for offline checks in the review container.
-          if test -f "${RUNNER_TEMP}/runtime-review/candidate-local.json" && test -d hc/node_modules; then
-            mkdir -p "${RUNNER_TEMP}/runtime-review/node-tools/bin"
-            cp "$(command -v node)" "${RUNNER_TEMP}/runtime-review/node-tools/bin/"
-            tar -czf "${RUNNER_TEMP}/runtime-review/hc-dependencies.tar.gz" -C hc node_modules packages/core/node_modules web/node_modules
-          fi
-      - name: Upload runtime review evidence
+      - uses: actions/upload-artifact@v4
         if: always()
-        uses: actions/upload-artifact@v4
         with:
           name: remote-runtime-review-${{ github.sha }}
           path: ${{ runner.temp }}/runtime-review/

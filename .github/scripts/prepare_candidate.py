@@ -1,12 +1,14 @@
-"""Prepare a reviewed source patch as Git objects, never move a branch or merge a PR.
+"""Verify a reviewed source patch as immutable Git objects; never update refs.
 
-Used only on the owner-authorized Remote branch. Source is archived without .git,
-credentials, dependencies or runtime data. Normal CI must run on the resulting commit.
+Only the owner-authorized Remote branch may run this workflow. Archives include
+tracked source/public build dependencies, never credentials or runtime data.
 """
 from __future__ import annotations
 
 import base64
+import gzip
 import hashlib
+import io
 import json
 import os
 from pathlib import Path
@@ -17,6 +19,7 @@ import urllib.request
 PATCH = Path(".github/checkpoints/remote.patch")
 ROOTS = {"aba", "hc", "platform", "protocol", "docs", "scripts"}
 REPOSITORY = "mss-boot-ai/harness-platform-monorepo"
+LIMIT = 2 * 1024 * 1024
 
 
 def git(*args: str) -> str:
@@ -30,24 +33,33 @@ def output() -> Path:
 
 
 def prepare() -> None:
-    raw = PATCH.read_bytes()
-    if not raw or len(raw) > 2 * 1024 * 1024:
-        raise ValueError("invalid patch bound")
-    stats = subprocess.check_output(["git", "apply", "--numstat", str(PATCH)], text=True)
+    encoded = PATCH.read_bytes()
+    if not encoded or len(encoded) > LIMIT:
+        raise ValueError("invalid encoded patch bound")
+    if encoded.startswith(b"MSS-REVIEWED-PATCH-GZIP-V1\n"):
+        compressed = base64.b64decode(b"".join(encoded.split(b"\n", 1)[1].splitlines()), validate=True)
+        with gzip.GzipFile(fileobj=io.BytesIO(compressed)) as stream:
+            raw = stream.read(LIMIT + 1)
+    else:
+        raw = encoded
+    if not raw or len(raw) > LIMIT:
+        raise ValueError("invalid decoded patch bound")
+    (output() / "reviewed.patch").write_bytes(raw)
+    stats = subprocess.check_output(["git", "apply", "--numstat", "-"], input=raw).decode("utf-8")
     for row in stats.splitlines():
         name = row.split("\t", 2)[-1]
         path = Path(name)
         if path.is_absolute() or ".." in path.parts or not path.parts or path.parts[0] not in ROOTS:
             raise ValueError("patch outside reviewed source roots")
-    subprocess.run(["git", "apply", "--check", "--index", str(PATCH)], check=True)
-    subprocess.run(["git", "apply", "--index", str(PATCH)], check=True)
+    subprocess.run(["git", "apply", "--check", "--index", "-"], input=raw, check=True)
+    subprocess.run(["git", "apply", "--index", "-"], input=raw, check=True)
     subprocess.run(["cargo", "+1.88.0", "fmt", "--all"], cwd="aba", check=True)
     subprocess.run(["git", "add", "-u", "--", "aba"], check=True)
     subprocess.run(["git", "rm", "--", str(PATCH)], check=True)
-    changed = git("diff", "--cached", "--name-only", "-z").split("\0")
+    paths = git("diff", "--cached", "--name-only", "-z").split("\0")
     metadata = {"source_sha": git("rev-parse", "HEAD"), "base_tree": git("rev-parse", "HEAD^{tree}"),
                 "candidate_tree": git("write-tree"), "patch_sha256": hashlib.sha256(raw).hexdigest(),
-                "paths": [name for name in changed if name]}
+                "paths": [name for name in paths if name]}
     (output() / "candidate-local.json").write_text(json.dumps(metadata, indent=2) + "\n")
     with (output() / "formatted.patch").open("wb") as stream:
         subprocess.run(["git", "diff", "--cached", "--binary", "HEAD"], stdout=stream, check=True)
@@ -56,11 +68,9 @@ def prepare() -> None:
 
 
 def post(endpoint: str, payload: dict) -> dict:
-    token = os.environ["GH_TOKEN"]
     request = urllib.request.Request(
-        f"https://api.github.com/repos/{REPOSITORY}/{endpoint}",
-        data=json.dumps(payload).encode(), method="POST",
-        headers={"Authorization": f"Bearer {token}", "Accept": "application/vnd.github+json",
+        f"https://api.github.com/repos/{REPOSITORY}/{endpoint}", data=json.dumps(payload).encode(), method="POST",
+        headers={"Authorization": f"Bearer {os.environ['GH_TOKEN']}", "Accept": "application/vnd.github+json",
                  "Content-Type": "application/json", "X-GitHub-Api-Version": "2022-11-28"})
     with urllib.request.urlopen(request, timeout=30) as response:
         return json.load(response)
@@ -82,7 +92,7 @@ def publish() -> None:
         if mode not in {"100644", "100755"}:
             raise ValueError("candidate contains a non-regular entry")
         data = Path(name).read_bytes()
-        if len(data) > 2 * 1024 * 1024:
+        if len(data) > LIMIT:
             raise ValueError("candidate file too large")
         value = post("git/blobs", {"content": base64.b64encode(data).decode(), "encoding": "base64"})
         if value["sha"] != expected:

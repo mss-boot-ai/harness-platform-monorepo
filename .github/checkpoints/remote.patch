@@ -1,0 +1,18 @@
+diff --git a/platform/internal/harness/gateway/remote_binary_e2e_test.go b/platform/internal/harness/gateway/remote_binary_e2e_test.go
+--- a/platform/internal/harness/gateway/remote_binary_e2e_test.go
++++ b/platform/internal/harness/gateway/remote_binary_e2e_test.go
+@@ -109,7 +109,13 @@
+-	directory := t.TempDir()
++	directory, err := filepath.EvalSymlinks(t.TempDir())
++	if err != nil {
++		t.Fatal(err)
++	}
++	if err := os.Chmod(directory, 0o700); err != nil {
++		t.Fatal(err)
++	}
+ 	identityPath := filepath.Join(directory, "identity.json")
+ 	scalar := func(value byte) string {
+ 		raw := make([]byte, 32)
+ 		raw[31] = value
+ 		return base64.RawURLEncoding.EncodeToString(raw)
+ 	}
