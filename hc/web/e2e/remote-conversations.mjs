@@ -22,6 +22,7 @@ const report = { runtime: 'deterministic ACP fixture; no live model', source: pr
   'Storage corruption/quota/key-loss refusal also has unit coverage; this browser run does not claim every storage fault combination.',
 ] };
 let stack; let browser; let page;
+const httpFailures = [];
 const delay = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 async function until(predicate, label, milliseconds = 30_000) {
   const deadline = Date.now() + milliseconds;
@@ -36,6 +37,15 @@ try {
   const observePage = (target) => {
     target.on('pageerror', (error) => errors.push(error.message));
     target.on('request', (request) => { if (new URL(request.url()).pathname === '/admin/api/harness/v1/hc/endpoints' && request.method() === 'POST') registrations.push('registered'); });
+    target.on('response', async (response) => {
+      // Stable API error codes only: no auth headers, response bodies or user text.
+      if (response.status() < 400 || response.status() === 401 || httpFailures.length >= 32) return;
+      const pathname = new URL(response.url()).pathname;
+      if (!pathname.startsWith('/gateway/v1/') && !pathname.startsWith('/admin/api/')) return;
+      const value = await response.json().catch(() => null);
+      const code = typeof value?.code === 'string' && /^[A-Z0-9_]{1,64}$/u.test(value.code) ? value.code : 'UNAVAILABLE';
+      httpFailures.push({ path: pathname, status: response.status(), code });
+    });
   };
   observePage(page);
   const sent = []; let fault = null;
@@ -184,6 +194,9 @@ try {
   report.status = 'passed';
   console.log(`Production HC browser acceptance passed: ${report.scenarios.length} scenario groups; actual Gateway/ABA, deterministic ACP, no live-model claim.`);
 } catch (error) {
+  report.httpFailures = httpFailures;
+  if (stack !== undefined) report.executionStates = await stack.adminRequest('/admin/api/harness/v1/sessions?limit=200')
+    .then((value) => value.items.map(({ id, status, workspaceId, runtimeProfileId }) => ({ id, status, workspaceId, runtimeProfileId }))).catch(() => []);
   report.status = 'failed'; report.error = String(error?.stack ?? error).replaceAll(stack?.password ?? '\0', '[redacted]').replace(/\b[A-Za-z0-9_-]{32,}\b/gu, '[redacted]');
   if (page && !page.isClosed()) {
     report.visibleConversations = await page.locator('.conversation-item').count().catch(() => -1);

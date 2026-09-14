@@ -51,6 +51,8 @@ describe('endpoint conversation coordination', () => {
     const firstId = f.manager.snapshot().selectedId!;
     const intent = f.manager.snapshot().conversations.find((entry) => entry.id === firstId)?.creation;
     expect(intent).not.toBeNull();
+    expect(f.manager.workspaceConflict(input.abaEndpointId, input.workspaceId, firstId)).toBe(false);
+    expect(f.manager.workspaceConflict(input.abaEndpointId, input.workspaceId)).toBe(true);
     const other = await f.manager.newConversation({ abaEndpointId: f.b.value.aba.id, workspaceId: 'other', runtimeProfileId: 'fixture' }, 'second draft');
     expect(other).not.toBe(firstId); expect(f.manager.snapshot().creating).toBe(false);
     const created = await f.manager.create({ abaEndpointId: f.b.value.aba.id, workspaceId: 'other', runtimeProfileId: 'fixture', draft: 'second draft' }, false, other);

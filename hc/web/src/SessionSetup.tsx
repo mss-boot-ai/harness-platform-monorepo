@@ -98,7 +98,7 @@ export function SessionSetup({ connection, access, registration, secureStore, in
   const pendingConfig: PendingConfig | null = pendingRequest?.option === undefined || pendingRequest.requestedValue === undefined ? null : {
     id: pendingRequest.id, option: pendingRequest.option, value: pendingRequest.requestedValue };
   const full = value !== undefined && (value.messages.length >= MAX_MESSAGES || value.messages.reduce((sum, message) => sum + message.text.length, 0) >= 1_048_576);
-  const workspaceBusy = value === undefined ? manager?.workspaceConflict(actualABA, workspaceId.trim()) === true
+  const workspaceBusy = value === undefined ? manager?.workspaceConflict(actualABA, workspaceId.trim(), selectedId ?? undefined) === true
     : manager?.workspaceConflict(value.aba.id, value.session.workspaceId, selectedId ?? undefined) === true;
   const canSubmit = view.status === 'ready' && view.pendingWrites === 0 && view.online && !readOnly && !responding && !full && !workspaceBusy && !creating &&
     (value === undefined ? (conversation?.creation ?? null) === null && targetState.available
