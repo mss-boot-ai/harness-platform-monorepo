@@ -20,6 +20,29 @@ struct Cli {
 
 #[derive(Debug, Subcommand)]
 enum Command {
+    /// Internal, unprivileged scope launcher; never accepts input from the Platform.
+    #[cfg(target_os = "linux")]
+    #[command(hide = true)]
+    ScopeExec {
+        #[arg(long)]
+        cgroup: PathBuf,
+        #[arg(long)]
+        device: u64,
+        #[arg(long)]
+        inode: u64,
+        #[arg(long)]
+        gate: PathBuf,
+        #[arg(long)]
+        parent: u32,
+        #[arg(last = true, allow_hyphen_values = true)]
+        args: Vec<String>,
+    },
+    /// Explicit first installation of an empty scope registry. Never overwrites existing state.
+    #[cfg(target_os = "linux")]
+    ScopeInit {
+        #[arg(long)]
+        directory: PathBuf,
+    },
     /// Print build, protocol, SDK, and Platform baseline information.
     Version {
         /// Emit machine-readable JSON.
@@ -146,6 +169,21 @@ fn main() -> ExitCode {
 
 fn execute(cli: Cli) -> Result<(), Box<dyn std::error::Error>> {
     match cli.command {
+        #[cfg(target_os = "linux")]
+        Command::ScopeInit { directory } => {
+            aba::process::supervision::Supervisor::initialize_directory(&directory)?
+        }
+        #[cfg(target_os = "linux")]
+        Command::ScopeExec {
+            cgroup,
+            device,
+            inode,
+            gate,
+            parent,
+            args,
+        } => {
+            aba::process::supervision::enter_and_exec(&cgroup, device, inode, &gate, parent, &args)?
+        }
         Command::Version { json } => {
             let info = build_info();
             if json {
@@ -216,8 +254,17 @@ fn execute(cli: Cli) -> Result<(), Box<dyn std::error::Error>> {
             if !workspace.allowed_runtimes.contains(&runtime.id) {
                 return Err("workspace does not allow the selected runtime".into());
             }
-            let process = AgentProcess::start(runtime, workspace)?;
-            drop(process);
+            if let Some(isolation) = &config.isolation {
+                use rand_core::RngCore as _;
+                let supervisor = aba::process::supervision::Supervisor::open(isolation)?;
+                let mut id = [0; 16];
+                rand_core::OsRng.fill_bytes(&mut id);
+                let mut process =
+                    AgentProcess::start_supervised(runtime, workspace, &supervisor, id)?;
+                process.shutdown()?;
+            } else {
+                drop(AgentProcess::start(runtime, workspace)?);
+            }
             println!("ACP runtime probe succeeded.");
         }
         Command::Enroll {

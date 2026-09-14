@@ -14,6 +14,54 @@ impl ControlState {
     ) -> Result<Vec<Vec<u8>>, GatewayError> {
         let now_ms = unix_millis(now)?;
         let mut packets = Vec::new();
+        let finished: Vec<_> = self
+            .closing
+            .iter()
+            .filter_map(|(id, pending)| match pending.result.try_recv() {
+                Ok(result) => Some((
+                    *id,
+                    pending.receiver_endpoint,
+                    result.is_ok(),
+                    pending.receipt_requested,
+                )),
+                Err(TryRecvError::Disconnected) => Some((
+                    *id,
+                    pending.receiver_endpoint,
+                    false,
+                    pending.receipt_requested,
+                )),
+                Err(TryRecvError::Empty) => None,
+            })
+            .take(4)
+            .collect();
+        for (id, receiver, confirmed, receipt_requested) in finished {
+            self.closing.remove(&id);
+            if !confirmed {
+                continue;
+            } // Keep Platform DRAINING; exact close retry can reconcile again.
+            self.journal.close_session(id)?;
+            if !receipt_requested {
+                continue;
+            }
+            let payload = CloseTunnelResult {
+                session_id: id.to_vec(),
+                status: if receiver == [0; 16] {
+                    CloseTunnelStatus::AlreadyClosed
+                } else {
+                    CloseTunnelStatus::Accepted
+                } as i32,
+                stable_error_code: String::new(),
+            }
+            .encode_to_vec();
+            packets.push(self.signed_control(
+                endpoint_id,
+                &receiver,
+                ControlType::CloseTunnelResult,
+                payload,
+                identity,
+                now_ms,
+            )?);
+        }
         let mut ready = Vec::new();
         for (id, pending) in &self.starting {
             let result = match pending.receiver.try_recv() {
@@ -29,27 +77,24 @@ impl ControlState {
         for (id, result) in ready {
             let pending = self.starting.remove(&id).ok_or(GatewayError::Protocol)?;
             if pending.cancelled {
-                drop(result); // Cleanup and inode lease release precede the receipt.
-                if pending.close_requested {
-                    self.journal.close_session(id)?;
-                    let payload = CloseTunnelResult {
-                        session_id: id.to_vec(),
-                        status: CloseTunnelStatus::Accepted as i32,
-                        stable_error_code: String::new(),
-                    }
-                    .encode_to_vec();
-                    packets.push(self.signed_control(
-                        endpoint_id,
-                        &pending.request.hc_endpoint_id,
-                        ControlType::CloseTunnelResult,
-                        payload,
-                        identity,
-                        now_ms,
-                    )?);
-                }
+                let receiver = pending
+                    .request
+                    .hc_endpoint_id
+                    .as_slice()
+                    .try_into()
+                    .map_err(|_| GatewayError::Protocol)?;
+                // Includes cancellation caused by reconnect. Never drop a process on the network thread.
+                self.start_close(id, receiver, result.ok(), pending.close_requested)?;
                 continue;
             }
             let (decision, agent) = if now_ms >= pending.request.expires_at_ms {
+                let receiver = pending
+                    .request
+                    .hc_endpoint_id
+                    .as_slice()
+                    .try_into()
+                    .map_err(|_| GatewayError::Protocol)?;
+                self.start_close(id, receiver, result.ok(), false)?;
                 (rejected("AGENT_START_EXPIRED"), None)
             } else {
                 match result {

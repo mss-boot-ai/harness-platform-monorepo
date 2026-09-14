@@ -1,5 +1,10 @@
 //! Local ACP process boundary with non-blocking bidirectional dispatch.
 //! Gateway calls submit/poll; prompt remains only for the CLI probe and legacy tests.
+#[cfg(target_os = "linux")]
+pub mod supervision;
+#[cfg(not(target_os = "linux"))]
+#[path = "process/supervision_unsupported.rs"]
+pub mod supervision;
 mod transport;
 
 use std::collections::{BTreeMap, BTreeSet, VecDeque};
@@ -43,6 +48,8 @@ pub enum ProcessError {
     Limit,
     #[error("local workspace already has an agent process")]
     WorkspaceBusy,
+    #[error("local process scope cleanup is not confirmed")]
+    CleanupUnconfirmed,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -69,7 +76,8 @@ struct PermissionBinding {
 pub struct AgentProcess {
     child: Child,
     // Directory inode lock: aliases and other ABA processes cannot bypass it.
-    _workspace_lease: fs::File,
+    _workspace_lease: Option<fs::File>,
+    scope: Option<supervision::Scope>,
     writer: Option<SyncSender<WriteCommand>>,
     receiver: Option<Receiver<TransportEvent>>,
     threads: Vec<JoinHandle<()>>,
@@ -90,19 +98,41 @@ impl AgentProcess {
         runtime: &RuntimeProfile,
         workspace: &WorkspaceProfile,
     ) -> Result<Self, ProcessError> {
+        Self::start_inner(runtime, workspace, None)
+    }
+
+    pub fn start_supervised(
+        runtime: &RuntimeProfile,
+        workspace: &WorkspaceProfile,
+        supervisor: &supervision::Supervisor,
+        run: [u8; 16],
+    ) -> Result<Self, ProcessError> {
+        let scope = supervisor.prepare(runtime, workspace, run)?;
+        Self::start_inner(runtime, workspace, Some(scope))
+    }
+
+    fn start_inner(
+        runtime: &RuntimeProfile,
+        workspace: &WorkspaceProfile,
+        scope: Option<supervision::Scope>,
+    ) -> Result<Self, ProcessError> {
         let command_path = canonical_safe_file(&runtime.command)?;
         let workspace_path = canonical_safe_directory(&workspace.path)?;
-        let workspace_lease =
-            fs::File::open(&workspace_path).map_err(|_| ProcessError::UnsafeProfile)?;
-        #[cfg(unix)]
-        rustix::fs::flock(
-            &workspace_lease,
-            rustix::fs::FlockOperation::NonBlockingLockExclusive,
-        )
-        .map_err(|_| ProcessError::WorkspaceBusy)?;
-        let mut command = Command::new(command_path);
+        let workspace_lease = if scope.is_none() {
+            let lease = fs::File::open(&workspace_path).map_err(|_| ProcessError::UnsafeProfile)?;
+            #[cfg(unix)]
+            rustix::fs::flock(&lease, rustix::fs::FlockOperation::NonBlockingLockExclusive)
+                .map_err(|_| ProcessError::WorkspaceBusy)?;
+            Some(lease)
+        } else {
+            None
+        };
+        let mut command = Command::new(if scope.is_some() {
+            std::env::current_exe().map_err(|_| ProcessError::Spawn)?
+        } else {
+            command_path
+        });
         command
-            .args(&runtime.args)
             .current_dir(&workspace_path)
             .env_clear()
             .stdin(Stdio::piped())
@@ -112,6 +142,11 @@ impl AgentProcess {
             if let Some(value) = std::env::var_os(name) {
                 command.env(name, value);
             }
+        }
+        if let Some(scope) = &scope {
+            scope.configure(&mut command, runtime)?;
+        } else {
+            command.args(&runtime.args);
         }
         #[cfg(unix)]
         {
@@ -137,6 +172,7 @@ impl AgentProcess {
         let mut process = Self {
             child,
             _workspace_lease: workspace_lease,
+            scope,
             writer: Some(pumps.writer),
             receiver: Some(pumps.events),
             threads: pumps.threads,
@@ -151,8 +187,26 @@ impl AgentProcess {
             next_id: 0,
             process_epoch: OsRng.next_u64(),
         };
+        if process.scope.is_some() {
+            let ready = process.receive(Instant::now() + START_TIMEOUT)?;
+            if ready != json!({"scopeReady": true}) {
+                return Err(ProcessError::UnsafeProfile);
+            }
+        }
         process.initialize(&workspace_path)?;
         Ok(process)
+    }
+
+    /// Caller must run this off the Gateway I/O loop. Drop alone is never a close receipt.
+    pub fn shutdown(&mut self) -> Result<(), ProcessError> {
+        self.receiver.take();
+        self.writer.take();
+        terminate_child(&mut self.child);
+        if let Some(scope) = &self.scope {
+            scope.close()
+        } else {
+            Err(ProcessError::CleanupUnconfirmed)
+        }
     }
 
     /// Validate and enqueue without waiting for an Agent response or a writable pipe.
@@ -770,9 +824,7 @@ impl AgentProcess {
 
 impl Drop for AgentProcess {
     fn drop(&mut self) {
-        self.receiver.take();
-        self.writer.take();
-        terminate_child(&mut self.child);
+        let _ = self.shutdown();
         for thread in self.threads.drain(..) {
             // A hostile escaped descendant must not block the Gateway in an unbounded join.
             if thread.is_finished() {
@@ -853,13 +905,23 @@ fn terminate_child(child: &mut Child) {
         let deadline = Instant::now() + Duration::from_millis(500);
         while Instant::now() < deadline {
             if child.try_wait().is_ok_and(|status| status.is_some()) {
-                return;
+                break;
             }
             thread::sleep(Duration::from_millis(10));
         }
-        let _ = kill_process_group(pid, Signal::KILL);
+        // Do not send a group signal after reaping the leader: the numeric ID can be reused.
+        // The supervised path kills the verified cgroup below, irrespective of leader state.
+        if !child.try_wait().is_ok_and(|status| status.is_some()) {
+            let _ = kill_process_group(pid, Signal::KILL);
+        }
     }
-    let _ = child.wait();
+    let deadline = Instant::now() + Duration::from_secs(2);
+    while Instant::now() < deadline {
+        if child.try_wait().is_ok_and(|status| status.is_some()) {
+            break;
+        }
+        thread::sleep(Duration::from_millis(10));
+    }
 }
 
 #[cfg(not(unix))]
@@ -867,5 +929,11 @@ fn terminate_child(child: &mut Child) {
     if !child.try_wait().is_ok_and(|status| status.is_some()) {
         let _ = child.kill();
     }
-    let _ = child.wait();
+    let deadline = Instant::now() + Duration::from_secs(2);
+    while Instant::now() < deadline {
+        if child.try_wait().is_ok_and(|status| status.is_some()) {
+            break;
+        }
+        thread::sleep(Duration::from_millis(10));
+    }
 }

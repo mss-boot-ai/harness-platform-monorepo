@@ -25,6 +25,8 @@ pub struct AgentConfig {
     pub platform: PlatformConfig,
     #[serde(default)]
     pub limits: Limits,
+    /// Linux execution containment. Omission retains the non-durable local probe path.
+    pub isolation: Option<IsolationConfig>,
     #[serde(default, rename = "runtime")]
     pub runtimes: Vec<RuntimeProfile>,
     #[serde(default, rename = "workspace")]
@@ -35,6 +37,15 @@ pub struct AgentConfig {
 #[serde(deny_unknown_fields)]
 pub struct PlatformConfig {
     pub url: Url,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct IsolationConfig {
+    pub state_directory: PathBuf,
+    pub cgroup_root: PathBuf,
+    /// Read-only locally provisioned runtime files, in addition to the system /usr.
+    pub runtime_roots: Vec<PathBuf>,
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -132,6 +143,8 @@ pub enum ValidationError {
     UnsupportedWorkspaceSymlinks,
     #[error("a workspace references an unknown or duplicate runtime identifier")]
     InvalidWorkspaceRuntime,
+    #[error("the local Linux isolation configuration is invalid")]
+    InvalidIsolation,
 }
 
 impl AgentConfig {
@@ -180,6 +193,20 @@ impl AgentConfig {
         }
         validate_platform_url(&self.platform.url, allow_loopback_development)?;
         validate_limits(&self.limits)?;
+        if let Some(isolation) = &self.isolation {
+            if !cfg!(target_os = "linux")
+                || !isolation.state_directory.is_absolute()
+                || !isolation.cgroup_root.starts_with("/sys/fs/cgroup")
+                || isolation.cgroup_root == Path::new("/sys/fs/cgroup")
+                || isolation.runtime_roots.is_empty()
+                || isolation.runtime_roots.len() > 16
+                || isolation.runtime_roots.iter().any(|path| {
+                    !path.starts_with("/opt/harness") || path == Path::new("/opt/harness")
+                })
+            {
+                return Err(ValidationError::InvalidIsolation);
+            }
+        }
 
         let mut runtime_ids = BTreeSet::new();
         for runtime in &self.runtimes {

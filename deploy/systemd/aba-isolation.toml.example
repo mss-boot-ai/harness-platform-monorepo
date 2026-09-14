@@ -1,0 +1,6 @@
+# Merge this table into the reviewed ABA config; not a complete configuration.
+# scope-init is a one-time explicit install action, not a run/recovery fallback.
+[isolation]
+state_directory = "/var/lib/harness-aba/process-scopes-v1"
+cgroup_root = "/sys/fs/cgroup/system.slice/harness-aba.service"
+runtime_roots = ["/opt/harness/bin/codex-acp", "/opt/harness/codex-venv"]

@@ -1,5 +1,33 @@
 # ABA host service
 
+## Candidate same-identity containment (H1, not yet deployed)
+
+The 2026-09-15 continuation **must not create accounts**. Keep the existing
+Platform admin login/password, ABA identity, `harness-aba` and
+`harness-port-forward` service users. The old fresh-install account commands below
+are historical setup instructions, not commands to rerun on dev-242.
+
+`harness-aba-isolation.conf.example` delegates only the existing ABA service's
+cgroup subtree. The candidate requires Linux cgroup v2 with `cgroup.kill`,
+bubblewrap and explicit `aba-isolation.toml.example` configuration. It does not
+grant general systemd administration or add a root command proxy. `aba run` fails
+closed without configured isolation; the direct path remains only for local ACP
+probes and internal deterministic protocol fixtures and cannot certify cleanup.
+
+Before enabling, provision the mode-0700 state directory using the existing
+service identity, and explicitly run `acp-brige-agent scope-init --directory` once.
+That action rejects an existing registry. Normal startup never recreates missing
+state. Registry/gate files are process-ownership metadata, not semantic history;
+H2 transactional Host storage remains unimplemented.
+
+The candidate binds only /usr, reviewed runtime files, the selected workspace and
+an individual runtime home into a private PID/mount view. Scope claims precede
+runtime startup, and a launch gate prevents late start after close. Closing kills
+and checks the entire recorded cgroup before persisting its tombstone and freeing
+the directory lease. Tests must still establish IPC/network restrictions,
+host-secret isolation, escaped-child cleanup, restart/launch races and actual
+Codex functionality before this candidate can replace the working release.
+
 ## Current Remote runtime
 
 The reviewed Codex path uses `aba-codex.toml.example` and the pinned

@@ -42,6 +42,8 @@ pub(super) struct ControlState {
     outbound_sequence: u64,
     sessions: HashMap<[u8; 16], LocalSession>,
     starting: HashMap<[u8; 16], PendingOpen>,
+    closing: HashMap<[u8; 16], PendingClose>,
+    supervisor: Option<crate::process::supervision::Supervisor>,
     journal: Journal,
     poll_offset: usize,
 }
@@ -69,6 +71,12 @@ struct PendingOpen {
     close_requested: bool,
 }
 
+struct PendingClose {
+    receiver_endpoint: [u8; 16],
+    result: Receiver<Result<(), ProcessError>>,
+    receipt_requested: bool,
+}
+
 struct OpenContext<'a> {
     endpoint_id: &'a [u8; 16],
     identity: &'a EndpointIdentity,
@@ -92,12 +100,20 @@ struct PolicyDecision {
 }
 
 impl ControlState {
+    pub(super) fn set_supervisor(
+        &mut self,
+        supervisor: Option<crate::process::supervision::Supervisor>,
+    ) {
+        self.supervisor = supervisor;
+    }
     pub fn new(journal: Journal) -> Self {
         Self {
             platform_inbound_sequence: 0,
             outbound_sequence: 0,
             sessions: HashMap::new(),
             starting: HashMap::new(),
+            closing: HashMap::new(),
+            supervisor: None,
             journal,
             poll_offset: 0,
         }
@@ -252,7 +268,7 @@ impl ControlState {
         let mut decision =
             if self.sessions.contains_key(&session_id) || self.starting.contains_key(&session_id) {
                 rejected("SESSION_ALREADY_EXISTS")
-            } else if self.sessions.len() + self.starting.len()
+            } else if self.sessions.len() + self.starting.len() + self.closing.len()
                 >= usize::from(config.limits.max_sessions)
             {
                 PolicyDecision {
@@ -283,11 +299,22 @@ impl ControlState {
                     let (sender, receiver) = sync_channel(1);
                     let runtime = runtime.clone();
                     let workspace = workspace.clone();
+                    let supervisor = self.supervisor.clone();
                     if thread::Builder::new()
                         .name("aba-agent-start".to_owned())
                         .spawn(move || {
-                            // Failure to deliver drops the process and releases its workspace lock.
-                            let _ = sender.send(AgentProcess::start(&runtime, &workspace));
+                            let result = if let Some(supervisor) = supervisor {
+                                AgentProcess::start_supervised(
+                                    &runtime,
+                                    &workspace,
+                                    &supervisor,
+                                    session_id,
+                                )
+                            } else {
+                                AgentProcess::start(&runtime, &workspace)
+                            };
+                            // Drop is best effort; the supervisor keeps an unresolved durable claim.
+                            let _ = sender.send(result);
                         })
                         .is_ok()
                     {
@@ -552,42 +579,63 @@ impl ControlState {
             pending.close_requested = true;
             return Ok(Vec::new());
         }
-        let Some(session) = self.sessions.remove(&session_id) else {
-            self.journal.close_session(session_id)?;
-            // No local runtime exists. Server-bound receipt lets the Platform
-            // resolve a lost earlier receipt without requiring old content keys.
-            let payload = CloseTunnelResult {
-                session_id: session_id.to_vec(),
-                status: CloseTunnelStatus::AlreadyClosed as i32,
-                stable_error_code: String::new(),
-            }
-            .encode_to_vec();
-            return Ok(vec![self.signed_control(
-                endpoint_id,
-                &[0; 16],
-                ControlType::CloseTunnelResult,
-                payload,
-                identity,
-                now_ms,
-            )?]);
-        };
-        let receiver = session.material.recipient_hc_endpoint_id;
-        drop(session);
-        self.journal.close_session(session_id)?;
-        let payload = CloseTunnelResult {
-            session_id: session_id.to_vec(),
-            status: CloseTunnelStatus::Accepted as i32,
-            stable_error_code: String::new(),
+        if let Some(pending) = self.closing.get_mut(&session_id) {
+            pending.receipt_requested = true;
+            return Ok(Vec::new());
         }
-        .encode_to_vec();
-        Ok(vec![self.signed_control(
-            endpoint_id,
-            &receiver,
-            ControlType::CloseTunnelResult,
-            payload,
-            identity,
-            now_ms,
-        )?])
+        if self.closing.len() >= 128 {
+            return Ok(Vec::new());
+        }
+        let (receiver, agent) = self
+            .sessions
+            .remove(&session_id)
+            .map(|session| {
+                (
+                    session.material.recipient_hc_endpoint_id,
+                    Some(session.agent),
+                )
+            })
+            .unwrap_or(([0; 16], None));
+        self.start_close(session_id, receiver, agent, true)?;
+        // Confirmation is emitted only by poll after a successful whole-scope proof.
+        let _ = (endpoint_id, identity);
+        Ok(Vec::new())
+    }
+
+    fn start_close(
+        &mut self,
+        id: [u8; 16],
+        receiver_endpoint: [u8; 16],
+        agent: Option<AgentProcess>,
+        receipt_requested: bool,
+    ) -> Result<(), GatewayError> {
+        if self.closing.contains_key(&id) {
+            return Ok(());
+        }
+        let (sender, result) = sync_channel(1);
+        let supervisor = self.supervisor.clone();
+        thread::Builder::new()
+            .name("aba-scope-cleanup".into())
+            .spawn(move || {
+                let outcome = if let Some(mut agent) = agent {
+                    agent.shutdown()
+                } else if let Some(supervisor) = supervisor {
+                    supervisor.close_run(id)
+                } else {
+                    Err(ProcessError::CleanupUnconfirmed)
+                };
+                let _ = sender.send(outcome);
+            })
+            .map_err(|_| GatewayError::Agent(ProcessError::CleanupUnconfirmed))?;
+        self.closing.insert(
+            id,
+            PendingClose {
+                receiver_endpoint,
+                result,
+                receipt_requested,
+            },
+        );
+        Ok(())
     }
 
     fn handle_key_package_ack(
@@ -1166,7 +1214,7 @@ mod tests {
     use url::Url;
 
     #[test]
-    fn cancelled_startup_receipt_follows_actual_cleanup_and_lease_release()
+    fn cancelled_direct_startup_does_not_manufacture_scope_cleanup_receipt()
     -> Result<(), Box<dyn std::error::Error>> {
         let directory = tempfile::tempdir()?;
         let workspace = WorkspaceProfile {
@@ -1232,15 +1280,17 @@ mod tests {
         release.send(())?;
         worker.join().map_err(|_| "startup test worker failed")?;
         let packets = state.poll(&[2; 16], &identity, SystemTime::now())?;
-        assert_eq!(packets.len(), 1);
-        let packet = WirePacket::decode(packets[0].as_slice())?;
-        let Some(wire_packet::Body::Control(control)) = packet.body else {
-            return Err("missing close receipt".into());
-        };
-        assert_eq!(
-            CloseTunnelResult::decode(control.payload.as_slice())?.status,
-            CloseTunnelStatus::Accepted as i32
-        );
+        assert!(packets.is_empty());
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
+        while !state.closing.is_empty() && std::time::Instant::now() < deadline {
+            assert!(
+                state
+                    .poll(&[2; 16], &identity, SystemTime::now())?
+                    .is_empty()
+            );
+            thread::sleep(std::time::Duration::from_millis(10));
+        }
+        assert!(state.closing.is_empty());
         let replacement = AgentProcess::start(&runtime, &workspace)?;
         drop(replacement);
         Ok(())
@@ -1263,6 +1313,7 @@ mod tests {
         let config = AgentConfig {
             schema_version: CONFIG_SCHEMA_VERSION,
             publish_catalog: false,
+            isolation: None,
             platform: PlatformConfig {
                 url: platform.clone(),
             },
@@ -1462,14 +1513,13 @@ mod tests {
                 now,
             },
         )?;
-        assert_eq!(closed.len(), 1);
-        let closed_packet = WirePacket::decode(closed[0].as_slice())?;
-        let closed_control = match closed_packet.body {
-            Some(wire_packet::Body::Control(value)) => value,
-            _ => return Err("close response is not a control frame".into()),
-        };
-        let closed_result = CloseTunnelResult::decode(closed_control.payload.as_slice())?;
-        assert_eq!(closed_result.status, CloseTunnelStatus::Accepted as i32);
+        assert!(closed.is_empty()); // Direct local probe has no verified whole-scope receipt.
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
+        while !state.closing.is_empty() && std::time::Instant::now() < deadline {
+            assert!(state.poll(&endpoint_id, &identity, now)?.is_empty());
+            thread::sleep(std::time::Duration::from_millis(10));
+        }
+        assert!(state.closing.is_empty());
         assert!(state.sessions.is_empty());
         // A reconnected HC starts its control sequence again, while ABA keeps
         // its existing connection. A new session must accept that fresh ACK.
@@ -1600,6 +1650,7 @@ mod tests {
         let config = AgentConfig {
             schema_version: CONFIG_SCHEMA_VERSION,
             publish_catalog: false,
+            isolation: None,
             platform: PlatformConfig { url: platform },
             limits: Limits::default(),
             runtimes: Vec::new(),
@@ -1648,6 +1699,7 @@ mod tests {
         let config = AgentConfig {
             schema_version: CONFIG_SCHEMA_VERSION,
             publish_catalog: false,
+            isolation: None,
             platform: PlatformConfig { url: platform },
             limits: Limits::default(),
             runtimes: Vec::new(),

@@ -1,0 +1,8 @@
+# Candidate H1 containment; install only after the isolated host verification.
+# Reuses the existing service account. No useradd, sudo grant or root RPC service.
+[Service]
+Delegate=yes
+ProtectControlGroups=false
+ReadWritePaths=/sys/fs/cgroup/system.slice/harness-aba.service
+StateDirectory=harness-aba/process-scopes-v1
+StateDirectoryMode=0700

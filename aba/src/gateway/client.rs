@@ -137,6 +137,12 @@ impl GatewayClient {
         journal: Journal,
     ) -> Result<(), GatewayError> {
         let mut controls = ControlState::new(journal);
+        let isolation = config.isolation.as_ref().ok_or(GatewayError::Agent(
+            crate::process::ProcessError::UnsafeProfile,
+        ))?;
+        controls.set_supervisor(Some(crate::process::supervision::Supervisor::open(
+            isolation,
+        )?));
         let catalog =
             ExecutionCatalog::from_config(config).map_err(|_| GatewayError::InvalidInput)?;
         let mut retry_attempt = 0_u32;
