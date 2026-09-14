@@ -143,7 +143,7 @@ export async function startRemoteStack() {
     if (await enrollment.done !== 0) throw new Error('ABA enrollment did not complete');
     const python = await realpath(process.env.HC_TEST_PYTHON ?? '/usr/bin/python3');
     const fixture = path.join(repository, 'aba/tests/fixtures/duplex_agent.py');
-    const toml = `schema_version = 1\n[platform]\nurl = ${JSON.stringify(nativeBase)}\n[[runtime]]\nid = "fixture"\ndisplay_name = "Deterministic ACP fixture"\ncommand = ${JSON.stringify(python)}\nargs = [${JSON.stringify(fixture)}]\nenv_allow = ["HC_E2E_AUDIT"]\nmax_sessions = 2\n` + ['workspace-a', 'workspace-b'].map((name) => `[[workspace]]\nid = "${name}"\ndisplay_name = "${name}"\npath = ${JSON.stringify(path.join(directory, name))}\nallowed_runtimes = ["fixture"]\n`).join('');
+    const toml = `schema_version = 1\npublish_catalog = true\n[platform]\nurl = ${JSON.stringify(nativeBase)}\n[[runtime]]\nid = "fixture"\ndisplay_name = "Deterministic ACP fixture"\ncommand = ${JSON.stringify(python)}\nargs = [${JSON.stringify(fixture)}]\nenv_allow = ["HC_E2E_AUDIT"]\nmax_sessions = 2\n` + ['workspace-a', 'workspace-b'].map((name) => `[[workspace]]\nid = "${name}"\ndisplay_name = "${name}"\npath = ${JSON.stringify(path.join(directory, name))}\nallowed_runtimes = ["fixture"]\n`).join('');
     const configuration = path.join(directory, 'aba.toml'); await writeFile(configuration, toml, { mode: 0o600 });
     const aba = launch('aba', ['run', '--config', configuration, '--store', identity, '--insecure-dev-keystore'], { HC_E2E_AUDIT: '1' });
     await until(async () => {

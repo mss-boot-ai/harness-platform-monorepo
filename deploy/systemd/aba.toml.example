@@ -1,4 +1,5 @@
 schema_version = 1
+publish_catalog = true
 
 [platform]
 url = "http://127.0.0.1:18082"

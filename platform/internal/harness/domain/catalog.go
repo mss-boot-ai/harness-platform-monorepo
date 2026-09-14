@@ -77,6 +77,9 @@ func (catalog ExecutionCatalog) Revision() (string, error) {
 	if err != nil {
 		return "", err
 	}
+	if len(encoded) > 12*1024 {
+		return "", NewProblem(CodeInvalidArgument, "execution catalog exceeds its byte limit", nil)
+	}
 	digest := sha256.Sum256(encoded)
 	return hex.EncodeToString(digest[:]), nil
 }

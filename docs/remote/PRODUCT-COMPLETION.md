@@ -21,4 +21,6 @@ Gateway 在当前连接互斥检查中持久化目录。目录内容散列是 re
 
 `POST /gateway/v1/endpoints/abas` 按已认证 HC 的用户/租户列出设备及 `catalog`，其状态区分 ready、offline、not-published、stale、unavailable。设备名称与目录不构成执行授权，创建和 ABA 启动仍需独立准入检查。
 
+ABA 本地配置通过 `publish_catalog = true` 明确允许发布上述元数据；默认关闭，关闭时发布空目录。首次连接与重连完成身份验证后发布，发布不会启动 Agent；修改配置后重新启动 ABA 生效。目录正文上限 12 KiB，HTTP 外层仍遵守已有 16 KiB 上限。
+
 迁移 `20260914010000` 新增 `harness_execution_catalogs`，通过既有迁移注册与 readiness 接入。此检查点只提供目录后端基础；ABA 发布、HC 选择与新建校验后续接入后才能标记功能完成。

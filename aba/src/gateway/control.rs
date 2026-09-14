@@ -1054,6 +1054,7 @@ mod tests {
         let platform = Url::parse("http://127.0.0.1:8082")?;
         let config = AgentConfig {
             schema_version: CONFIG_SCHEMA_VERSION,
+            publish_catalog: false,
             platform: PlatformConfig {
                 url: platform.clone(),
             },
@@ -1362,6 +1363,7 @@ mod tests {
         frame.signature[0] ^= 1;
         let config = AgentConfig {
             schema_version: CONFIG_SCHEMA_VERSION,
+            publish_catalog: false,
             platform: PlatformConfig { url: platform },
             limits: Limits::default(),
             runtimes: Vec::new(),
@@ -1409,6 +1411,7 @@ mod tests {
         let packet = platform_open_packet(&online, &endpoint_id, request, unix_millis(now)?, 1)?;
         let config = AgentConfig {
             schema_version: CONFIG_SCHEMA_VERSION,
+            publish_catalog: false,
             platform: PlatformConfig { url: platform },
             limits: Limits::default(),
             runtimes: Vec::new(),

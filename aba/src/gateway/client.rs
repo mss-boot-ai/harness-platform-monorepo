@@ -22,6 +22,7 @@ use super::transcript::{
     connection_ready, server_challenge,
 };
 use super::trust::{TrustManifestEnvelope, VerifiedTrust};
+use crate::catalog::ExecutionCatalog;
 use crate::config::AgentConfig;
 use crate::crypto::dpop::{DpopInput, NonceDpopInput, create_dpop_proof, create_nonce_dpop_proof};
 use crate::crypto::{sign_p1363_low_s, verify_p1363_low_s};
@@ -95,10 +96,37 @@ impl GatewayClient {
         identity: &EndpointIdentity,
         store: &DevFileKeyStore,
     ) -> Result<ReadyConnection, GatewayError> {
+        self.connect_with_catalog(identity, store, None)
+    }
+
+    fn connect_with_catalog(
+        &self,
+        identity: &EndpointIdentity,
+        store: &DevFileKeyStore,
+        catalog: Option<&ExecutionCatalog>,
+    ) -> Result<ReadyConnection, GatewayError> {
         let credentials = self.refresh(identity, store)?;
         let trust = self.fetch_trust(store)?;
         let ticket = self.issue_ticket(identity, &credentials)?;
-        self.open_websocket(identity, &credentials, &trust, ticket)
+        let ready = self.open_websocket(identity, &credentials, &trust, ticket)?;
+        if let Some(catalog) = catalog {
+            // READY is sent immediately before activation; publication is fenced by its generation.
+            for attempt in 0..3 {
+                match self.publish_catalog(
+                    identity,
+                    &credentials,
+                    ready.connection_generation,
+                    catalog,
+                ) {
+                    Ok(()) => return Ok(ready),
+                    Err(GatewayError::Rejected(StatusCode::CONFLICT)) if attempt < 2 => {
+                        thread::sleep(Duration::from_millis(100))
+                    }
+                    Err(error) => return Err(error),
+                }
+            }
+        }
+        Ok(ready)
     }
 
     pub fn run(
@@ -109,9 +137,11 @@ impl GatewayClient {
         journal: Journal,
     ) -> Result<(), GatewayError> {
         let mut controls = ControlState::new(journal);
+        let catalog =
+            ExecutionCatalog::from_config(config).map_err(|_| GatewayError::InvalidInput)?;
         let mut retry_attempt = 0_u32;
         loop {
-            let ready = match self.connect(identity, store) {
+            let ready = match self.connect_with_catalog(identity, store, Some(&catalog)) {
                 Ok(ready) => ready,
                 Err(error) if retryable_connect_error(&error) => {
                     retry_attempt = retry_attempt.saturating_add(1);
@@ -407,6 +437,47 @@ impl GatewayClient {
 
     fn endpoint(&self, path: &str) -> Result<Url, GatewayError> {
         self.base.join(path).map_err(|_| GatewayError::InvalidInput)
+    }
+
+    fn publish_catalog(
+        &self,
+        identity: &EndpointIdentity,
+        credentials: &EndpointCredentials,
+        generation: u64,
+        catalog: &ExecutionCatalog,
+    ) -> Result<(), GatewayError> {
+        let target = self.endpoint("/gateway/v1/catalog")?;
+        let nonce = nonce_challenge(
+            self.http
+                .post(target.clone())
+                .header(
+                    "Authorization",
+                    format!("DPoP {}", credentials.access_token),
+                )
+                .send()?,
+        )?;
+        let public = identity.signing_public_jwk()?;
+        let proof = create_dpop_proof(
+            identity.signing_key(),
+            DpopInput {
+                access_token: &credentials.access_token,
+                htm: "POST",
+                htu: target.as_str(),
+                issued_at: unix_seconds()?,
+                jti: &random_uuid_v4(),
+                nonce: &nonce,
+                public_jwk: &public,
+            },
+        )?;
+        let response = self.http.post(target)
+            .header("Authorization", format!("DPoP {}", credentials.access_token))
+            .header("DPoP", proof.proof)
+            .json(&serde_json::json!({"connectionGeneration": generation.to_string(), "catalog": catalog}))
+            .send()?;
+        if response.status() != StatusCode::OK {
+            return Err(GatewayError::Rejected(response.status()));
+        }
+        Ok(())
     }
 }
 

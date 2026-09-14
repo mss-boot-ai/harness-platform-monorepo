@@ -19,6 +19,9 @@ const MAX_JOURNAL_BYTES: u64 = 1_073_741_824;
 #[serde(deny_unknown_fields)]
 pub struct AgentConfig {
     pub schema_version: u32,
+    /// Explicit owner consent to publish profile IDs, names and allowed associations.
+    #[serde(default)]
+    pub publish_catalog: bool,
     pub platform: PlatformConfig,
     #[serde(default)]
     pub limits: Limits,
@@ -95,6 +98,8 @@ pub enum ConfigError {
 
 #[derive(Debug, Error, Clone, PartialEq, Eq)]
 pub enum ValidationError {
+    #[error("published catalog exceeds the profile or byte limit")]
+    CatalogLimit,
     #[error("unsupported configuration schema version")]
     UnsupportedSchemaVersion,
     #[error("Platform URL must use HTTPS and contain no credentials, query, or fragment")]
@@ -170,6 +175,9 @@ impl AgentConfig {
         if self.schema_version != CONFIG_SCHEMA_VERSION {
             return Err(ValidationError::UnsupportedSchemaVersion);
         }
+        if self.publish_catalog && (self.runtimes.len() > 64 || self.workspaces.len() > 64) {
+            return Err(ValidationError::CatalogLimit);
+        }
         validate_platform_url(&self.platform.url, allow_loopback_development)?;
         validate_limits(&self.limits)?;
 
@@ -217,6 +225,7 @@ impl AgentConfig {
             }
         }
 
+        crate::catalog::ExecutionCatalog::from_config(self)?;
         Ok(())
     }
 }

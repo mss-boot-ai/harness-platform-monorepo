@@ -64,15 +64,15 @@ func (b *remoteLockedBuffer) String() string {
 }
 
 type remoteBinaryClient struct {
-	t                                             *testing.T
-	server                                        *httptest.Server
-	store                                         *store.Store
-	aba, hc                                       domain.Endpoint
-	credential                                    domain.EndpointCredential
-	signing, abaSigning                           *ecdsa.PrivateKey
-	public                                        awpcrypto.P256PublicJWK
-	token                                         string
-	ws                                            *websocket.Conn
+	t                                              *testing.T
+	server                                         *httptest.Server
+	store                                          *store.Store
+	aba, hc                                        domain.Endpoint
+	credential                                     domain.EndpointCredential
+	signing, abaSigning                            *ecdsa.PrivateKey
+	public                                         awpcrypto.P256PublicJWK
+	token                                          string
+	ws                                             *websocket.Conn
 	session, channel, keyID                        domain.ID
 	sendKey, receiveKey, sendPrefix, receivePrefix []byte
 	sequence, received, control                    uint64
@@ -145,7 +145,7 @@ func TestRemoteActualABAGatewayDuplex(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	config := fmt.Sprintf("schema_version = 1\n[platform]\nurl = %q\n[[runtime]]\nid = \"fixture\"\ndisplay_name = \"Deterministic ACP fixture\"\ncommand = %q\nargs = [%q]\nmax_sessions = 2\n[[workspace]]\nid = \"fixture\"\ndisplay_name = \"Ephemeral test directory\"\npath = %q\nallowed_runtimes = [\"fixture\"]\n", base, python, fixture, directory)
+	config := fmt.Sprintf("schema_version = 1\npublish_catalog = true\n[platform]\nurl = %q\n[[runtime]]\nid = \"fixture\"\ndisplay_name = \"Deterministic ACP fixture\"\ncommand = %q\nargs = [%q]\nmax_sessions = 2\n[[workspace]]\nid = \"fixture\"\ndisplay_name = \"Ephemeral test directory\"\npath = %q\nallowed_runtimes = [\"fixture\"]\n", base, python, fixture, directory)
 	configPath := filepath.Join(directory, "aba.toml")
 	if err := os.WriteFile(configPath, []byte(config), 0o600); err != nil {
 		t.Fatal(err)

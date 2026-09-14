@@ -38,6 +38,7 @@ cargo run --bin aba -- run --config ./.aba-dev/local.toml --store ./.aba-dev/ide
 
 ```toml
 schema_version = 1
+publish_catalog = true
 
 [platform]
 url = "https://platform.example.com"
