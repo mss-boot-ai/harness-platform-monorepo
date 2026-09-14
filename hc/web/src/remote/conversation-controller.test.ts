@@ -9,7 +9,8 @@ describe('durable conversation controller', () => {
     await f.controller.observe({ ...f.session, status: 'UNCERTAIN' });
     const before = f.sent.length; await f.controller.resume();
     expect(f.sent).toHaveLength(before); expect(f.controls).toHaveLength(1);
-    await expect(f.controller.prompt('again')).rejects.toThrow('not writable');
+    await expect(f.controller.prompt('again')).rejects.toThrow();
+    expect(f.sent).toHaveLength(before);
   });
   it('preserves basic prompting without fabricating remote capabilities for legacy sessions', async () => {
     const f = await controllerFixture(); await f.controller.observe({ ...f.session, requestedCapabilities: ['prompt'] });

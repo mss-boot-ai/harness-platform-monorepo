@@ -32,6 +32,16 @@ async function fixture() {
 }
 const chunk = (sessionId: string, text: string) => ({ jsonrpc: '2.0', method: 'session/update', params: { sessionId, update: { sessionUpdate: 'agent_message_chunk', content: { type: 'text', text } } } });
 describe('endpoint conversation coordination', () => {
+  it('holds the local workspace guard while a first prompt is still being persisted', async () => {
+    const f = await fixture();
+    const second = { ...f.b.value, aba: f.a.value.aba, session: { ...f.b.session, abaEndpointId: f.a.session.abaEndpointId, workspaceId: f.a.session.workspaceId } };
+    await f.a.store.write(second, 1); f.setSessions([f.a.session, second.session]);
+    await f.manager.load(); await f.manager.bind(connection(f.socket));
+    const first = f.manager.prompt(f.a.session.sessionId, 'first workspace writer');
+    await expect(f.manager.prompt(f.b.session.sessionId, 'competing writer')).rejects.toThrow('workspace');
+    await first;
+    expect(f.manager.snapshot().conversations.find((item) => item.data.session.sessionId === f.b.session.sessionId)?.data.awaiting).toBeNull();
+  });
   it('routes interleaved events with colliding RPC IDs to independent durable controllers', async () => {
     const f = await fixture();
     for (const value of [f.a.value, f.b.value]) await f.a.store.write({ ...value, awaiting: 'same-request', messages: startTurn([], 'same-request', value.session.workspaceId) }, 1);

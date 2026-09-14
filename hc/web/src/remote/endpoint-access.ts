@@ -74,7 +74,7 @@ export class EndpointAccess {
   }
   public async dispose(): Promise<void> {
     this.active = false;
-    await Promise.allSettled([...this.pending]);
+    await Promise.allSettled(this.pending);
     this.registration = null;
   }
 }

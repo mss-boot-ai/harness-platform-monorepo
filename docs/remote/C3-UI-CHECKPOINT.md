@@ -12,3 +12,7 @@ Encrypted workspace metadata records the selected conversation, an unsent compos
 Endpoint credential access requires ownership and coalesces refresh operations. `UNCERTAIN` state cannot replay outbound operations; legacy sessions retain their basic prompt path. The next checkpoint connects these components to App and replaces the existing in-memory SessionSetup implementation.
 
 Validation is pending for this source checkpoint. Full tests follow commit/push; no prior SHA's success is attributed to these changes. Independent-device attachments, persistent Host restart recovery, authoritative workspace fencing, live-model acceptance, resources and deployment remain outside this slice and unfinished.
+
+## Coordination checkpoint validation
+
+Source `c2c6b49e293a5a1e5675e072a31f09caf6519493` was committed and pushed before validation. Local Node 24.20.0 / pnpm 10.34.5 typecheck and production build passed. Of 86 tests, 85 passed and one assertion expected a different rejection message; the no-replay behavior itself held. Lint found two unnecessary iterable spreads. The next repair removes those warnings, asserts refusal without depending on rejection ordering, and adds a regression for simultaneous local workspace writers before the first persistence finishes. Full validation of the repair remains pending until its own push.

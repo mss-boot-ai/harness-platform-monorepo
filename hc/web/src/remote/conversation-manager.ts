@@ -255,9 +255,9 @@ export class ConversationManager {
   }
   public workspaceConflict(abaId: string, workspaceId: string, except?: string): boolean {
     return [...this.controllers.entries()].some(([id, controller]) => {
-      const value = controller.snapshot().data;
+      const view = controller.snapshot(); const value = view.data;
       return id !== except && value.aba.id === abaId && value.session.workspaceId === workspaceId && !isTerminal(value.session.status) &&
-        (value.awaiting !== null || value.blocked !== null || value.session.status === 'UNCERTAIN' || value.requests.length > 0);
+        (view.pending > 0 || value.awaiting !== null || value.blocked !== null || value.session.status === 'UNCERTAIN' || value.requests.length > 0);
     }) || this.unrecoverable.some((value) => value.abaEndpointId === abaId && value.workspaceId === workspaceId);
   }
   public prompt(id: string, text: string): Promise<void> {
@@ -277,7 +277,7 @@ export class ConversationManager {
       if (this.workspace.value.creation !== null && !retry) throw new Error('Previous creation needs reconciliation');
       const intent: CreationIntent = this.workspace.value.creation ?? { ...input, id: crypto.randomUUID() };
       const aba = this.endpoints.find((item) => item.id === intent.abaEndpointId && item.status === 'ACTIVE');
-      if (aba === undefined || this.workspaceConflict(aba.id, intent.workspaceId)) throw new Error('Execution workspace is unavailable or busy');
+      if (aba === undefined || (!retry && this.workspaceConflict(aba.id, intent.workspaceId))) throw new Error('Execution workspace is unavailable or busy');
       this.creating = true; this.error = null; this.emit(); const epoch = this.epoch;
       try {
         await this.metadata((value) => ({ ...value, creation: intent }));
@@ -325,7 +325,7 @@ export class ConversationManager {
     if (this.disposal !== null) return this.disposal;
     this.closed = true; this.disconnect();
     this.disposal = (async () => {
-      await Promise.allSettled([...this.operations]); await this.metadataQueue; await this.controlQueue;
+      await Promise.allSettled(this.operations); await this.metadataQueue; await this.controlQueue;
       await Promise.allSettled([...this.controllers.values()].map((controller) => controller.dispose()));
       this.listeners.clear();
     })();
