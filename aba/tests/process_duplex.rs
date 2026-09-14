@@ -31,6 +31,37 @@ fn fixture() -> Result<(AgentProcess, tempfile::TempDir), Box<dyn std::error::Er
     Ok((AgentProcess::start(&runtime, &workspace)?, directory))
 }
 
+#[test]
+fn local_inode_lease_prevents_another_runtime_from_opening_the_same_workspace() -> TestResult {
+    let (process, directory) = fixture()?;
+    let runtime = RuntimeProfile {
+        id: "other-runtime".into(),
+        display_name: "Other".into(),
+        command: fs::canonicalize("/usr/bin/python3")?,
+        args: vec![format!(
+            "{}/tests/fixtures/duplex_agent.py",
+            env!("CARGO_MANIFEST_DIR")
+        )],
+        env_allow: Vec::new(),
+        max_sessions: None,
+    };
+    let workspace = WorkspaceProfile {
+        id: "alias-id".into(),
+        display_name: "Alias".into(),
+        path: fs::canonicalize(directory.path())?,
+        allowed_runtimes: vec![runtime.id.clone()],
+        follow_symlinks: false,
+    };
+    assert!(matches!(
+        AgentProcess::start(&runtime, &workspace),
+        Err(ProcessError::WorkspaceBusy)
+    ));
+    drop(process);
+    let next = AgentProcess::start(&runtime, &workspace)?;
+    drop(next);
+    Ok(())
+}
+
 fn next(process: &mut AgentProcess) -> Result<AgentEvent, Box<dyn std::error::Error>> {
     let deadline = Instant::now() + Duration::from_secs(5);
     while Instant::now() < deadline {

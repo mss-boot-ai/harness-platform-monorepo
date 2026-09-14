@@ -13,16 +13,52 @@ impl ControlState {
         now: SystemTime,
     ) -> Result<Vec<Vec<u8>>, GatewayError> {
         let now_ms = unix_millis(now)?;
+        let mut packets = Vec::new();
+        let mut ready = Vec::new();
+        for (id, pending) in &self.starting {
+            let result = match pending.receiver.try_recv() {
+                Ok(value) => value,
+                Err(TryRecvError::Empty) => continue,
+                Err(TryRecvError::Disconnected) => Err(ProcessError::Spawn),
+            };
+            ready.push((*id, result));
+            if ready.len() >= 4 {
+                break;
+            }
+        }
+        for (id, result) in ready {
+            let pending = self.starting.remove(&id).ok_or(GatewayError::Protocol)?;
+            if pending.cancelled {
+                continue;
+            }
+            let (decision, agent) = if now_ms >= pending.request.expires_at_ms {
+                (rejected("AGENT_START_EXPIRED"), None)
+            } else {
+                match result {
+                    Ok(agent) => (pending.decision, Some(agent)),
+                    Err(ProcessError::WorkspaceBusy) => (rejected("WORKSPACE_BUSY"), None),
+                    Err(_) => (rejected("AGENT_START_FAILED"), None),
+                }
+            };
+            packets.extend(self.finish_open(
+                pending.request,
+                decision,
+                agent,
+                endpoint_id,
+                identity,
+                &pending.credential_id,
+                now_ms,
+            )?);
+        }
         let journal = self.journal.clone();
         let mut ids: Vec<[u8; 16]> = self.sessions.keys().copied().collect();
         ids.sort_unstable();
         if ids.is_empty() {
-            return Ok(Vec::new());
+            return Ok(packets);
         }
         let offset = self.poll_offset % ids.len();
         ids.rotate_left(offset);
         self.poll_offset = (offset + 1) % ids.len();
-        let mut packets = Vec::new();
         for id in ids {
             if packets.len() >= MAX_POLL_PACKETS {
                 break;

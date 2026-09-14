@@ -4,6 +4,8 @@ use std::collections::{BTreeSet, HashMap};
 use std::fs;
 #[cfg(unix)]
 use std::os::unix::fs::PermissionsExt as _;
+use std::sync::mpsc::{Receiver, TryRecvError, sync_channel};
+use std::thread;
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use p256::ecdsa::VerifyingKey;
@@ -24,7 +26,7 @@ use crate::identity::EndpointIdentity;
 use crate::journal::{
     ChannelKey, InboundFrame, InboundState, IntakeOutcome, Journal, OutboundFrame,
 };
-use crate::process::AgentProcess;
+use crate::process::{AgentProcess, ProcessError};
 use crate::protocol::awpv1::{
     AckFrame, ChannelCursor, CloseTunnelRequest, CloseTunnelResult, CloseTunnelStatus,
     ControlFrame, ControlType, Direction as WireDirection, EncryptedFrame, ErrorCode, ErrorFrame,
@@ -39,12 +41,14 @@ pub(super) struct ControlState {
     platform_inbound_sequence: u64,
     outbound_sequence: u64,
     sessions: HashMap<[u8; 16], LocalSession>,
+    starting: HashMap<[u8; 16], PendingOpen>,
     journal: Journal,
     poll_offset: usize,
 }
 
 struct LocalSession {
     agent: AgentProcess,
+    runtime_id: String,
     material: KeyPackageMaterial,
     hc_signing_key: VerifyingKey,
     key_package_id: [u8; 16],
@@ -54,6 +58,14 @@ struct LocalSession {
     uncertain: bool,
     uncertain_message_id: Option<[u8; 16]>,
     pending_dispatches: BTreeSet<[u8; 16]>,
+}
+
+struct PendingOpen {
+    request: OpenTunnelRequest,
+    decision: PolicyDecision,
+    receiver: Receiver<Result<AgentProcess, ProcessError>>,
+    credential_id: [u8; 16],
+    cancelled: bool,
 }
 
 pub(super) struct ControlContext<'a> {
@@ -77,6 +89,7 @@ impl ControlState {
             platform_inbound_sequence: 0,
             outbound_sequence: 0,
             sessions: HashMap::new(),
+            starting: HashMap::new(),
             journal,
             poll_offset: 0,
         }
@@ -90,6 +103,11 @@ impl ControlState {
     ) -> Result<Vec<Vec<u8>>, GatewayError> {
         self.platform_inbound_sequence = 0;
         self.outbound_sequence = 0;
+        // A new transport must not accept a late startup under an old control grant.
+        // Keep its bounded slot until the worker exits and releases the inode lease.
+        for pending in self.starting.values_mut() {
+            pending.cancelled = true;
+        }
         let mut cursors = Vec::with_capacity(self.sessions.len());
         for session in self.sessions.values().filter(|session| session.active) {
             cursors.push(ChannelCursor {
@@ -211,25 +229,92 @@ impl ControlState {
         let request = OpenTunnelRequest::decode(control_frame.payload.as_slice())
             .map_err(|_| GatewayError::Protocol)?;
         validate_open_request(&request, now_ms)?;
-        let mut decision = if self.sessions.len() >= usize::from(config.limits.max_sessions) {
-            PolicyDecision {
-                status: OpenTunnelStatus::ResourceBusy,
-                stable_error_code: "RESOURCE_BUSY".to_owned(),
-                negotiated_capabilities: Vec::new(),
-            }
-        } else {
-            evaluate_policy(config, &request)
-        };
-        let mut agent = None;
-        if decision.status == OpenTunnelStatus::Accepted {
-            match local_profiles(config, &request)
-                .and_then(|(runtime, workspace)| AgentProcess::start(runtime, workspace).ok())
+        let session_id: [u8; 16] = request
+            .session_id
+            .as_slice()
+            .try_into()
+            .map_err(|_| GatewayError::Protocol)?;
+        let mut decision =
+            if self.sessions.contains_key(&session_id) || self.starting.contains_key(&session_id) {
+                rejected("SESSION_ALREADY_EXISTS")
+            } else if self.sessions.len() + self.starting.len()
+                >= usize::from(config.limits.max_sessions)
             {
-                Some(process) => agent = Some(process),
-                None => decision = rejected("AGENT_START_FAILED"),
+                PolicyDecision {
+                    status: OpenTunnelStatus::ResourceBusy,
+                    stable_error_code: "RESOURCE_BUSY".to_owned(),
+                    negotiated_capabilities: Vec::new(),
+                }
+            } else {
+                evaluate_policy(config, &request)
+            };
+        self.platform_inbound_sequence = control_frame.control_sequence;
+        if decision.status == OpenTunnelStatus::Accepted {
+            if let Some((runtime, workspace)) = local_profiles(config, &request) {
+                let count = self
+                    .sessions
+                    .values()
+                    .filter(|session| session.runtime_id == runtime.id)
+                    .count()
+                    + self
+                        .starting
+                        .values()
+                        .filter(|pending| pending.request.runtime_profile_id == runtime.id)
+                        .count();
+                if count >= usize::from(runtime.max_sessions.unwrap_or(config.limits.max_sessions))
+                {
+                    decision = rejected("RUNTIME_BUSY");
+                } else {
+                    let (sender, receiver) = sync_channel(1);
+                    let runtime = runtime.clone();
+                    let workspace = workspace.clone();
+                    if thread::Builder::new()
+                        .name("aba-agent-start".to_owned())
+                        .spawn(move || {
+                            // Failure to deliver drops the process and releases its workspace lock.
+                            let _ = sender.send(AgentProcess::start(&runtime, &workspace));
+                        })
+                        .is_ok()
+                    {
+                        self.starting.insert(
+                            session_id,
+                            PendingOpen {
+                                request,
+                                decision,
+                                receiver,
+                                credential_id: *credential_id,
+                                cancelled: false,
+                            },
+                        );
+                        return Ok(Vec::new());
+                    }
+                    decision = rejected("AGENT_START_FAILED");
+                }
+            } else {
+                decision = rejected("AGENT_START_FAILED");
             }
         }
-        self.platform_inbound_sequence = control_frame.control_sequence;
+        self.finish_open(
+            request,
+            decision,
+            None,
+            endpoint_id,
+            identity,
+            credential_id,
+            now_ms,
+        )
+    }
+
+    fn finish_open(
+        &mut self,
+        request: OpenTunnelRequest,
+        decision: PolicyDecision,
+        agent: Option<AgentProcess>,
+        endpoint_id: &[u8; 16],
+        identity: &EndpointIdentity,
+        credential_id: &[u8; 16],
+        now_ms: i64,
+    ) -> Result<Vec<Vec<u8>>, GatewayError> {
         let payload = OpenTunnelResult {
             session_id: request.session_id.clone(),
             status: decision.status as i32,
@@ -333,6 +418,7 @@ impl ControlState {
             session_id,
             LocalSession {
                 agent,
+                runtime_id: request.runtime_profile_id,
                 material,
                 hc_signing_key: hc_signing_jwk.verifying_key()?,
                 key_package_id,
@@ -440,6 +526,25 @@ impl ControlState {
             .as_slice()
             .try_into()
             .map_err(|_| GatewayError::Protocol)?;
+        if let Some(pending) = self.starting.get_mut(&session_id) {
+            pending.cancelled = true;
+            let receiver = pending.request.hc_endpoint_id.clone();
+            self.journal.close_session(session_id)?;
+            let payload = CloseTunnelResult {
+                session_id: session_id.to_vec(),
+                status: CloseTunnelStatus::Accepted as i32,
+                stable_error_code: String::new(),
+            }
+            .encode_to_vec();
+            return Ok(vec![self.signed_control(
+                endpoint_id,
+                &receiver,
+                ControlType::CloseTunnelResult,
+                payload,
+                identity,
+                now_ms,
+            )?]);
+        }
         let Some(session) = self.sessions.remove(&session_id) else {
             self.journal.close_session(session_id)?;
             return Ok(Vec::new());
@@ -1097,7 +1202,7 @@ mod tests {
             platform_open_packet(&online, &endpoint_id, request.clone(), unix_millis(now)?, 1)?;
         let mut state = ControlState::new(Journal::memory(1 << 20));
         let credential_id = [15_u8; 16];
-        let encoded = state.handle(
+        let mut encoded = state.handle(
             packet,
             ControlContext {
                 endpoint_id: &endpoint_id,
@@ -1108,6 +1213,15 @@ mod tests {
                 now,
             },
         )?;
+        assert!(
+            encoded.is_empty(),
+            "Agent startup must not block control intake"
+        );
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
+        while encoded.is_empty() && std::time::Instant::now() < deadline {
+            encoded.extend(state.poll(&endpoint_id, &identity, now)?);
+            std::thread::sleep(std::time::Duration::from_millis(5));
+        }
         assert_eq!(encoded.len(), 2);
         let response = WirePacket::decode(encoded[0].as_slice())?;
         let frame = match response.body {

@@ -41,6 +41,8 @@ pub enum ProcessError {
     Timeout,
     #[error("local agent response exceeded a bounded limit")]
     Limit,
+    #[error("local workspace already has an agent process")]
+    WorkspaceBusy,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -66,6 +68,8 @@ struct PermissionBinding {
 
 pub struct AgentProcess {
     child: Child,
+    // Directory inode lock: aliases and other ABA processes cannot bypass it.
+    _workspace_lease: fs::File,
     writer: Option<SyncSender<WriteCommand>>,
     receiver: Option<Receiver<TransportEvent>>,
     threads: Vec<JoinHandle<()>>,
@@ -88,6 +92,14 @@ impl AgentProcess {
     ) -> Result<Self, ProcessError> {
         let command_path = canonical_safe_file(&runtime.command)?;
         let workspace_path = canonical_safe_directory(&workspace.path)?;
+        let workspace_lease =
+            fs::File::open(&workspace_path).map_err(|_| ProcessError::UnsafeProfile)?;
+        #[cfg(unix)]
+        rustix::fs::flock(
+            &workspace_lease,
+            rustix::fs::FlockOperation::NonBlockingLockExclusive,
+        )
+        .map_err(|_| ProcessError::WorkspaceBusy)?;
         let mut command = Command::new(command_path);
         command
             .args(&runtime.args)
@@ -124,6 +136,7 @@ impl AgentProcess {
         };
         let mut process = Self {
             child,
+            _workspace_lease: workspace_lease,
             writer: Some(pumps.writer),
             receiver: Some(pumps.events),
             threads: pumps.threads,
