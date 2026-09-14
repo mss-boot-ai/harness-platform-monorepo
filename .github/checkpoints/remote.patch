@@ -63,15 +63,18 @@ index c6d5704..9cf5487 100644
  import { AckFrameSchema, buildAckTranscript, buildFrameAAD, createEndpointIdentity, deriveSessionDirectionKeys, Direction,
    EncryptedFrameSchema, EncryptedLocalVault, FrameType, sessionChannelId, signP1363LowS, WirePacketSchema,
 diff --git a/hc/web/src/remote/endpoint-owner.test.ts b/hc/web/src/remote/endpoint-owner.test.ts
-index a281d56..6402ca0 100644
+index a281d56..3b876a5 100644
 --- a/hc/web/src/remote/endpoint-owner.test.ts
 +++ b/hc/web/src/remote/endpoint-owner.test.ts
-@@ -3,7 +3,7 @@ function fakeLocks() {
+@@ -3,9 +3,9 @@ function fakeLocks() {
    let held = false;
    const queue: (() => void)[] = [];
    const calls: LockOptions[] = [];
 -  const request: LockManager['request'] = ((name: string, options: LockOptions, callback: LockGrantedCallback) => {
 +  const request: LockManager['request'] = ((name: string, options: LockOptions, callback: LockGrantedCallback<void>) => {
      calls.push(options);
-     return new Promise((resolve, reject) => {
+-    return new Promise((resolve, reject) => {
++    return new Promise<void>((resolve, reject) => {
        const run = () => {
+         if (options.signal?.aborted) { reject(new Error('aborted')); next(); return; }
+         held = true;
