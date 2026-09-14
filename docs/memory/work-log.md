@@ -6,6 +6,16 @@
 
 ---
 
+## 2026-09-15 07:55 +08:00 — 复用现有账号的 Host 隔离与真实控制验证
+
+用户授权继续开发环境变更，但明确不创建新账号。确认平台 admin 与 OS 账号不同后，保留 admin 登录/密码与现有端点，复用 `harness-aba`，将方案收敛到现有服务的 cgroup delegation 和 namespace 隔离；没有新增 root 管理服务、用户、sudo 权限或替换身份。所有检查点沿 `codex/remote-project-workspace-recovery` 普通 commit/push，未合并或修改正在运行的 b482 部署。
+
+源码 `ecb70c4610330eb32a10790e0c97183793159a63` 已在真实 Linux 5.15/systemd 249/bwrap 0.6.1 下完成隔离、模型回复/文件读取、真实拒绝/允许单文件修改、确认配置、实际 sleep 工具开始后取消及继续、完整 scope 清理。`ca0f35b4ab4154cc48151a89406efef636360f11` 增加并通过特定 Host SIGKILL→新进程核对 scope、无 runtime 重启及私有 stream/seqpacket 管道验证。过程持续比较现有账号清单与正式 ABA 的 PID/InvocationID，未变。
+
+保留失败证据：本地 relay 的 HTTPS 适配与候选 adapter 路径在 6630723 修复；严格 provider 白名单误拒绝原生 client_metadata，经有界、无内容诊断确认后于 0d9890a 剥离该字段，重新通过真实流程。没有借问题移除隔离、回退任意网络或记录用户/模型请求内容。详细完整 SHA、命令范围和未完成项见[报告](../roadmap/verification/2026-09-15-existing-account-host-isolation.md)。
+
+H1 组合/双 scope 验证继续；H2 事务密封存储、业务去重、离线服务与恢复，以及后续 Remote 门槛尚未完成。此次仅修改候选与独立测试单元；正式部署仍是 `b482117a406545e9e6a20a6d641d827b1688244d`，不存在“完整 Host 已上线”的结论。
+
 ## 2026-09-15 05:23 +08:00 — 开始同端点持久 Host H0
 
 Codex with ChatGPT 已将 iteration 0 标为 `ACCEPTED_FOR_REPORTED_FLOW`，完整产品仍为 in progress。工作分支 `codex/remote-project-workspace-recovery`，开始前核对 HEAD/远端均为 `2d641265d6012800987820ab35aa38c8b389e952`，工作区干净，本分支尚无 PR。

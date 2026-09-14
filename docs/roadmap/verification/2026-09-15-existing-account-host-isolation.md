@@ -37,6 +37,7 @@ HTTP 头/body 有绝对接收期限；上游使用可取消 future、120 秒总�
 | `8d1360061f75f799d90e216ce59ff738d3ffc45b` | 48 个 Rust 单测 + 6 个集成测试；17 项初始真实内核检查。初版 UID/服务存活断言较弱，后续已改为精确 UID 与 PID/InvocationID 对比。 |
 | `0d9890aee6119da2f4db4e21e0b3e7e286b1a12e` | 56 个 Rust 单测 + 6 个集成测试、clippy all-targets `-D warnings`、16 个 Python adapter 测试；21 项严格 provider-enabled 隔离检查；真实模型回复和文件读取。 |
 | `ecb70c4610330eb32a10790e0c97183793159a63` | Rust 测试及 clippy 通过；同样的 21 项隔离检查；真实 Codex 两轮回复/读取、一次拒绝且文件不存在、一次允许且文件内容准确、确认 effort=low、观察到实际 sleep 进程后取消、同会话继续成功、完整 scope 清理。 |
+| `ca0f35b4ab4154cc48151a89406efef636360f11` | 24 项真实内核/进程事实通过：进一步验证 stream/seqpacket pair 在 peer 关闭前后仍不能连接工作区控制 socket；真实 SIGKILL 测试 Host 主进程后，在新的进程/服务 invocation 只核对并清理旧 scope，未启动 runtime；真实 Codex 完整控制流程再次通过。 |
 
 `ecb70c...` 目标主机二进制 SHA-256：`b0f7785cd8151f975a7095515edfe7d9ef77fb34ae8abcf145eb7cab080dae4e`。主机为 Linux `5.15.0-170-generic`、systemd `249.11`、bubblewrap `0.6.1`；Codex SDK/CLI 仍固定 `0.147.0`。
 
@@ -55,5 +56,7 @@ HTTP 头/body 有绝对接收期限；上游使用可取消 future、120 秒总�
 ## 尚未建立的结论
 
 本报告不把尚未完成的独立双 scope 故障、所有启动/重启切点、HC 公共入口升级验收、H2 sealed 事务存储、H3 离线执行服务、H4 同端点快照恢复、跨设备 Grant/lease、资源和 PWA 标为完成。新的 Host-death/私有连接管道检查正在独立检查点推进，不能沿用以上 SHA 的通过结果。
+
+补充：`ca0f35b...` 已完成上述特定 Host-death 和私有连接管道检查，其二进制 SHA-256 为 `9c810fc3ed18dd52f28af286c41930d29e36a78ca7f3e0a51c6b652125a91c9c`。这证明了进程范围登记/清理恢复，不证明旧业务输出、审批或未知操作可以恢复。双 scope 存活与组合回归在后续检查点继续。
 
 本轮依据 [OpenAI 配置文档](https://learn.chatgpt.com/docs/config-file/config-reference)、[cgroup v2](https://www.kernel.org/doc/html/v5.15/admin-guide/cgroup-v2.html) 和 [seccomp](https://www.kernel.org/doc/html/v5.15/userspace-api/seccomp_filter.html) 核对接口，再以已锁定运行时及目标主机实际验证；文档不是实测替代品。
