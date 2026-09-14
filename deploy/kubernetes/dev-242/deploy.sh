@@ -117,6 +117,12 @@ if "${harness_kubectl}" "${harness_kube_args[@]}" -n "${harness_namespace}" \
   echo "error: legacy deployment/harness-gateway must be removed before the StatefulSet rollout" >&2
   exit 2
 fi
+harness_hc_mounts="$("${harness_kubectl}" "${harness_kube_args[@]}" -n "${harness_namespace}" \
+  get deployment harness-hc-web --ignore-not-found -o jsonpath='{.spec.template.spec.containers[?(@.name=="hc-web")].volumeMounts[*].mountPath}')"
+if grep -Eq '(^|[[:space:]])/etc/nginx(/|[[:space:]]|$)|(^|[[:space:]])/usr/share/nginx/html(/|[[:space:]]|$)' <<<"${harness_hc_mounts}"; then
+  echo 'error: a live HC mount shadows the reviewed image configuration or assets; inspect and retire it before rollout' >&2
+  exit 2
+fi
 harness_timescaledb_rendered=""
 harness_apps_rendered=""
 harness_ingress_rendered=""

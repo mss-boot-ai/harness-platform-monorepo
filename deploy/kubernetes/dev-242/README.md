@@ -65,6 +65,11 @@ retain the optional `harness-redis/HARNESS_REDIS_PASSWORD` Secret reference; thi
 not create, restart or replace an existing Redis deployment or its credentials. If the
 reviewed configuration requires Redis, verify that service and Secret before deployment.
 
+HC serves the Nginx security policy and assets embedded in the immutable image. Deployment
+preflight rejects live mounts that shadow those paths. Inspect any old ConfigMap override,
+preserve its previous value in the private backup, and retire it explicitly; an image tag
+alone must not conceal a different effective CSP or application bundle.
+
 Run as an administrator on the target host. The bootstrap script creates random database and
 Admin signing material, stores a recoverable copy under a root-only directory, and sends no
 secret value to stdout. It never injects the initial Admin password into a long-running Pod.
