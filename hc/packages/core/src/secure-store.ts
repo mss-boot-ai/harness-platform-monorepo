@@ -147,7 +147,8 @@ export class IndexedDbSecureStore {
   public async createActiveIdentity(label: string, expectedInstallationId: string | null): Promise<EndpointIdentity> {
     const identity = await createEndpointIdentity(`browser-${crypto.randomUUID()}`, label, 'web-software');
     const database = await this.open();
-    const transaction = database.transaction([IDENTITY_STORE, INSTALLATION_SETTINGS_STORE], 'readwrite');
+    const transaction = database.transaction([IDENTITY_STORE, INSTALLATION_SETTINGS_STORE], 'readwrite', { durability: 'strict' });
+    if (transaction.durability !== 'strict') { transaction.abort(); database.close(); throw new Error('Strict identity durability is unavailable'); }
     const completed = transactionComplete(transaction);
     // Observe rejection immediately even when an early validation below aborts the transaction.
     void completed.catch(() => undefined);
