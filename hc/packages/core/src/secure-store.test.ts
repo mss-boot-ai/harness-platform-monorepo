@@ -1,4 +1,5 @@
-import { IDBFactory } from 'fake-indexeddb';
+import { IDBFactory, IDBKeyRange } from 'fake-indexeddb';
+Object.defineProperty(globalThis, 'IDBKeyRange', { value: IDBKeyRange, configurable: true });
 import { IndexedDbSecureStore } from './secure-store';
 
 describe('IndexedDbSecureStore', () => {
@@ -66,4 +67,39 @@ describe('IndexedDbSecureStore', () => {
     await store.deleteSessionInbox(frame.sessionId);
     await expect(store.putInboxFrame(frame)).resolves.toBe('stored');
   });
+});
+
+it('keeps the durable inbox encrypted and allows same-browser history reads', async () => {
+  const factory = new IDBFactory(); const name = `encrypted-inbox-${crypto.randomUUID()}`;
+  const store = new IndexedDbSecureStore(factory, name);
+  const frame = { sessionId: '01'.repeat(16), direction: 2 as const, sequence: 1n, contentHash: new Uint8Array(32).fill(4), messageId: new Uint8Array(16).fill(3), plaintext: new TextEncoder().encode('sensitive-inbox-canary'), receivedAt: '2030-01-01T00:00:00Z' };
+  await store.putInboxFrame(frame);
+  const db = await new Promise<IDBDatabase>((resolve, reject) => { const req = factory.open(name); req.onsuccess = () => resolve(req.result); req.onerror = () => reject(req.error); });
+  const tx = db.transaction('session-inbox', 'readonly');
+  const rows = await new Promise<unknown[]>((resolve, reject) => { const req = tx.objectStore('session-inbox').getAll(); req.onsuccess = () => resolve(req.result); req.onerror = () => reject(req.error); });
+  db.close();
+  expect(rows[0]).not.toHaveProperty('plaintext'); expect(JSON.stringify(rows)).not.toContain('sensitive-inbox-canary');
+  const restored = await new IndexedDbSecureStore(factory, name).readSessionInbox(frame.sessionId);
+  expect(restored).toHaveLength(1); expect(new TextDecoder().decode(restored[0]?.plaintext)).toBe('sensitive-inbox-canary');
+  expect(await store.readSessionInbox(frame.sessionId, 1n)).toEqual([]);
+});
+
+it('migrates legacy inbox plaintext during the readiness probe and binds encrypted metadata', async () => {
+  const factory = new IDBFactory(); const name = `legacy-inbox-${crypto.randomUUID()}`;
+  const store = new IndexedDbSecureStore(factory, name);
+  const frame = { sessionId: '02'.repeat(16), direction: 2 as const, sequence: 2n, contentHash: new Uint8Array(32).fill(5), messageId: new Uint8Array(16).fill(6), plaintext: new TextEncoder().encode('legacy-private-message'), receivedAt: '2030-01-01T00:00:00Z' };
+  await store.putInboxFrame(frame);
+  const open = () => new Promise<IDBDatabase>((resolve, reject) => { const req = factory.open(name); req.onsuccess = () => resolve(req.result); req.onerror = () => reject(req.error); });
+  const id = `${frame.sessionId}:2:${frame.sequence.toString().padStart(20, '0')}`;
+  let db = await open();
+  let tx = db.transaction('session-inbox', 'readwrite'); tx.objectStore('session-inbox').put({ ...frame, sequence: '2', id });
+  await new Promise<void>((resolve, reject) => { tx.oncomplete = () => resolve(); tx.onabort = () => reject(tx.error); }); db.close();
+  expect((await store.probe()).supported).toBe(true);
+  expect(new TextDecoder().decode((await store.readSessionInbox(frame.sessionId, 1n, 1))[0]?.plaintext)).toBe('legacy-private-message');
+  db = await open(); tx = db.transaction('session-inbox', 'readwrite');
+  const raw = await new Promise<Record<string, unknown>>((resolve) => { const request = tx.objectStore('session-inbox').get(id); request.onsuccess = () => resolve(request.result as Record<string, unknown>); });
+  expect(raw).not.toHaveProperty('plaintext');
+  tx.objectStore('session-inbox').put({ ...raw, messageId: new Uint8Array(16).fill(7) });
+  await new Promise<void>((resolve, reject) => { tx.oncomplete = () => resolve(); tx.onabort = () => reject(tx.error); }); db.close();
+  await expect(store.readSessionInbox(frame.sessionId)).rejects.toThrow();
 });
