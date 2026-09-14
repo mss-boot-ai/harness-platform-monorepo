@@ -29,6 +29,24 @@ impl ControlState {
         for (id, result) in ready {
             let pending = self.starting.remove(&id).ok_or(GatewayError::Protocol)?;
             if pending.cancelled {
+                drop(result); // Cleanup and inode lease release precede the receipt.
+                if pending.close_requested {
+                    self.journal.close_session(id)?;
+                    let payload = CloseTunnelResult {
+                        session_id: id.to_vec(),
+                        status: CloseTunnelStatus::Accepted as i32,
+                        stable_error_code: String::new(),
+                    }
+                    .encode_to_vec();
+                    packets.push(self.signed_control(
+                        endpoint_id,
+                        &pending.request.hc_endpoint_id,
+                        ControlType::CloseTunnelResult,
+                        payload,
+                        identity,
+                        now_ms,
+                    )?);
+                }
                 continue;
             }
             let (decision, agent) = if now_ms >= pending.request.expires_at_ms {

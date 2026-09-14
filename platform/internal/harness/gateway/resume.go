@@ -33,6 +33,7 @@ func (server *Server) processResumeState(
 	}
 	seen := make(map[string]struct{}, len(resume.GetCursors()))
 	remaining := maxReplayFrames
+	closing := make(map[domain.ID]bool)
 	for _, cursor := range resume.GetCursors() {
 		if cursor == nil || len(cursor.GetChannelId()) != 16 || cursor.GetKeyGeneration() == 0 {
 			return errors.New("ResumeState cursor is invalid")
@@ -69,10 +70,21 @@ func (server *Server) processResumeState(
 			expectedChannel, channelErr := sessionChannelID(
 				session.ID, session.ABAEndpointID, session.HCEndpointID,
 			)
-			if channelErr != nil || session.Status != domain.SessionStatusActive ||
+			if channelErr != nil ||
 				frame.ReceiverEndpointID != endpoint.ID || frame.ChannelID != expectedChannel ||
 				!resumeFrameReceiverMatches(endpoint.Type, session, frame) {
 				return errors.New("stored replay frame route is invalid")
+			}
+			if session.Status == domain.SessionStatusDraining || session.Status == domain.SessionStatusClosed {
+				if endpoint.Type == domain.EndpointTypeABA && !closing[session.ID] {
+					_ = server.sendCloseTunnelRequest(session, server.now().UTC())
+					closing[session.ID] = true
+				}
+				remaining--
+				continue
+			}
+			if session.Status != domain.SessionStatusActive {
+				return errors.New("stored replay frame session is not active")
 			}
 			encoded, err := server.replayPacket(frame)
 			if err != nil {

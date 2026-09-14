@@ -1,6 +1,7 @@
 package gateway
 
 import (
+	"bytes"
 	"context"
 	"crypto/sha256"
 	"encoding/json"
@@ -51,12 +52,16 @@ func (server *Server) closeEndpointSession(writer http.ResponseWriter, request *
 		return
 	}
 	now := server.now().UTC()
+	requestedStatus := domain.SessionStatusDraining
+	if session.Status == domain.SessionStatusClosed {
+		requestedStatus = domain.SessionStatusClosed
+	}
 	response := endpointSessionResponse{
 		SessionID: session.ID.String(), ABAEndpointID: session.ABAEndpointID.String(),
 		HCEndpointID: session.HCEndpointID.String(), RuntimeProfileID: session.RuntimeProfileID,
 		WorkspaceID:           session.WorkspaceID,
 		RequestedCapabilities: append([]string(nil), session.RequestedCapabilities...),
-		Status:                domain.SessionStatusClosed, CreatedAt: session.CreatedAt,
+		Status:                requestedStatus, CreatedAt: session.CreatedAt,
 	}
 	responseJSON, err := json.Marshal(response)
 	if err != nil {
@@ -82,7 +87,7 @@ func (server *Server) closeEndpointSession(writer http.ResponseWriter, request *
 		ID: ids[1], OwnerUserID: session.OwnerUserID, TenantID: session.TenantID,
 		ActorType: domain.AuditActorEndpoint, ActorID: endpoint.ID.String(), Action: "session.close",
 		ObjectType: "session", ObjectID: session.ID.String(), Result: "success",
-		Metadata: map[string]string{"sessionStatus": string(domain.SessionStatusClosed)}, CreatedAt: now,
+		Metadata: map[string]string{"sessionStatus": string(requestedStatus)}, CreatedAt: now,
 	}
 	session.UpdatedAt = now
 	closed, output, replayed, err := server.persistence.CloseEndpointSession(
@@ -94,8 +99,12 @@ func (server *Server) closeEndpointSession(writer http.ResponseWriter, request *
 	}
 	if replayed {
 		writer.Header().Set("Idempotency-Replayed", "true")
-	} else if err := server.sendCloseTunnelRequest(closed, now); err != nil {
-		writer.Header().Set("Harness-Close-Delivery", "pending")
+	}
+	// Replayed close intents retry delivery, never replay user Agent operations.
+	if closed.Status != domain.SessionStatusClosed {
+		if err := server.sendCloseTunnelRequest(closed, now); err != nil {
+			writer.Header().Set("Harness-Close-Delivery", "pending")
+		}
 	}
 	writeRawJSON(writer, http.StatusOK, output)
 }
@@ -153,21 +162,26 @@ func (server *Server) processCloseTunnelResult(
 	if err != nil {
 		return domain.ID{}, err
 	}
-	receiverID, err := idFromWire(control.GetReceiverEndpointId())
-	if err != nil {
-		return domain.ID{}, err
-	}
 	session, err := server.persistence.GetSession(ctx, sessionID)
 	if err != nil {
 		return domain.ID{}, err
 	}
 	status := result.GetStatus()
-	if session.ABAEndpointID != endpoint.ID || session.HCEndpointID != receiverID ||
-		session.Status != domain.SessionStatusClosed ||
+	receiverMatches := bytes.Equal(control.GetReceiverEndpointId(), session.HCEndpointID[:]) ||
+		status == awpv1.CloseTunnelStatus_CLOSE_TUNNEL_STATUS_ALREADY_CLOSED && bytes.Equal(control.GetReceiverEndpointId(), make([]byte, 16))
+	if session.ABAEndpointID != endpoint.ID || !receiverMatches ||
+		(session.Status != domain.SessionStatusClosed && session.Status != domain.SessionStatusDraining) ||
 		(status != awpv1.CloseTunnelStatus_CLOSE_TUNNEL_STATUS_ACCEPTED &&
 			status != awpv1.CloseTunnelStatus_CLOSE_TUNNEL_STATUS_ALREADY_CLOSED) ||
 		result.GetStableErrorCode() != "" {
 		return domain.ID{}, errors.New("CloseTunnelResult binding is invalid")
 	}
-	return receiverID, nil
+	_, err = server.persistence.UpdateSession(ctx, sessionID, func(value *domain.Session) error {
+		if value.ABAEndpointID != endpoint.ID || value.HCEndpointID != session.HCEndpointID ||
+			(value.Status != domain.SessionStatusDraining && value.Status != domain.SessionStatusClosed) {
+			return domain.NewProblem(domain.CodeInvalidState, "session shutdown confirmation changed", nil)
+		}
+		return value.Close(server.now().UTC())
+	})
+	return session.HCEndpointID, err
 }

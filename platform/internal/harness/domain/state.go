@@ -280,6 +280,25 @@ func (session *Session) StartDraining(now time.Time) error {
 	return session.move(SessionStatusActive, SessionStatusDraining, now)
 }
 
+// RequestClose fences new work but does not claim the runtime has stopped.
+func (session *Session) RequestClose(now time.Time) error {
+	if session == nil {
+		return NewProblem(CodeInvalidArgument, "session is required", nil)
+	}
+	if session.Status == SessionStatusClosed || session.Status == SessionStatusDraining {
+		return nil
+	}
+	switch session.Status {
+	case SessionStatusCreating, SessionStatusWaitingKey, SessionStatusActive, SessionStatusRekeyRequired, SessionStatusUncertain, SessionStatusFailed:
+	default:
+		return invalidTransition("session", string(session.Status), string(SessionStatusDraining))
+	}
+	session.Status = SessionStatusDraining
+	session.UpdatedAt = now
+	session.RowVersion++
+	return nil
+}
+
 func (session *Session) Close(now time.Time) error {
 	if session == nil {
 		return NewProblem(CodeInvalidArgument, "session is required", nil)

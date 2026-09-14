@@ -542,7 +542,7 @@ func TestHCSessionCreateIsIdempotentAndDeliversSignedOpenTunnel(t *testing.T) {
 		closedResponse,
 		gatewaySessionCloseRequest(hcAccessToken, "session-close-key-0001", closePath, closeProof),
 	)
-	if closedResponse.Code != http.StatusOK || !strings.Contains(closedResponse.Body.String(), `"status":"CLOSED"`) {
+	if closedResponse.Code != http.StatusOK || !strings.Contains(closedResponse.Body.String(), `"status":"DRAINING"`) {
 		t.Fatalf("close session status=%d body=%s", closedResponse.Code, closedResponse.Body.String())
 	}
 	closeType, encodedClose, err := abaConnection.ReadMessage()

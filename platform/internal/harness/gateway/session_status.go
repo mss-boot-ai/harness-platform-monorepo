@@ -45,6 +45,9 @@ func (server *Server) endpointSessionStatus(writer http.ResponseWriter, request 
 		writeSessionLookupError(writer, domain.NewProblem(domain.CodeNotFound, "session was not found", nil))
 		return
 	}
+	if session.Status == domain.SessionStatusDraining {
+		_ = server.sendCloseTunnelRequest(session, server.now().UTC())
+	}
 	writeJSON(writer, http.StatusOK, endpointSessionView(session))
 }
 
@@ -81,6 +84,9 @@ func (server *Server) endpointSessionStatuses(writer http.ResponseWriter, reques
 			return
 		}
 		if session.HCEndpointID == endpoint.ID && session.OwnerUserID == endpoint.OwnerUserID && session.TenantID == endpoint.TenantID {
+			if session.Status == domain.SessionStatusDraining {
+				_ = server.sendCloseTunnelRequest(session, server.now().UTC())
+			}
 			items = append(items, endpointSessionView(session))
 		}
 	}

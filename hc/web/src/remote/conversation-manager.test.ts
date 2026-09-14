@@ -43,6 +43,32 @@ async function fixture() {
 }
 const chunk = (sessionId: string, text: string) => ({ jsonrpc: '2.0', method: 'session/update', params: { sessionId, update: { sessionUpdate: 'agent_message_chunk', content: { type: 'text', text } } } });
 describe('endpoint conversation coordination', () => {
+  it('waits for confirmed host shutdown and preserves the close operation while draining', async () => {
+    const f = await fixture(); await f.manager.load(); await f.manager.bind(connection(f.socket));
+    const id = f.a.session.sessionId;
+    vi.mocked(f.api.close).mockResolvedValueOnce({ ...f.a.session, status: 'DRAINING' });
+    let confirm: (value: EndpointSessionSummary) => void = () => undefined;
+    vi.mocked(f.api.status).mockImplementationOnce(() => new Promise((resolve) => { confirm = resolve; }));
+    const closing = f.manager.close(id);
+    await vi.waitFor(() => expect(f.api.status).toHaveBeenCalled());
+    expect(f.manager.executionClosed(id)).toBe(false);
+    expect(f.manager.snapshot().conversations.find((entry) => entry.id === id)?.closeOperation).not.toBeNull();
+    expect(f.manager.snapshot().runs.find((run) => run.data.session.sessionId === id)?.data.session.status).toBe('DRAINING');
+    const closed = { ...f.a.session, status: 'CLOSED' as const }; f.setSessions([closed, f.b.session]);
+    confirm(closed); await closing;
+    expect(f.manager.executionClosed(id)).toBe(true);
+  });
+  it('reuses the original close operation after a lost shutdown confirmation', async () => {
+    const f = await fixture(); await f.manager.load(); await f.manager.bind(connection(f.socket));
+    const id = f.a.session.sessionId;
+    vi.mocked(f.api.close).mockResolvedValueOnce({ ...f.a.session, status: 'DRAINING' });
+    vi.mocked(f.api.status).mockRejectedValueOnce(new Error('confirmation lost'));
+    await expect(f.manager.close(id)).rejects.toThrow('confirmation lost');
+    expect(f.manager.executionClosed(id)).toBe(false);
+    await f.manager.close(id);
+    expect(vi.mocked(f.api.close).mock.calls[0]?.[1]).toBe(vi.mocked(f.api.close).mock.calls[1]?.[1]);
+    expect(f.manager.executionClosed(id)).toBe(true);
+  });
   it('creates a local conversation independently of old runs and scopes failed creation to it', async () => {
     const f = await fixture(); await f.manager.load(); await f.manager.bind(connection(f.socket));
     const input = { abaEndpointId: f.a.value.aba.id, workspaceId: 'fixture', runtimeProfileId: 'fixture', draft: 'first draft' };

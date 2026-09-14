@@ -45,7 +45,7 @@ func (server *Server) processAckFrame(
 	if err != nil {
 		return domain.ID{}, err
 	}
-	if session.Status != domain.SessionStatusActive || ack.GetKeyGeneration() != session.CurrentKeyGeneration {
+	if ack.GetKeyGeneration() != session.CurrentKeyGeneration {
 		return domain.ID{}, errors.New("ACK session is invalid")
 	}
 	expectedChannel, err := sessionChannelID(session.ID, session.ABAEndpointID, session.HCEndpointID)
@@ -84,6 +84,12 @@ func (server *Server) processAckFrame(
 	publicKey, err := signingJWK.PublicKey()
 	if err != nil || !awpcrypto.VerifyP1363LowS(publicKey, transcript, ack.GetSignature()) {
 		return domain.ID{}, errors.New("ACK signature is invalid")
+	}
+	if session.Status == domain.SessionStatusDraining || session.Status == domain.SessionStatusClosed {
+		return domain.ID{}, nil
+	}
+	if session.Status != domain.SessionStatusActive {
+		return domain.ID{}, errors.New("ACK session is not active")
 	}
 	_, err = server.persistence.AdvanceAck(ctx, domain.AckCursor{
 		SessionID: session.ID, KeyGeneration: ack.GetKeyGeneration(), Direction: direction,

@@ -102,6 +102,17 @@ func (server *Server) websocket(writer http.ResponseWriter, request *http.Reques
 	defer server.connections.remove(active)
 	defer active.close(websocket.CloseNormalClosure, "connection closed")
 	go active.runWriter()
+	if endpoint.Type == domain.EndpointTypeABA {
+		pending, err := server.persistence.PendingEndpointClosures(request.Context(), endpoint)
+		if err != nil {
+			return
+		}
+		for _, session := range pending {
+			if err := server.sendCloseTunnelRequest(session, server.now().UTC()); err != nil {
+				break
+			}
+		}
+	}
 	_ = connection.SetReadDeadline(time.Now().Add(2 * time.Duration(heartbeatIntervalMS) * time.Millisecond))
 	connection.SetPongHandler(func(string) error {
 		return server.connections.withCurrent(active, func() error {

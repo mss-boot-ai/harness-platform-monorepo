@@ -66,6 +66,7 @@ struct PendingOpen {
     receiver: Receiver<Result<AgentProcess, ProcessError>>,
     credential_id: [u8; 16],
     cancelled: bool,
+    close_requested: bool,
 }
 
 struct OpenContext<'a> {
@@ -291,6 +292,7 @@ impl ControlState {
                                 receiver,
                                 credential_id: *credential_id,
                                 cancelled: false,
+                                close_requested: false,
                             },
                         );
                         return Ok(Vec::new());
@@ -540,26 +542,27 @@ impl ControlState {
             .map_err(|_| GatewayError::Protocol)?;
         if let Some(pending) = self.starting.get_mut(&session_id) {
             pending.cancelled = true;
-            let receiver = pending.request.hc_endpoint_id.clone();
+            pending.close_requested = true;
+            return Ok(Vec::new());
+        }
+        let Some(session) = self.sessions.remove(&session_id) else {
             self.journal.close_session(session_id)?;
+            // No local runtime exists. Server-bound receipt lets the Platform
+            // resolve a lost earlier receipt without requiring old content keys.
             let payload = CloseTunnelResult {
                 session_id: session_id.to_vec(),
-                status: CloseTunnelStatus::Accepted as i32,
+                status: CloseTunnelStatus::AlreadyClosed as i32,
                 stable_error_code: String::new(),
             }
             .encode_to_vec();
             return Ok(vec![self.signed_control(
                 endpoint_id,
-                &receiver,
+                &[0; 16],
                 ControlType::CloseTunnelResult,
                 payload,
                 identity,
                 now_ms,
             )?]);
-        }
-        let Some(session) = self.sessions.remove(&session_id) else {
-            self.journal.close_session(session_id)?;
-            return Ok(Vec::new());
         };
         let receiver = session.material.recipient_hc_endpoint_id;
         drop(session);
@@ -1154,6 +1157,87 @@ mod tests {
     use base64::{Engine as _, engine::general_purpose::URL_SAFE_NO_PAD};
     use p256::ecdsa::SigningKey;
     use url::Url;
+
+    #[test]
+    fn cancelled_startup_receipt_follows_actual_cleanup_and_lease_release()
+    -> Result<(), Box<dyn std::error::Error>> {
+        let directory = tempfile::tempdir()?;
+        let workspace = WorkspaceProfile {
+            id: "project".into(),
+            display_name: "Project".into(),
+            path: fs::canonicalize(directory.path())?,
+            allowed_runtimes: vec!["fixture".into()],
+            follow_symlinks: false,
+        };
+        let runtime = RuntimeProfile {
+            id: "fixture".into(),
+            display_name: "Fixture".into(),
+            command: fs::canonicalize("/usr/bin/python3")?,
+            args: vec![format!(
+                "{}/tests/fixtures/duplex_agent.py",
+                env!("CARGO_MANIFEST_DIR")
+            )],
+            env_allow: Vec::new(),
+            max_sessions: None,
+        };
+        let platform = Url::parse("http://127.0.0.1:8082")?;
+        let store = DevFileKeyStore::new(directory.path().join("identity.json"), &platform, true)?;
+        store.initialize()?;
+        let identity = store.load()?;
+        let (sender, receiver) = sync_channel(1);
+        let (started, ready) = sync_channel(1);
+        let (release, gate) = sync_channel(1);
+        let child_runtime = runtime.clone();
+        let child_workspace = workspace.clone();
+        let worker = thread::spawn(move || {
+            let process = AgentProcess::start(&child_runtime, &child_workspace);
+            let _ = started.send(process.is_ok());
+            let _ = gate.recv();
+            let _ = sender.send(process);
+        });
+        assert!(ready.recv_timeout(std::time::Duration::from_secs(5))?);
+        let id = [4; 16];
+        let mut state = ControlState::new(Journal::memory(1 << 20));
+        state.starting.insert(
+            id,
+            PendingOpen {
+                request: OpenTunnelRequest {
+                    session_id: id.to_vec(),
+                    hc_endpoint_id: vec![3; 16],
+                    ..Default::default()
+                },
+                decision: rejected("TEST_CANCELLED"),
+                receiver,
+                credential_id: [5; 16],
+                cancelled: true,
+                close_requested: true,
+            },
+        );
+        assert!(
+            state
+                .poll(&[2; 16], &identity, SystemTime::now())?
+                .is_empty()
+        );
+        assert!(matches!(
+            AgentProcess::start(&runtime, &workspace),
+            Err(ProcessError::WorkspaceBusy)
+        ));
+        release.send(())?;
+        worker.join().map_err(|_| "startup test worker failed")?;
+        let packets = state.poll(&[2; 16], &identity, SystemTime::now())?;
+        assert_eq!(packets.len(), 1);
+        let packet = WirePacket::decode(packets[0].as_slice())?;
+        let Some(wire_packet::Body::Control(control)) = packet.body else {
+            return Err("missing close receipt".into());
+        };
+        assert_eq!(
+            CloseTunnelResult::decode(control.payload.as_slice())?.status,
+            CloseTunnelStatus::Accepted as i32
+        );
+        let replacement = AgentProcess::start(&runtime, &workspace)?;
+        drop(replacement);
+        Ok(())
+    }
 
     #[test]
     fn verifies_platform_control_and_returns_signed_policy_result()

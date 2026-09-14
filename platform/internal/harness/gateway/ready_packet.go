@@ -106,6 +106,9 @@ func (server *Server) handleReadyPacket(
 	if err != nil {
 		return err
 	}
+	if receiverID.IsZero() {
+		return nil
+	} // Authenticated late traffic for a fenced Run.
 	if err := server.connections.send(receiverID, encoded); err != nil &&
 		!errors.Is(err, errConnectionOffline) && !errors.Is(err, errConnectionBackpressure) {
 		return err
@@ -151,9 +154,16 @@ func (server *Server) processOpenTunnelResult(
 		return domain.ID{}, err
 	}
 	if session.ABAEndpointID != endpoint.ID || session.HCEndpointID != receiverID ||
-		session.Status != domain.SessionStatusCreating || result.GetActiveKeyGeneration() != 0 ||
+		result.GetActiveKeyGeneration() != 0 ||
 		!capabilitySubset(result.GetNegotiatedCapabilityHints(), session.RequestedCapabilities) {
 		return domain.ID{}, errors.New("OpenTunnelResult session binding is invalid")
+	}
+	if session.Status == domain.SessionStatusDraining || session.Status == domain.SessionStatusClosed {
+		_ = server.sendCloseTunnelRequest(session, now)
+		return domain.ID{}, nil
+	}
+	if session.Status != domain.SessionStatusCreating {
+		return domain.ID{}, errors.New("OpenTunnelResult session is not creating")
 	}
 	switch result.GetStatus() {
 	case awpv1.OpenTunnelStatus_OPEN_TUNNEL_STATUS_ACCEPTED, awpv1.OpenTunnelStatus_OPEN_TUNNEL_STATUS_ALREADY_OPEN:
@@ -216,11 +226,17 @@ func (server *Server) processSessionKeyPackage(
 	}
 	if issuerID != endpoint.ID || credentialID != credential.ID || credential.EndpointID != endpoint.ID ||
 		receiverID != session.HCEndpointID || !bytes.Equal(control.GetReceiverEndpointId(), receiverID[:]) ||
-		session.ABAEndpointID != endpoint.ID || session.Status != domain.SessionStatusWaitingKey ||
+		session.ABAEndpointID != endpoint.ID ||
 		message.GetKeyGeneration() != 1 || message.GetCryptoSuite() != keyPackageSuiteName ||
 		message.GetPolicyRevision() != 1 || len(message.GetHpkeEnc()) != 65 ||
 		len(message.GetHpkeCiphertext()) != 173 || len(message.GetIssuerSignature()) != 64 {
 		return domain.ID{}, errors.New("SessionKeyPackage binding is invalid")
+	}
+	if session.Status == domain.SessionStatusDraining || session.Status == domain.SessionStatusClosed {
+		return domain.ID{}, nil
+	}
+	if session.Status != domain.SessionStatusWaitingKey {
+		return domain.ID{}, errors.New("SessionKeyPackage session is not waiting for a key")
 	}
 	notBefore := time.UnixMilli(message.GetNotBeforeMs()).UTC()
 	expiresAt := time.UnixMilli(message.GetExpiresAtMs()).UTC()

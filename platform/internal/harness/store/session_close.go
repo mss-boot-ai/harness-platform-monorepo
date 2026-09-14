@@ -14,6 +14,28 @@ const (
 	endpointSessionCloseAction    = "session.close"
 )
 
+func (store *Store) PendingEndpointClosures(ctx context.Context, endpoint domain.Endpoint) ([]domain.Session, error) {
+	if err := requireM1Scope(store, ctx, endpoint.OwnerUserID); err != nil {
+		return nil, err
+	}
+	if endpoint.Type != domain.EndpointTypeABA || endpoint.ID.IsZero() {
+		return nil, domain.NewProblem(domain.CodeInvalidArgument, "ABA closure scope is required", nil)
+	}
+	var rows []sessionRow
+	if err := store.db.WithContext(ctx).Where("aba_endpoint_id = ? AND owner_user_id = ? AND tenant_id = ? AND status = ?", endpoint.ID.String(), endpoint.OwnerUserID, endpoint.TenantID, string(domain.SessionStatusDraining)).Order("updated_at ASC").Limit(64).Find(&rows).Error; err != nil {
+		return nil, classifyPersistence(err, "list pending endpoint closures")
+	}
+	result := make([]domain.Session, 0, len(rows))
+	for _, row := range rows {
+		value, err := sessionFromRow(row)
+		if err != nil {
+			return nil, err
+		}
+		result = append(result, value)
+	}
+	return result, nil
+}
+
 func (store *Store) CloseEndpointSession(
 	ctx context.Context,
 	session domain.Session,
@@ -33,7 +55,7 @@ func (store *Store) CloseEndpointSession(
 		audit.ActorType != domain.AuditActorEndpoint || audit.ActorID != session.HCEndpointID.String() ||
 		audit.Action != endpointSessionCloseAction || audit.ObjectType != "session" || audit.ObjectID != session.ID.String() ||
 		len(responseJSON) == 0 || !bytes.Contains(responseJSON, []byte(session.ID.String())) ||
-		!bytes.Contains(responseJSON, []byte(`"status":"CLOSED"`)) {
+		(!bytes.Contains(responseJSON, []byte(`"status":"CLOSED"`)) && !bytes.Contains(responseJSON, []byte(`"status":"DRAINING"`))) {
 		return domain.Session{}, nil, false, domain.NewProblem(domain.CodeInvalidArgument, "endpoint session close transaction input is invalid", nil)
 	}
 	var replayed bool
@@ -68,7 +90,7 @@ func (store *Store) CloseEndpointSession(
 			return err
 		}
 		previous := current.RowVersion
-		if err := current.Close(session.UpdatedAt); err != nil {
+		if err := current.RequestClose(session.UpdatedAt); err != nil {
 			return err
 		}
 		result := transaction.db.WithContext(ctx).Model(new(sessionRow)).Where(

@@ -478,7 +478,14 @@ export class ConversationManager {
       if (runId === null) return;
       const operation = entry.closeOperation?.runId === runId ? entry.closeOperation.id : crypto.randomUUID();
       await this.changeEntry(id, (value) => ({ ...value, closeOperation: { runId, id: operation } }));
-      const session = await this.api.close(runId, operation);
+      let session = await this.api.close(runId, operation);
+      if (session.status === 'DRAINING') await this.changeEntry(id, (value) => ({ ...value, notice: '结束请求已保存，正在等待执行端停止并释放项目。尚未确认前不会开始替代运行。' }));
+      for (let attempt = 0; session.status === 'DRAINING' && attempt < 60; attempt += 1) {
+        if (session.sessionId !== runId || session.hcEndpointId !== this.endpointId) throw new Error('Closure binding changed');
+        await this.controllers.get(runId)?.observe(session);
+        await delay(); this.assertOpen();
+        session = await this.api.status(runId);
+      }
       if (session.sessionId !== runId || session.hcEndpointId !== this.endpointId || !isTerminal(session.status)) throw new Error('Execution closure is not confirmed');
       this.knownClosed.add(runId); this.allowed.delete(runId); delete this.recovery[runId];
       this.unrecoverable = this.unrecoverable.filter((item) => item.sessionId !== runId);

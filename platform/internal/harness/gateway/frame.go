@@ -58,7 +58,7 @@ func (server *Server) processEncryptedFrame(
 	if err != nil {
 		return err
 	}
-	if session.Status != domain.SessionStatusActive || frame.GetKeyGeneration() != session.CurrentKeyGeneration ||
+	if frame.GetKeyGeneration() != session.CurrentKeyGeneration ||
 		senderID != endpoint.ID || !validFrameRoute(endpoint, session, receiverID, frame.GetDirection()) {
 		return errors.New("encrypted frame route is invalid")
 	}
@@ -89,6 +89,14 @@ func (server *Server) processEncryptedFrame(
 	) {
 		return errors.New("encrypted frame signature is invalid")
 	}
+	// A close races with already-signed output and ACKs on a shared connection.
+	// Verify its route/signature, but neither store nor relay it after the fence.
+	if session.Status == domain.SessionStatusDraining || session.Status == domain.SessionStatusClosed {
+		return nil
+	}
+	if session.Status != domain.SessionStatusActive {
+		return errors.New("encrypted frame session is not active")
+	}
 	contentHash := sha256.New()
 	_, _ = contentHash.Write(aad)
 	_, _ = contentHash.Write(frame.GetCiphertext())
@@ -111,6 +119,12 @@ func (server *Server) processEncryptedFrame(
 	if _, err := authorized.PutAuthorizedEndpointFrame(
 		ctx, endpoint.OwnerUserID, endpoint.TenantID, credential.ID, value, now,
 	); err != nil {
+		if domain.HasCode(err, domain.CodeInvalidState) {
+			current, lookupErr := server.persistence.GetSession(ctx, session.ID)
+			if lookupErr == nil && (current.Status == domain.SessionStatusDraining || current.Status == domain.SessionStatusClosed) {
+				return nil
+			}
+		}
 		return err
 	}
 	if err := server.connections.send(receiverID, encoded); err != nil &&

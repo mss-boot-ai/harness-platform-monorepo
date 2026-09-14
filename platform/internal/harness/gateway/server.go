@@ -48,6 +48,7 @@ type Persistence interface {
 	MarkEndpointSeen(context.Context, domain.ID, time.Time) error
 	CreateEndpointSession(context.Context, domain.Session, domain.IdempotencyRecord, domain.SecurityAuditEvent, int, []byte) (domain.Session, []byte, bool, error)
 	CloseEndpointSession(context.Context, domain.Session, domain.IdempotencyRecord, domain.SecurityAuditEvent, []byte) (domain.Session, []byte, bool, error)
+	PendingEndpointClosures(context.Context, domain.Endpoint) ([]domain.Session, error)
 	GetSession(context.Context, domain.ID) (domain.Session, error)
 	UpdateSession(context.Context, domain.ID, func(*domain.Session) error) (domain.Session, error)
 	ListEndpoints(context.Context, string, string, int) ([]domain.Endpoint, error)
