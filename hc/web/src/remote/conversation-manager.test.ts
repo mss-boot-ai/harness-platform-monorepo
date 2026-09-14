@@ -283,14 +283,15 @@ describe('endpoint conversation coordination', () => {
     expect(f.manager.snapshot().selectedId).toBe(f.b.session.sessionId);
     expect((await f.a.store.readWorkspace()).value.selectedId).toBe(f.b.session.sessionId);
   });
-  it('holds the local workspace guard while a first prompt is still being persisted', async () => {
+  it('fences conflicting pre-upgrade idle runs until one is explicitly closed', async () => {
     const f = await fixture();
     const second = { ...f.b.value, aba: f.a.value.aba, session: { ...f.b.session, abaEndpointId: f.a.session.abaEndpointId, workspaceId: f.a.session.workspaceId } };
     await f.a.store.write(second, 1); f.setSessions([f.a.session, second.session]);
     await f.manager.load(); await f.manager.bind(connection(f.socket));
-    const first = f.manager.prompt(f.a.session.sessionId, 'first workspace writer');
-    await expect(f.manager.prompt(f.b.session.sessionId, 'competing writer')).rejects.toThrow('workspace');
-    await first;
+    expect(() => f.manager.prompt(f.a.session.sessionId, 'first workspace writer')).toThrow('workspace');
+    expect(() => f.manager.prompt(f.b.session.sessionId, 'competing writer')).toThrow('workspace');
+    await f.manager.close(f.b.session.sessionId);
+    await f.manager.prompt(f.a.session.sessionId, 'one remaining workspace writer');
     expect(f.manager.snapshot().runs.find((item) => item.data.session.sessionId === f.b.session.sessionId)?.data.awaiting).toBeNull();
   });
   it('routes interleaved events with colliding RPC IDs to independent durable controllers', async () => {
