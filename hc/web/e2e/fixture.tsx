@@ -33,7 +33,7 @@ function Fixture() {
   return <><ChatWorkspace draft={draft} onDraftChange={setDraft} onSubmit={send}
     onNewChat={() => { setMessages([]); setEnded(false); setDraft(''); }} onEndChat={() => { setResponding(false); setEnded(true); }}
     onOpenSettings={() => setSettings(true)} onSelectConversation={() => undefined}
-    conversations={messages.length === 0 ? [] : [{ id: 'current', title: 'Go 健康检查与实现思路', detail: '本页会话' }]}
+    conversations={messages.length === 0 ? [] : [{ id: 'current', title: 'Go 健康检查与实现思路', detail: '合成组件示例' }]}
     selectedConversationId={messages.length === 0 ? null : 'current'} messages={messages} title="Go 健康检查与实现思路" agent="我的开发 Agent"
     online={scenario !== 'offline'} connected busy={false} responding={responding} canSubmit={!ended && scenario !== 'offline'} readOnly={ended} hasActiveSession={!ended && messages.length > 0}
     notice={scenario === 'offline' ? '连接已断开，草稿与本页记录已保留。请重新连接，不会自动重发。' : null} error={null}

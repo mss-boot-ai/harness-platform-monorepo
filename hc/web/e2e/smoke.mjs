@@ -48,10 +48,13 @@ try {
   await input.fill('回复期间仍可编辑草稿'); await input.press('Enter');
   assert.equal(await page.locator('.message-user').count(), before + 1);
   await page.getByText('已收到。这是组件测试回复。', { exact: true }).waitFor();
-  await page.getByRole('button', { name: '新建对话', exact: true }).click();
-  await page.getByRole('dialog', { name: '结束当前会话并新建？', exact: true }).waitFor();
+  await page.getByRole('button', { name: '结束会话', exact: true }).click();
+  await page.getByRole('dialog', { name: '结束当前会话？', exact: true }).waitFor();
   await page.getByRole('button', { name: '继续当前会话', exact: true }).click();
   assert.equal(await input.inputValue(), '回复期间仍可编辑草稿');
+  await page.getByRole('button', { name: '新建对话', exact: true }).click();
+  await page.getByRole('heading', { name: '今天想完成什么？', exact: true }).waitFor();
+  assert.equal(await page.getByRole('dialog', { name: '结束当前会话？', exact: true }).isVisible(), false);
 
   await page.goto(`${base}/e2e/fixture.html?scenario=long`, { waitUntil: 'networkidle' });
   await page.locator('.chat-scroll').evaluate((element) => { element.scrollTop = 0; element.dispatchEvent(new Event('scroll')); });
@@ -81,6 +84,25 @@ try {
   assert.ok(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth));
   await page.setViewportSize({ width: 320, height: 700 });
   assert.ok(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth));
+  // Production App (not the synthetic ChatWorkspace): a waiting tab cannot mutate endpoint state.
+  const owner = await context.newPage();
+  await owner.goto(base, { waitUntil: 'networkidle' });
+  await owner.locator('.connection-badge').click();
+  await owner.getByRole('dialog', { name: '连接与设置', exact: true }).waitFor();
+  const waiting = await context.newPage(); const waitingMutations = []; const waitingSockets = [];
+  waiting.on('request', (request) => { if (request.method() === 'POST') waitingMutations.push(new URL(request.url()).pathname); });
+  waiting.on('websocket', () => waitingSockets.push('opened'));
+  await waiting.goto(base, { waitUntil: 'networkidle' });
+  await waiting.getByText(/另一个标签页正在使用此浏览器的安全连接/).waitFor();
+  await waiting.locator('.connection-badge').click();
+  assert.equal(await waiting.getByRole('dialog', { name: '连接与设置', exact: true }).count(), 0);
+  assert.deepEqual(waitingMutations, []); assert.deepEqual(waitingSockets, []);
+  await owner.close();
+  await waiting.getByText(/另一个标签页正在使用此浏览器的安全连接/).waitFor({ state: 'hidden' });
+  await waiting.locator('.connection-badge').click();
+  await waiting.getByRole('dialog', { name: '连接与设置', exact: true }).waitFor();
+  assert.deepEqual(waitingMutations, []); assert.deepEqual(waitingSockets, []);
+  await waiting.close();
   assert.deepEqual(failures, []);
-  console.log('HC browser smoke passed: real disconnected app, synthetic conversation fixture, IME, copy, draft, confirmation, scroll and mobile.');
+  console.log('HC browser smoke passed: production App tab ownership/handoff, disconnected app, synthetic conversation fixture, IME, copy, draft, explicit close, new chat, scroll and mobile.');
 } finally { await browser.close(); }

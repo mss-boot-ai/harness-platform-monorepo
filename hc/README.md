@@ -16,9 +16,15 @@ The H5 MVP provides:
 - a bounded IndexedDB Inbox, signed ACK, exact encrypted-frame Resume replay and dedupe;
 - explicit stale-Session cleanup, CloseTunnel, offline recovery and `UNCERTAIN` UI.
 
-Private Session keys remain in page memory. A full page reload therefore fails closed and
-offers to close unrecoverable active Sessions; same-page network reconnect retains keys
-and sends signed ResumeState.
+Session keys, conversation history, pending requests, exact outbound packets and drafts are
+encrypted in IndexedDB using a browser-generated non-exportable wrapping key. The production
+application acquires the installation's Web Lock before identity or credential mutations,
+then verifies current endpoint/session authorization and ABA fingerprints before recovery.
+New conversations do not close existing sessions; each has its own controller, draft and
+event stream. Unknown, expired, revoked or unrecoverable state remains explicitly non-writing.
+Recovery applies to the same browser installation; independent-device recovery and persistent
+execution-host restart recovery remain unimplemented. A compromised same-origin script can
+still use the browser's key capabilities; this is not hardware-backed storage.
 
 ## Development
 
@@ -33,4 +39,6 @@ pnpm build
 pnpm dev
 ```
 
-Private keys, access credentials, refresh credentials, and session keys must never be serialized to JSON or written to Local Storage.
+Endpoint private keys and access/refresh credentials must never be exported to JSON or written
+to Local Storage. Session recovery material is serialized only inside the encrypted local vault;
+plaintext keys, drafts and transcripts are never persisted in ordinary browser storage.

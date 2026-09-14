@@ -25,7 +25,7 @@ export function ChatWorkspace(props: ChatWorkspaceProps) {
   const [collapsed, setCollapsed] = useState(false);
   const [searching, setSearching] = useState(false);
   const [query, setQuery] = useState('');
-  const [confirm, setConfirm] = useState<'new' | 'end' | null>(null);
+  const [confirm, setConfirm] = useState(false);
   const [atBottom, setAtBottom] = useState(true);
   const viewport = useRef<HTMLDivElement>(null);
   const textarea = useRef<HTMLTextAreaElement>(null);
@@ -54,14 +54,14 @@ export function ChatWorkspace(props: ChatWorkspaceProps) {
   }, []);
   const newChat = () => {
     setSidebarOpen(false);
-    if (props.hasActiveSession) setConfirm('new'); else props.onNewChat();
+    props.onNewChat();
   };
   const submit = () => {
     if (props.draft.trim() === '' || !props.canSubmit || props.busy || props.responding) return;
     nearBottom.current = true; setAtBottom(true); props.onSubmit();
   };
   const composer = <div className="composer-wrap">
-    {props.readOnly ? <div className="readonly-note">这是一份本页只读记录。要继续工作，请新建对话；不会重新执行旧消息。</div> : <>
+    {props.readOnly ? <div className="readonly-note">此对话当前只读。请核对会话或端点状态；历史消息不会自动重新执行。</div> : <>
       <form className="composer" onSubmit={(event) => { event.preventDefault(); submit(); }}>
         <label className="sr-only" htmlFor="chat-prompt">消息</label>
         <textarea id="chat-prompt" ref={textarea} rows={1} value={props.draft} maxLength={16_000}
@@ -76,7 +76,7 @@ export function ChatWorkspace(props: ChatWorkspaceProps) {
           }} />
         <div className="composer-actions"><span className="composer-context"><Icon name="lock" />{props.connected ? props.online ? '加密对话' : '连接已断开' : '连接自己的 Agent'}</span>
           {props.responding && props.onCancelTurn !== undefined ? <button className="send-button stop-button" type="button" aria-label={props.cancelPending ? '等待停止确认' : '停止本轮'} title="停止当前轮次，保留会话；已执行的动作不会撤销" disabled={props.busy || props.cancelPending} onClick={props.onCancelTurn}><Icon name="stop" /></button>
-            : props.responding && props.onEndChat !== null ? <button className="send-button stop-button" type="button" aria-label="结束当前会话" title="结束会话；已执行的操作不会撤销" disabled={props.busy} onClick={() => setConfirm('end')}><Icon name="stop" /></button>
+            : props.responding && props.onEndChat !== null ? <button className="send-button stop-button" type="button" aria-label="结束当前会话" title="结束会话；已执行的操作不会撤销" disabled={props.busy} onClick={() => setConfirm(true)}><Icon name="stop" /></button>
             : <button className="send-button" type="submit" aria-label={props.connected ? '发送消息' : '连接 Agent'} title={props.connected ? '发送消息' : '先连接 Agent，草稿会保留'} disabled={!props.canSubmit || props.busy || props.draft.trim() === ''}><Icon name="arrow" /></button>}
         </div>
       </form>
@@ -89,21 +89,21 @@ export function ChatWorkspace(props: ChatWorkspaceProps) {
     <aside className="chat-sidebar" aria-label="会话导航">
       <div className="sidebar-brand"><span className="brand-mark">H</span><strong>Harness</strong><button type="button" className="icon-button desktop-only" aria-label="收起侧边栏" onClick={() => setCollapsed(true)}><Icon name="menu" /></button><button type="button" className="icon-button mobile-only" aria-label="关闭侧边栏" onClick={() => setSidebarOpen(false)}><Icon name="close" /></button></div>
       <button type="button" className="new-chat-button" disabled={props.busy} onClick={newChat}><Icon name="plus" /><span>新建对话</span></button>
-      <button type="button" className="sidebar-action" onClick={() => setSearching((value) => !value)} aria-expanded={searching}><Icon name="search" />搜索本页会话</button>
-      {searching ? <input className="conversation-search" autoFocus type="search" value={query} onChange={(event) => setQuery(event.target.value)} placeholder="搜索对话…" aria-label="搜索本页会话" /> : null}
-      <div className="sidebar-section-label">本页会话</div>
+      <button type="button" className="sidebar-action" onClick={() => setSearching((value) => !value)} aria-expanded={searching}><Icon name="search" />搜索本地会话</button>
+      {searching ? <input className="conversation-search" autoFocus type="search" value={query} onChange={(event) => setQuery(event.target.value)} placeholder="搜索对话…" aria-label="搜索本地会话" /> : null}
+      <div className="sidebar-section-label">本地会话</div>
       <nav className="conversation-list" aria-label="对话列表">
         {filtered.map((item) => <button type="button" key={item.id} className={`conversation-item ${item.id === props.selectedConversationId ? 'selected' : ''}`} aria-current={item.id === props.selectedConversationId ? 'page' : undefined}
           onClick={() => { props.onSelectConversation(item.id); setSidebarOpen(false); }}><span>{item.title}</span><small>{item.detail}</small></button>)}
         {filtered.length === 0 ? <p className="sidebar-empty">{query !== '' ? '没有匹配的对话' : '开始一段对话，它会出现在这里。'}</p> : null}
       </nav>
-      <div className="sidebar-footer"><p>记录仅保留在本页，不上传明文。<br />刷新后不保证可恢复会话。</p><button type="button" className="account-button" onClick={() => { props.onOpenSettings(); setSidebarOpen(false); }}><span className="account-avatar"><Icon name="settings" /></span><span><strong>连接与设置</strong><small>{props.online ? '安全连接已就绪' : props.connected ? '连接已断开' : '连接你的工作环境'}</small></span><Icon name="chevron" /></button></div>
+      <div className="sidebar-footer"><p>历史与草稿在此浏览器中加密保存。<br />恢复需要原端点密钥和有效授权。</p><button type="button" className="account-button" onClick={() => { props.onOpenSettings(); setSidebarOpen(false); }}><span className="account-avatar"><Icon name="settings" /></span><span><strong>连接与设置</strong><small>{props.online ? '安全连接已就绪' : props.connected ? '连接已断开' : '连接你的工作环境'}</small></span><Icon name="chevron" /></button></div>
     </aside>
     <main className="chat-main">
       <header className="chat-header"><div className="header-left"><button type="button" className="icon-button sidebar-toggle" aria-label="展开会话导航" aria-expanded={sidebarOpen} onClick={() => { setCollapsed(false); setSidebarOpen(true); }}><Icon name="menu" /></button>
         {props.targetSettings !== null ? <details className="agent-picker"><summary><strong>{props.agent || '选择 Agent'}</strong><Icon name="chevron" /></summary><div className="agent-popover">{props.targetSettings}</div></details>
           : <button className="header-agent" type="button" onClick={props.onOpenSettings}>Harness<Icon name="chevron" /></button>}
-      </div><button className={`connection-badge ${props.online ? 'connected' : ''}`} type="button" onClick={props.onOpenSettings}><span className="connection-dot" />{props.online ? '已连接' : '连接 Agent'}</button></header>
+      </div><div className="header-left">{props.onEndChat !== null && props.hasActiveSession ? <button type="button" className="secondary-button" disabled={props.busy || !props.online} onClick={() => setConfirm(true)}>结束会话</button> : null}<button className={`connection-badge ${props.online ? 'connected' : ''}`} type="button" onClick={props.onOpenSettings}><span className="connection-dot" />{props.online ? '已连接' : '连接 Agent'}</button></div></header>
       {props.notice !== null ? <div className="chat-notice" role="status">{props.notice}</div> : null}
       {props.error !== null ? <div className="chat-error" role="alert">{props.error}</div> : null}
       <div className={`chat-scroll ${empty ? 'is-empty' : ''}`} ref={viewport} onScroll={() => {
@@ -129,6 +129,6 @@ export function ChatWorkspace(props: ChatWorkspaceProps) {
       {!empty ? <div className="composer-dock">{!atBottom ? <button className="latest-button" type="button" onClick={() => { nearBottom.current = true; setAtBottom(true); viewport.current?.scrollTo({ top: viewport.current.scrollHeight, behavior: window.matchMedia('(prefers-reduced-motion: reduce)').matches ? 'auto' : 'smooth' }); }}><Icon name="down" />回到最新</button> : null}{composer}</div> : null}
       <span className="sr-only" role="status">{props.responding ? 'Agent 正在回复' : '可以继续操作'}</span>
     </main>
-    <Dialog open={confirm !== null} onClose={() => setConfirm(null)} title={confirm === 'new' ? '结束当前会话并新建？' : '结束当前会话？'}><p>将向执行端发送关闭会话请求。已经执行的操作不会撤销；此操作不是仅停止显示文字。</p><div className="dialog-actions"><button className="secondary-button" type="button" onClick={() => setConfirm(null)}>继续当前会话</button><button className="primary-button" type="button" onClick={() => { const action = confirm; setConfirm(null); if (action === 'new') props.onNewChat(); else props.onEndChat?.(); }}>{confirm === 'new' ? '结束并新建' : '结束会话'}</button></div></Dialog>
+    <Dialog open={confirm} onClose={() => setConfirm(false)} title="结束当前会话？"><p>将向执行端发送关闭当前会话的请求。其他会话继续保留，已经执行的操作不会撤销。</p><div className="dialog-actions"><button className="secondary-button" type="button" onClick={() => setConfirm(false)}>继续当前会话</button><button className="primary-button" type="button" onClick={() => { setConfirm(false); props.onEndChat?.(); }}>确认结束</button></div></Dialog>
   </div>;
 }

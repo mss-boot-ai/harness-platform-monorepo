@@ -1,11 +1,11 @@
-import type { EndpointIdentity } from '@harness/hc-core';
 import { useState, type FormEvent } from 'react';
-import { HcApiError, loginBrowserSession, refreshEndpointSession, registerBrowserEndpoint, type RegistrationSession } from './api';
+import { HcApiError, type RegistrationSession } from './api';
+import type { EndpointAccess } from './remote/endpoint-access';
 interface PlatformSetupProps {
-  readonly identity: EndpointIdentity; readonly onRegistered: (session: RegistrationSession) => void;
+  readonly access: EndpointAccess;
   readonly registration: RegistrationSession | null;
 }
-export function PlatformSetup({ identity, onRegistered, registration }: PlatformSetupProps) {
+export function PlatformSetup({ access, registration }: PlatformSetupProps) {
   const [username, setUsername] = useState(''); const [password, setPassword] = useState('');
   const [busy, setBusy] = useState(false); const [error, setError] = useState<string | null>(null);
   const submit = async (event: FormEvent<HTMLFormElement>) => {
@@ -14,8 +14,7 @@ export function PlatformSetup({ identity, onRegistered, registration }: Platform
     if (username.trim() === '' || password === '') { setError('请输入用户名和密码。'); return; }
     setBusy(true); setError(null);
     try {
-      await loginBrowserSession(username.trim(), password); setPassword('');
-      onRegistered(await registerBrowserEndpoint(identity, 'H5 browser'));
+      await access.login(username.trim(), password); setPassword('');
     } catch (cause) {
       setPassword(''); setError(cause instanceof HcApiError ? `${cause.message}（${cause.code}）` : '暂时无法登录，请检查账户和网络后重试。');
     } finally { setBusy(false); }
@@ -23,7 +22,7 @@ export function PlatformSetup({ identity, onRegistered, registration }: Platform
   const restore = async () => {
     if (busy) return;
     setBusy(true); setError(null);
-    try { onRegistered(await refreshEndpointSession(identity)); }
+    try { await access.refresh(); }
     catch (cause) { setError(cause instanceof HcApiError ? `${cause.message}（${cause.code}）` : '登录已失效，请重新登录。'); }
     finally { setBusy(false); }
   };

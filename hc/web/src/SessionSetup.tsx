@@ -1,454 +1,164 @@
-import {
-  createSessionKeyPackageAckPacket, createHCToABAFramePacket, createHCAckFramePacket,
-  createHCResumeStatePacket, Direction, IndexedDbSecureStore, openABAToHCFramePacket,
-  openABAUncertainErrorPacket, openSessionKeyPackagePacket,
-  type EndpointIdentity, type OpenedSessionKeyPackage, type ReadyGatewayConnection,
-} from '@harness/hc-core';
-import { useCallback, useEffect, useRef, useState } from 'react';
-import {
-  accessCredentialNeedsRefresh, closeEndpointSession, createEndpointSession, getEndpointSession,
-  HcApiError, listABAEndpoints, listEndpointSessions, refreshEndpointSession,
-  type ABAEndpointSummary, type EndpointSessionSummary, type RegistrationSession,
-} from './api';
+import { type IndexedDbSecureStore, type ReadyGatewayConnection } from '@harness/hc-core';
+import { useEffect, useRef, useState, useSyncExternalStore } from 'react';
+import { closeEndpointSession, createEndpointSession, listABAEndpoints, listEndpointSessions, type RegistrationSession } from './api';
 import { ChatWorkspace } from './chat/ChatWorkspace';
+import { conversationTitle, MAX_MESSAGES } from './chat/model';
+import { ConversationManager, type ManagerView } from './remote/conversation-manager';
+import { ConversationStore, isTerminal } from './remote/conversation-store';
+import type { EndpointAccess } from './remote/endpoint-access';
+import type { RegisterEndpointShutdown } from './remote/endpoint-owner';
 import { RuntimeActivity, RuntimeConfiguration, type PendingConfig } from './remote/RuntimeControls';
-import { closeTurnPermissions, configRequest, confirmConfiguration, markPermissionSubmitted, newRuntimeState,
-  permissionDecision, readDescriptor, receiveRuntime, record, type ConfigOption, type RpcId, type RuntimeState } from './remote/runtime-state';
-import {
-  conversationTitle, MAX_MESSAGES, MAX_SAVED_CONVERSATIONS, mergeSessionObservation, receiveAcp, settleTurn, startTurn,
-  type ChatMessage, type SavedConversation,
-} from './chat/model';
 
-const POLL_ATTEMPTS = 20;
-const terminal = (status: EndpointSessionSummary['status']) => ['CLOSED', 'FAILED', 'ABA_REVOKED'].includes(status);
-const delay = () => new Promise<void>((resolve) => setTimeout(resolve, 250));
-const textEncoder = new TextEncoder();
+const loading: ManagerView = { status: 'loading', online: false, creating: false, workspace: null, conversations: [],
+  endpoints: [], unrecoverable: [], recovery: {}, error: null, pendingWrites: 0 };
+const noSubscription = () => () => undefined;
+const loadingSnapshot = () => loading;
 
-export function SessionSetup({ connection, identity, onRegistration, registration, secureStore,
-  draft, onDraftChange, onOpenSettings, online,
-}: {
-  readonly connection: ReadyGatewayConnection; readonly identity: EndpointIdentity;
-  readonly onRegistration: (registration: RegistrationSession) => void;
-  readonly registration: RegistrationSession; readonly secureStore: IndexedDbSecureStore | null;
-  readonly draft: string; readonly onDraftChange: (value: string) => void;
-  readonly onOpenSettings: () => void; readonly online: boolean;
+export function SessionSetup({ connection, access, registration, secureStore, initialDraft, onOpenSettings, registerShutdown }: {
+  readonly connection: ReadyGatewayConnection | null; readonly access: EndpointAccess;
+  readonly registration: RegistrationSession; readonly secureStore: IndexedDbSecureStore;
+  readonly initialDraft: string; readonly onOpenSettings: () => void; readonly registerShutdown: RegisterEndpointShutdown;
 }) {
-  const [endpoints, setEndpoints] = useState<readonly ABAEndpointSummary[]>([]);
+  const [manager, setManager] = useState<ConversationManager | null>(null);
+  const initial = useRef(initialDraft);
   const [selectedABA, setSelectedABA] = useState('');
   const [runtimeProfileId, setRuntimeProfileId] = useState(import.meta.env.VITE_HARNESS_DEFAULT_RUNTIME_PROFILE_ID?.trim() || 'test-agent');
   const [workspaceId, setWorkspaceId] = useState(import.meta.env.VITE_HARNESS_DEFAULT_WORKSPACE_ID?.trim() || 'harness-platform');
-  const [session, setSession] = useState<EndpointSessionSummary | null>(null);
-  const [busy, setBusy] = useState(false);
-  const [responding, setResponding] = useState(false);
-  const [blocked, setBlocked] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  const [keyReady, setKeyReady] = useState(false);
-  const [runtime, setRuntime] = useState<RuntimeState>(newRuntimeState);
-  const runtimeRef = useRef(runtime);
-  const [pendingConfig, setPendingConfig] = useState<PendingConfig | null>(null);
-  const [cancelPending, setCancelPending] = useState(false);
-  const controlRequests = useRef(new Map<string, { readonly kind: 'describe' | 'config'; readonly option?: ConfigOption }>());
-  const describedFor = useRef<string | null>(null);
-  const [messages, setMessages] = useState<readonly ChatMessage[]>([]);
-  const [saved, setSaved] = useState<readonly SavedConversation[]>([]);
-  const [viewId, setViewId] = useState<string | null>(null);
-  const [unrecoverable, setUnrecoverable] = useState<readonly EndpointSessionSummary[]>([]);
-  const [reload, setReload] = useState(0);
-  const sessionRef = useRef<EndpointSessionSummary | null>(null);
-  const endpointsRef = useRef(endpoints);
-  const messagesRef = useRef(messages);
-  const draftRef = useRef(draft);
-  const enqueuePacket = useRef<(encoded: Uint8Array) => void>(() => undefined);
-  const pendingPackets = useRef<Uint8Array[]>([]);
-  const processing = useRef<Promise<void>>(Promise.resolve());
-  const openedPackage = useRef<OpenedSessionKeyPackage | null>(null);
-  const lastPackageSequence = useRef(0n);
-  const outboundControlSequence = useRef(0n);
-  const outboundFrameSequence = useRef(0n);
-  const inboundFrameSequence = useRef(0n);
-  const connectionGeneration = useRef(connection.connectionGeneration);
-  const awaiting = useRef<string | null>(null);
-  const queuedPrompt = useRef<string | null>(null);
-  const actionBusy = useRef(false);
-  const epoch = useRef(0);
-  const closeKeys = useRef(new Map<string, string>());
-
-  useEffect(() => { endpointsRef.current = endpoints; }, [endpoints]);
-  useEffect(() => { draftRef.current = draft; }, [draft]);
-  const updateMessages = useCallback((change: (previous: readonly ChatMessage[]) => readonly ChatMessage[]) => {
-    const next = change(messagesRef.current); messagesRef.current = next; setMessages(next);
-  }, []);
-  const updateSession = useCallback((value: EndpointSessionSummary | null) => {
-    const next = mergeSessionObservation(sessionRef.current, value);
-    sessionRef.current = next; setSession(next);
-  }, []);
-  const updateRuntime = useCallback((change: (previous: RuntimeState) => RuntimeState) => {
-    const next = change(runtimeRef.current); runtimeRef.current = next; setRuntime(next);
-  }, []);
-  const markUncertain = useCallback((description: string) => {
-    queuedPrompt.current = null;
-    updateMessages((current) => settleTurn(current, awaiting.current, 'uncertain'));
-    awaiting.current = null; setResponding(false); setCancelPending(false); setPendingConfig(null); setBlocked(true); setError(description);
-  }, [updateMessages]);
-
+  const [creating, setCreating] = useState(false);
+  const [edit, setEdit] = useState<{ readonly id: string | null; readonly text: string; readonly version: number } | null>(null);
+  const editVersion = useRef(0);
+  const actions = useRef(new Set<string>());
+  const [, refreshActions] = useState(0);
+  const mounted = useRef(true);
+  useEffect(() => { mounted.current = true; return () => { mounted.current = false; }; }, []);
   useEffect(() => {
     let active = true;
-    const processPacket = async (encoded: Uint8Array, packetEpoch: number) => {
-      const stillCurrent = () => active && packetEpoch === epoch.current;
-      if (!stillCurrent()) return;
-      const currentSession = sessionRef.current;
-      if (currentSession === null) {
-        // Only retain a bounded keying window while an explicitly requested session is being created.
-        if (queuedPrompt.current !== null) {
-          if (pendingPackets.current.length >= 8) throw new Error('Keying queue exceeded');
-          pendingPackets.current.push(encoded);
-        }
-        return;
-      }
-      if (terminal(currentSession.status)) return;
-      const aba = endpointsRef.current.find((endpoint) => endpoint.id === currentSession.abaEndpointId);
-      if (aba === undefined) throw new Error('Session ABA identity is unavailable');
-      const uncertain = await openABAUncertainErrorPacket(aba.signingPublicJwk, encoded);
-      if (!stillCurrent()) return;
-      if (uncertain !== null) {
-        zeroOpenedPackage(openedPackage.current); openedPackage.current = null; setKeyReady(false);
-        updateSession({ ...currentSession, status: 'UNCERTAIN' });
-        markUncertain('执行结果不确定。请检查本地工作区后结束会话，不要直接重发操作。');
-        return;
-      }
-      const opened = await openSessionKeyPackagePacket(encoded, {
-        abaEndpointId: aba.id, abaSigningPublicJwk: aba.signingPublicJwk,
-        hcEndpointId: registration.endpointId, identity, sessionId: currentSession.sessionId,
+    const next = new ConversationManager(new ConversationStore(secureStore.localVault(), registration.endpointId, access.identity),
+      access.identity, registration.endpointId, {
+        abas: () => access.authorized((value) => listABAEndpoints(access.identity, value)),
+        sessions: () => access.authorized(() => listEndpointSessions()),
+        create: (intent) => access.authorized((value) => createEndpointSession(access.identity, value, {
+          abaEndpointId: intent.abaEndpointId, idempotencyKey: intent.id, runtimeProfileId: intent.runtimeProfileId, workspaceId: intent.workspaceId })),
+        close: (id, operation) => access.authorized((value) => closeEndpointSession(access.identity, value, id, operation)),
       });
-      if (!stillCurrent()) { zeroOpenedPackage(opened); return; }
-      if (opened !== null) {
-        if (opened.controlSequence <= lastPackageSequence.current) {
-          zeroOpenedPackage(opened); throw new Error('SessionKeyPackage control sequence replayed');
-        }
-        zeroOpenedPackage(openedPackage.current); openedPackage.current = opened;
-        lastPackageSequence.current = opened.controlSequence; setKeyReady(true);
-        outboundControlSequence.current += 1n;
-        const packet = await createSessionKeyPackageAckPacket(identity, {
-          abaEndpointId: aba.id, controlSequence: outboundControlSequence.current,
-          hcEndpointId: registration.endpointId, keyPackageId: opened.keyPackageId, sessionId: currentSession.sessionId,
-        });
-        if (!stillCurrent()) return;
-        if (connection.socket.readyState !== WebSocket.OPEN) throw new Error('Connection closed before key ACK');
-        connection.socket.send(new Uint8Array(packet).buffer);
-        for (let attempt = 0; attempt < POLL_ATTEMPTS && stillCurrent(); attempt += 1) {
-          const latest = await getEndpointSession(currentSession.sessionId);
-          if (!stillCurrent()) return;
-          updateSession(latest);
-          if (latest.status === 'ACTIVE' || terminal(latest.status)) break;
-          await delay();
-        }
-        return;
-      }
-      if (openedPackage.current === null) return;
-      const frame = await openABAToHCFramePacket(aba.signingPublicJwk, openedPackage.current,
-        { abaEndpointId: aba.id, hcEndpointId: registration.endpointId, sessionId: currentSession.sessionId }, encoded);
-      if (!stillCurrent() || frame === null) return;
-      if (frame.sequence > inboundFrameSequence.current + 1n) throw new Error('Non-contiguous frame sequence');
-      if (secureStore === null) throw new Error('Durable HC inbox is unavailable');
-      const stored = await secureStore.putInboxFrame({
-        contentHash: frame.contentHash, direction: Direction.ABA_TO_HC, messageId: frame.messageId,
-        plaintext: frame.plaintext, receivedAt: new Date().toISOString(), sequence: frame.sequence, sessionId: currentSession.sessionId,
-      });
-      if (!stillCurrent()) return;
-      if (frame.sequence === inboundFrameSequence.current + 1n) inboundFrameSequence.current = frame.sequence;
-      else if (stored !== 'duplicate') throw new Error('HC inbox cursor is inconsistent');
-      const acknowledgment = await createHCAckFramePacket(identity,
-        { abaEndpointId: aba.id, hcEndpointId: registration.endpointId, sessionId: currentSession.sessionId },
-        Direction.ABA_TO_HC, inboundFrameSequence.current);
-      if (!stillCurrent()) return;
-      if (connection.socket.readyState !== WebSocket.OPEN) throw new Error('Connection closed before frame ACK');
-      connection.socket.send(new Uint8Array(acknowledgment).buffer);
-      if (stored === 'duplicate') return;
-      const payload: unknown = JSON.parse(new TextDecoder().decode(frame.plaintext));
-      // Responses and reverse requests share the authenticated stream, not an unrelated UI API.
-      for (const item of Array.isArray(payload) ? payload : [payload]) {
-        const message = record(item);
-        const request = typeof message?.id === 'string' ? controlRequests.current.get(message.id) : undefined;
-        if (request !== undefined && message !== null && ('result' in message || 'error' in message)) {
-          controlRequests.current.delete(message.id as string);
-          if ('error' in message) {
-            updateRuntime((value) => ({ ...value, status: request.kind === 'describe' ? 'unsupported' : value.status,
-              configError: request.kind === 'describe' ? '执行端未提供此会话控制能力。' : '执行端拒绝了配置修改，原配置保持不变。' }));
-          } else if (request.kind === 'describe') {
-            updateRuntime((value) => readDescriptor(value, message.result, currentSession.sessionId));
-          } else if (request.option?.method === 'session/set_config_option') {
-            updateRuntime((value) => confirmConfiguration(value, message.result));
-          } else {
-            // Legacy setters return {}, so obtain the execution-side effective state again.
-            describedFor.current = null;
-          }
-          setPendingConfig(null);
-          continue;
-        }
-        if (message?.method === 'session/update' && record(message.params)?.sessionId !== currentSession.sessionId) throw new Error('ACP session binding mismatch');
-        const turnId = awaiting.current;
-        updateRuntime((value) => receiveRuntime(value, item, currentSession.sessionId, turnId));
-        const result = receiveAcp(messagesRef.current, item, turnId);
-        updateMessages(() => result.messages);
-        if (result.completed) {
-          if (turnId !== null) updateRuntime((value) => closeTurnPermissions(value, turnId));
-          awaiting.current = null; setResponding(false); setCancelPending(false);
-          if (result.failed) { setBlocked(true); setError('Agent 未能完成这次请求。请检查执行状态后结束会话。'); }
-        }
-      }
-    };
-    const schedule = (encoded: Uint8Array) => {
-      const packetEpoch = epoch.current;
-      processing.current = processing.current.then(() => processPacket(encoded, packetEpoch)).catch(() => {
-        if (active && packetEpoch === epoch.current) markUncertain('消息验证或接收失败，已暂停发送。请检查连接与执行状态后结束会话。');
-      });
-    };
-    const message = (event: MessageEvent) => {
-      if (event.data instanceof ArrayBuffer && event.data.byteLength <= 1_048_576) schedule(new Uint8Array(event.data));
-    };
-    enqueuePacket.current = schedule;
-    connection.socket.addEventListener('message', message);
-    if (sessionRef.current !== null) for (const encoded of pendingPackets.current.splice(0)) schedule(encoded);
-    return () => { active = false; connection.socket.removeEventListener('message', message); if (enqueuePacket.current === schedule) enqueuePacket.current = () => undefined; };
-  }, [connection.socket, identity, registration.endpointId, secureStore, updateSession, updateMessages, updateRuntime, markUncertain]);
-
-  useEffect(() => {
-    if (session?.sessionId !== undefined) for (const encoded of pendingPackets.current.splice(0)) enqueuePacket.current(encoded);
-  }, [session?.sessionId]);
-
-  useEffect(() => {
-    if (connectionGeneration.current === connection.connectionGeneration) return;
-    connectionGeneration.current = connection.connectionGeneration; outboundControlSequence.current = 0n;
-    const current = sessionRef.current;
-    if (current === null || openedPackage.current === null || terminal(current.status)) return;
-    const resume = async () => {
-      const binding = { abaEndpointId: current.abaEndpointId, hcEndpointId: registration.endpointId, sessionId: current.sessionId };
-      outboundControlSequence.current += 1n;
-      const packet = await createHCResumeStatePacket(identity, binding, outboundControlSequence.current,
-        inboundFrameSequence.current, openedPackage.current?.material.generation);
-      if (connection.socket.readyState !== WebSocket.OPEN) throw new Error('Connection closed before ResumeState');
-      connection.socket.send(new Uint8Array(packet).buffer);
-      if (inboundFrameSequence.current > 0n && openedPackage.current !== null) {
-        const ack = await createHCAckFramePacket(identity, binding, Direction.ABA_TO_HC,
-          inboundFrameSequence.current, openedPackage.current.material.generation);
-        connection.socket.send(new Uint8Array(ack).buffer);
-      }
-    };
-    void resume().catch(() => markUncertain('会话恢复失败。请检查执行状态，不会自动重新发送消息。'));
-  }, [connection, identity, registration.endpointId, markUncertain]);
-  useEffect(() => {
-    if (!online && queuedPrompt.current !== null) {
-      queuedPrompt.current = null; setError('连接已断开，未发送的草稿已保留。恢复连接后请再次发送。');
-    }
-  }, [online]);
-  useEffect(() => () => { epoch.current += 1; zeroOpenedPackage(openedPackage.current); }, []);
-
-  const withActiveRegistration = async <T,>(operation: (value: RegistrationSession) => Promise<T>): Promise<T> => {
-    let current = registration; let refreshed = false;
-    if (accessCredentialNeedsRefresh(current)) { current = await refreshEndpointSession(identity); refreshed = true; onRegistration(current); }
-    try { return await operation(current); }
-    catch (cause) {
-      if (!(cause instanceof HcApiError) || cause.code !== 'ENDPOINT_CREDENTIAL_EXPIRED' || refreshed) throw cause;
-      current = await refreshEndpointSession(identity); onRegistration(current); return operation(current);
-    }
-  };
-  useEffect(() => {
-    let active = true;
-    void Promise.all([listABAEndpoints(identity, registration), listEndpointSessions()]).then(([values, sessions]) => {
+    const unregister = registerShutdown(() => next.dispose());
+    setManager(next);
+    void next.load().then(async () => {
       if (!active) return;
-      endpointsRef.current = values; setEndpoints(values);
-      setSelectedABA((previous) => values.some((value) => value.id === previous) ? previous : values[0]?.id ?? '');
-      setUnrecoverable(sessions.filter((candidate) => candidate.hcEndpointId === registration.endpointId &&
-        candidate.sessionId !== sessionRef.current?.sessionId && !terminal(candidate.status)));
-    }).catch((cause: unknown) => { if (active) setError(cause instanceof HcApiError ? `${cause.message}（${cause.code}）` : '无法读取执行设备，请检查连接或刷新设备列表。'); });
-    return () => { active = false; };
-  }, [identity, registration, reload]);
-
-  const sendSessionControl = async (payload: Record<string, unknown>, context?: { readonly kind: 'describe' | 'config'; readonly option?: ConfigOption }): Promise<boolean> => {
-    const current = sessionRef.current;
-    const keys = openedPackage.current;
-    if (actionBusy.current || blocked || current?.status !== 'ACTIVE' || keys === null || !online) return false;
-    actionBusy.current = true; setBusy(true); setError(null);
-    const operationEpoch = epoch.current;
-    try {
-      outboundFrameSequence.current += 1n;
-      const packet = await createHCToABAFramePacket(identity, keys,
-        { abaEndpointId: current.abaEndpointId, hcEndpointId: registration.endpointId, sessionId: current.sessionId },
-        textEncoder.encode(JSON.stringify(payload)), outboundFrameSequence.current);
-      if (operationEpoch !== epoch.current || connection.socket.readyState !== WebSocket.OPEN) throw new Error('Control delivery interrupted');
-      if (context !== undefined && typeof payload.id === 'string') controlRequests.current.set(payload.id, context);
-      connection.socket.send(new Uint8Array(packet).buffer);
-      return true;
-    } catch {
-      markUncertain('会话控制消息的送达尚未确认。不会自动重复授权、取消或配置操作，请检查连接。');
-      return false;
-    } finally { actionBusy.current = false; setBusy(false); }
-  };
-  const describeSession = async () => {
-    const current = sessionRef.current;
-    if (current === null || actionBusy.current || awaiting.current !== null) return;
-    describedFor.current = current.sessionId;
-    if (!current.requestedCapabilities.includes('remote-session-v1')) {
-      updateRuntime((value) => ({ ...value, status: 'unsupported', configError: '这是旧版会话。保留基础对话能力；新建会话后才能协商 Remote 控制。' }));
-      return;
-    }
-    updateRuntime((value) => ({ ...value, status: 'pending', configError: null }));
-    const id = crypto.randomUUID();
-    if (!(await sendSessionControl({ jsonrpc: '2.0', id, method: '_mss/session/describe', params: { sessionId: current.sessionId } }, { kind: 'describe' }))) describedFor.current = null;
-  };
-  const describeRef = useRef(describeSession);
-  useEffect(() => { describeRef.current = describeSession; });
-  useEffect(() => {
-    if (!busy && online && !blocked && keyReady && session?.status === 'ACTIVE' && describedFor.current !== session.sessionId && awaiting.current === null) void describeRef.current();
-  }, [busy, online, blocked, keyReady, session?.status, session?.sessionId, pendingConfig]);
-  const changeConfiguration = async (option: ConfigOption, value: string) => {
-    const current = sessionRef.current;
-    if (current === null || awaiting.current !== null || actionBusy.current || pendingConfig !== null || runtimeRef.current.status !== 'ready') return;
-    const id = crypto.randomUUID();
-    const payload = configRequest(option, value, current.sessionId, id);
-    setPendingConfig({ id, option, value });
-    if (!(await sendSessionControl(payload, { kind: 'config', option }))) setPendingConfig(null);
-  };
-  const decidePermission = async (id: RpcId, optionId: string | null) => {
-    if (actionBusy.current || awaiting.current === null || !online || blocked) return;
-    let payload: Record<string, unknown>;
-    try { payload = permissionDecision(runtimeRef.current, id, optionId); }
-    catch { setError('这项权限请求已失效或选项无效，没有发送授权。'); return; }
-    // Prevent duplicate UI decisions synchronously, before asynchronous cryptography.
-    updateRuntime((value) => markPermissionSubmitted(value, id));
-    await sendSessionControl(payload);
-  };
-  const cancelTurn = async () => {
-    const current = sessionRef.current;
-    if (current === null || awaiting.current === null || cancelPending || actionBusy.current || !runtimeRef.current.cancelSupported) return;
-    setCancelPending(true);
-    // No request ID: ACP cancellation is a notification; completion comes from the original prompt.
-    await sendSessionControl({ jsonrpc: '2.0', method: 'session/cancel', params: { sessionId: current.sessionId } });
-  };
-
-  const transmit = async (text: string) => {
-    const current = sessionRef.current;
-    if (actionBusy.current || awaiting.current !== null || blocked || pendingConfig !== null || runtimeRef.current.status === 'pending' || current?.status !== 'ACTIVE' || openedPackage.current === null) return;
-    const aba = endpointsRef.current.find((value) => value.id === current.abaEndpointId);
-    if (aba === undefined || connection.socket.readyState !== WebSocket.OPEN) { setError('连接不可用，草稿未发送。'); return; }
-    actionBusy.current = true; setBusy(true); setError(null);
-    const requestId = crypto.randomUUID();
-    try {
-      outboundFrameSequence.current += 1n;
-      const request = textEncoder.encode(JSON.stringify({ id: requestId, jsonrpc: '2.0', method: 'session/prompt',
-        params: { prompt: [{ text, type: 'text' }], sessionId: current.sessionId } }));
-      const packet = await createHCToABAFramePacket(identity, openedPackage.current,
-        { abaEndpointId: aba.id, hcEndpointId: registration.endpointId, sessionId: current.sessionId }, request, outboundFrameSequence.current);
-      if (connection.socket.readyState !== WebSocket.OPEN) throw new Error('Connection closed before dispatch');
-      awaiting.current = requestId;
-      connection.socket.send(new Uint8Array(packet).buffer);
-      updateMessages((previous) => startTurn(previous, requestId, text)); setResponding(true); setViewId(null);
-      if (draftRef.current.trim() === text) onDraftChange('');
-    } catch { markUncertain('加密发送未能确认，草稿已保留。为避免重复执行，请检查执行端后结束会话。'); }
-    finally { actionBusy.current = false; setBusy(false); }
-  };
-  const transmitRef = useRef(transmit);
-  useEffect(() => { transmitRef.current = transmit; });
-  useEffect(() => {
-    if (busy || !online || blocked || !keyReady || pendingConfig !== null || runtime.status === 'pending' || session?.status !== 'ACTIVE' || queuedPrompt.current === null) return;
-    const text = queuedPrompt.current; queuedPrompt.current = null; void transmitRef.current(text);
-  }, [busy, online, blocked, keyReady, session?.status, runtime.status, pendingConfig]);
-
-  const createAndSend = async () => {
-    if (actionBusy.current || awaiting.current !== null || !online || draft.trim() === '') return;
-    if (sessionRef.current !== null) { await transmit(draft.trim()); return; }
-    if (selectedABA === '' || runtimeProfileId.trim() === '' || workspaceId.trim() === '') { setError('请先在顶部选择执行设备、Agent 和工作区。'); return; }
-    actionBusy.current = true; setBusy(true); setError(null); queuedPrompt.current = draft.trim();
-    try {
-      const idempotencyKey = crypto.randomUUID();
-      let current = await withActiveRegistration((value) => createEndpointSession(identity, value, {
-        abaEndpointId: selectedABA, idempotencyKey, runtimeProfileId: runtimeProfileId.trim(), workspaceId: workspaceId.trim(),
-      }));
-      updateSession(current); setViewId(null);
-      for (let attempt = 0; attempt < POLL_ATTEMPTS && current.status === 'CREATING'; attempt += 1) {
-        await delay(); current = await getEndpointSession(current.sessionId); updateSession(current);
+      if (initial.current !== '' && next.snapshot().workspace?.draft === '') {
+        await next.draft(null, initial.current); initial.current = '';
       }
-      if (terminal(current.status)) { queuedPrompt.current = null; setError('执行端没有建立会话。草稿已保留，请检查本地配置。'); }
-    } catch (cause) {
-      queuedPrompt.current = null; setBlocked(true);
-      setError(cause instanceof HcApiError ? `会话创建未确认：${cause.message}（${cause.code}）。请检查连接设置中的旧会话。` : '会话创建结果未确认。草稿已保留；请检查旧会话后再试。');
-      setReload((value) => value + 1);
-    } finally { actionBusy.current = false; setBusy(false); }
+    }).catch(() => { if (active) setError('无法恢复本地加密记录。请保留浏览器数据并检查存储。'); });
+    return () => { active = false; unregister(); void next.dispose(); };
+  }, [access, registration.endpointId, secureStore, registerShutdown]);
+  useEffect(() => {
+    if (manager === null) return;
+    if (connection === null) { manager.disconnect(); return; }
+    let active = true;
+    void manager.bind(connection).catch(() => { if (active) setError('会话授权或恢复未确认，请检查连接设置。'); });
+    return () => { active = false; manager.disconnect(); };
+  }, [manager, connection]);
+  const view = useSyncExternalStore(manager?.subscribe ?? noSubscription, manager?.snapshot ?? loadingSnapshot);
+  const selectedId = view.workspace?.selectedId ?? null;
+  const selected = view.conversations.find((item) => item.data.session.sessionId === selectedId);
+  const value = selected?.data;
+  const session = value?.session;
+  const actualABA = view.endpoints.some((item) => item.id === selectedABA) ? selectedABA : view.endpoints[0]?.id ?? '';
+  const draft = edit?.id === selectedId ? edit.text : value?.draft ?? view.workspace?.draft ?? initialDraft;
+  const terminal = session !== undefined && isTerminal(session.status);
+  const recovering = selectedId === null ? null : view.recovery[selectedId] ?? null;
+  const expired = value?.keys !== null && value?.keys !== undefined && value.keys.material.expiresAtMs <= BigInt(Date.now());
+  const missingKey = value !== undefined && value.keys === null && session?.status === 'ACTIVE';
+  const blocked = recovering !== null || selected?.fault !== null && selected?.fault !== undefined || value?.blocked !== null && value?.blocked !== undefined ||
+    expired || missingKey || session?.status === 'UNCERTAIN' || session?.status === 'REKEY_REQUIRED' || session?.status === 'DRAINING';
+  const readOnly = terminal || blocked;
+  const responding = value?.awaiting !== null && value?.awaiting !== undefined;
+  const pendingRequest = value?.requests.find((item) => item.kind === 'config');
+  const pendingConfig: PendingConfig | null = pendingRequest?.option === undefined || pendingRequest.requestedValue === undefined ? null : {
+    id: pendingRequest.id, option: pendingRequest.option, value: pendingRequest.requestedValue };
+  const full = value !== undefined && (value.messages.length >= MAX_MESSAGES || value.messages.reduce((sum, message) => sum + message.text.length, 0) >= 1_048_576);
+  const workspaceBusy = value === undefined ? manager?.workspaceConflict(actualABA, workspaceId.trim()) === true
+    : manager?.workspaceConflict(value.aba.id, value.session.workspaceId, value.session.sessionId) === true;
+  const canSubmit = view.status === 'ready' && view.online && !readOnly && !full && !workspaceBusy && !creating &&
+    (value === undefined ? view.workspace?.creation === null && actualABA !== '' && workspaceId.trim() !== '' && runtimeProfileId.trim() !== ''
+      : value.keys !== null && session?.status === 'ACTIVE' && value.requests.length === 0 &&
+        (!session.requestedCapabilities.includes('remote-session-v1') || value.runtime.status === 'ready'));
+  const actionBusy = actions.current.has(selectedId ?? 'compose');
+  const perform = (operation: () => Promise<unknown>, message: string) => {
+    const key = selectedId ?? 'compose';
+    if (actions.current.has(key)) return;
+    actions.current.add(key); refreshActions((count) => count + 1);
+    setError(null);
+    void Promise.resolve().then(operation).catch(() => { if (mounted.current) setError(message); }).finally(() => {
+      actions.current.delete(key); if (mounted.current) refreshActions((count) => count + 1);
+    });
   };
-  const closeSession = async (candidate: EndpointSessionSummary): Promise<boolean> => {
-    const idempotencyKey = closeKeys.current.get(candidate.sessionId) ?? crypto.randomUUID();
-    closeKeys.current.set(candidate.sessionId, idempotencyKey);
-    let current = await withActiveRegistration((active) => closeEndpointSession(identity, active, candidate.sessionId, idempotencyKey));
-    for (let attempt = 0; attempt < POLL_ATTEMPTS && !terminal(current.status); attempt += 1) { await delay(); current = await getEndpointSession(candidate.sessionId); }
-    if (sessionRef.current?.sessionId === candidate.sessionId) updateSession(current);
-    if (!terminal(current.status)) { setError('关闭请求已提交，但执行端尚未确认结束。请稍后再次检查，不会提前创建新会话。'); return false; }
-    await secureStore?.deleteSessionInbox(candidate.sessionId);
-    setUnrecoverable((values) => values.filter((value) => value.sessionId !== candidate.sessionId));
-    if (sessionRef.current?.sessionId === candidate.sessionId) {
-      epoch.current += 1; pendingPackets.current = [];
-      queuedPrompt.current = null; updateMessages((values) => settleTurn(values, awaiting.current, 'uncertain'));
-      awaiting.current = null; setResponding(false); zeroOpenedPackage(openedPackage.current); openedPackage.current = null; setKeyReady(false);
+  const changeDraft = (text: string) => {
+    const version = ++editVersion.current; const id = selectedId;
+    setEdit({ id, text, version });
+    if (manager === null) return;
+    void manager.draft(id, text).then(() => { if (mounted.current) setEdit((current) => current?.version === version ? null : current); })
+      .catch(() => { if (mounted.current) setError('草稿尚未保存。请保留此页并检查存储空间，不要刷新。'); });
+  };
+  const submit = async () => {
+    if (manager === null || !canSubmit || responding || draft.trim() === '') return;
+    const text = draft.trim(); const version = editVersion.current; let id = selectedId;
+    await manager.draft(id, draft);
+    if (id === null) {
+      setCreating(true);
+      try { id = await manager.create({ abaEndpointId: actualABA, runtimeProfileId: runtimeProfileId.trim(), workspaceId: workspaceId.trim(), draft }); }
+      finally { if (mounted.current) setCreating(false); }
+      actions.current.add(id); if (mounted.current) refreshActions((count) => count + 1);
+      // This continuation belongs to this explicit send action; restored creation intents never take this path.
+      try { await manager.waitReady(id); await manager.prompt(id, text); }
+      finally { actions.current.delete(id); if (mounted.current) refreshActions((count) => count + 1); }
+    } else {
+      await manager.prompt(id, text);
     }
-    return true;
+    if (mounted.current && editVersion.current === version) setEdit(null);
   };
-  const endOrNew = async (startNew: boolean) => {
-    if (actionBusy.current) return;
-    actionBusy.current = true; setBusy(true); setError(null); queuedPrompt.current = null;
-    try {
-      const current = sessionRef.current;
-      if (current !== null && !terminal(current.status) && !(await closeSession(current))) return;
-      if (!startNew) return;
-      if (current !== null && messagesRef.current.length > 0) {
-        const snapshot: SavedConversation = { id: current.sessionId, title: conversationTitle(messagesRef.current.find((value) => value.role === 'user')?.text ?? ''), detail: '已结束 · 本页只读', agent: current.runtimeProfileId, messages: messagesRef.current };
-        setSaved((values) => {
-          const result = [snapshot, ...values].slice(0, MAX_SAVED_CONVERSATIONS);
-          while (result.length > 1 && result.reduce((sum, item) => sum + item.messages.reduce((size, value) => size + value.text.length, 0), 0) > 2_097_152) result.pop();
-          return result;
-        });
-      }
-      epoch.current += 1; pendingPackets.current = []; zeroOpenedPackage(openedPackage.current); openedPackage.current = null;
-      lastPackageSequence.current = 0n; outboundFrameSequence.current = 0n; inboundFrameSequence.current = 0n;
-      controlRequests.current.clear(); describedFor.current = null; setPendingConfig(null); setCancelPending(false); updateRuntime(() => newRuntimeState());
-      updateSession(null); updateMessages(() => []); setKeyReady(false); setBlocked(false); setResponding(false); awaiting.current = null; setViewId(null); onDraftChange('');
-    } catch (cause) { setError(cause instanceof HcApiError ? `${cause.message}（${cause.code}）` : '会话关闭未确认，请检查执行端后再试。'); }
-    finally { actionBusy.current = false; setBusy(false); }
-  };
-  const closeOld = async (candidate: EndpointSessionSummary) => {
-    if (actionBusy.current) return;
-    actionBusy.current = true; setBusy(true); setError(null);
-    try { if (await closeSession(candidate)) { if (sessionRef.current === null) setBlocked(false); } }
-    catch (cause) { setError(cause instanceof HcApiError ? `${cause.message}（${cause.code}）` : '旧会话关闭未确认。'); }
-    finally { actionBusy.current = false; setBusy(false); }
-  };
-  const active = session !== null && !terminal(session.status);
-  const archive = saved.find((value) => value.id === viewId);
-  const title = conversationTitle(messages.find((value) => value.role === 'user')?.text ?? '');
-  const full = messages.length >= MAX_MESSAGES || messages.reduce((sum, value) => sum + value.text.length, 0) >= 1_048_576;
-  const readOnly = archive !== undefined || (session !== null && terminal(session.status));
-  const conversations = [...(session === null ? [] : [{ id: session.sessionId, title, detail: responding ? '正在回复' : terminal(session.status) ? '已结束 · 本页只读' : blocked ? '结果待确认' : '当前会话' }]), ...saved];
-  const targetSettings = <div className="target-form"><h2>执行环境</h2><p>这里只选择本地已授权的配置，不下发命令或路径。</p>
-    <label>执行设备<select value={selectedABA} disabled={active || busy} onChange={(event) => setSelectedABA(event.target.value)}>{endpoints.length === 0 ? <option value="">暂无在线设备</option> : endpoints.map((value) => <option key={value.id} value={value.id}>{value.name}</option>)}</select></label>
-    <label>Agent（Runtime ID）<input value={runtimeProfileId} disabled={active || busy} onChange={(event) => setRuntimeProfileId(event.target.value)} /></label>
-    <label>工作区 ID<input value={workspaceId} disabled={active || busy} onChange={(event) => setWorkspaceId(event.target.value)} /></label>
-    {active ? <p>新建对话后可以更换执行环境。</p> : <button className="secondary-button" type="button" disabled={busy} onClick={() => setReload((value) => value + 1)}>刷新设备列表</button>}
-    {session !== null ? <details className="technical-details"><summary>会话诊断</summary><p>会话：{session.sessionId}<br />状态：{session.status}<br />密钥：{keyReady ? '已就绪' : '未就绪'}</p>{active ? <button type="button" className="secondary-button" disabled={busy} onClick={() => void endOrNew(false)}>请求关闭当前会话</button> : null}</details> : null}
-    {unrecoverable.length > 0 ? <details className="technical-details"><summary>检查 {unrecoverable.length} 个旧会话</summary><p>这些会话的页面密钥不可用，不能恢复对话内容。请确认后关闭。</p>{unrecoverable.map((value) => <div className="old-session" key={value.sessionId}><span>{value.sessionId.slice(0, 10)}… · {value.status}</span><button type="button" className="secondary-button" disabled={busy} onClick={() => void closeOld(value)}>关闭旧会话</button></div>)}</details> : null}
-    {session !== null && keyReady ? <RuntimeConfiguration state={runtime} pending={pendingConfig} disabled={!online || busy || responding || blocked || terminal(session.status)}
-      onChange={(option, value) => void changeConfiguration(option, value)} onRefresh={() => void describeSession()} /> : null}
+  const conversations = view.conversations.map((item) => ({ id: item.data.session.sessionId,
+    title: conversationTitle(item.data.messages.find((message) => message.role === 'user')?.text ?? item.data.draft),
+    detail: isTerminal(item.data.session.status) ? '已结束 · 只读' : item.fault !== null || item.data.blocked !== null || view.recovery[item.data.session.sessionId] !== undefined ? '需要检查'
+      : item.data.runtime.permissions.some((permission) => permission.status === 'pending') ? '等待授权' : item.data.awaiting !== null ? '正在回复' : '已保存' }));
+  const targetSettings = <div className="target-form"><h2>执行环境</h2><p>选择此设备本地已允许的 Agent 和工作区。</p>
+    <label>执行设备<select value={value?.aba.id ?? actualABA} disabled={value !== undefined || creating} onChange={(event) => setSelectedABA(event.target.value)}>
+      {view.endpoints.length === 0 ? <option value="">暂无可用设备</option> : view.endpoints.map((item) => <option key={item.id} value={item.id}>{item.name}</option>)}</select></label>
+    <label>Agent（Runtime ID）<input value={session?.runtimeProfileId ?? runtimeProfileId} disabled={value !== undefined || creating} onChange={(event) => setRuntimeProfileId(event.target.value)} /></label>
+    <label>工作区 ID<input value={session?.workspaceId ?? workspaceId} disabled={value !== undefined || creating} onChange={(event) => setWorkspaceId(event.target.value)} /></label>
+    {value !== undefined ? <p>新建对话可以选择其他执行环境，现有会话会继续保留。</p>
+      : <button className="secondary-button" type="button" disabled={!view.online || creating} onClick={() => perform(() => manager?.refresh() ?? Promise.resolve(), '无法刷新设备和会话，请检查连接。')}>刷新设备列表</button>}
+    {view.workspace?.creation === null || view.workspace?.creation === undefined ? null : <section role="status"><p>上次创建尚未确认。可以使用原编号再次核对结果；不会自动发送草稿。</p>
+      <button className="secondary-button" type="button" disabled={!view.online || view.creating} onClick={() => perform(async () => {
+        const intent = manager?.snapshot().workspace?.creation;
+        if (intent !== null && intent !== undefined) await manager?.create(intent, true);
+      }, '原创建请求仍未确认，请保留草稿并检查服务。')}>确认原创建请求</button></section>}
+    {session === undefined ? null : <details className="technical-details"><summary>会话诊断</summary><p>会话：{session.sessionId}<br />状态：{session.status}<br />密钥：{value?.keys === null ? '不可用' : '已保存'}</p></details>}
+    {view.unrecoverable.length === 0 ? null : <details className="technical-details"><summary>检查 {view.unrecoverable.length} 个无法恢复的会话</summary>
+      <p>当前浏览器没有这些会话的密钥。请在管理后台核对执行状态后处理，不会新建任务来代替它们。</p>
+      {view.unrecoverable.map((item) => <p key={item.sessionId}>{item.sessionId.slice(0, 10)}… · {item.status}</p>)}</details>}
+    {value === undefined || !value.session.requestedCapabilities.includes('remote-session-v1') ? null : <RuntimeConfiguration state={value.runtime} pending={pendingConfig}
+      disabled={!view.online || readOnly || responding || actionBusy} onChange={(option, requested) => perform(() => manager!.configure(value.session.sessionId, option, requested), '配置修改未确认，请检查当前会话。')}
+      onRefresh={() => perform(() => manager!.describeNow(value.session.sessionId), '无法读取执行端配置。')} />}
   </div>;
-  return <ChatWorkspace draft={draft} onDraftChange={onDraftChange} onSubmit={() => void createAndSend()}
-    onNewChat={() => void endOrNew(true)} onEndChat={active ? () => void endOrNew(false) : null}
-    {...(runtime.cancelSupported && !blocked && online && archive === undefined ? { onCancelTurn: () => void cancelTurn(), cancelPending } : {})}
-    renderTurnActivity={(turnId) => <RuntimeActivity state={runtime} turnId={turnId} disabled={!online || busy || blocked || archive !== undefined || readOnly} onDecision={(id, optionId) => void decidePermission(id, optionId)} />}
-    onOpenSettings={onOpenSettings} onSelectConversation={(id) => setViewId(id === session?.sessionId ? null : id)}
-    conversations={conversations} selectedConversationId={viewId ?? session?.sessionId ?? null}
-    messages={archive?.messages ?? messages} title={archive?.title ?? title} agent={archive?.agent ?? session?.runtimeProfileId ?? runtimeProfileId}
-    online={online} connected busy={busy} responding={responding && archive === undefined}
-    canSubmit={online && !blocked && !full && !readOnly && pendingConfig === null && (session === null || runtime.status !== 'pending') && (session === null ? selectedABA !== '' && runtimeProfileId.trim() !== '' && workspaceId.trim() !== '' : keyReady && session.status === 'ACTIVE')}
-    readOnly={readOnly} hasActiveSession={active} targetSettings={targetSettings} error={error}
-    notice={!online ? '连接已断开。会话与草稿保留在本页；请打开连接设置重新连接，不会自动重发请求。' : full ? '本页会话达到显示上限，请新建对话。' : endpoints.length === 0 ? '还没有在线执行设备。请在顶部的执行环境中检查或刷新设备列表。' : session !== null && !keyReady && active ? '正在准备安全会话，请稍候。未发送的内容仍保留在草稿中。' : null} />;
-}
-function zeroOpenedPackage(value: OpenedSessionKeyPackage | null): void {
-  if (value === null) return;
-  value.hcToAbaKey.fill(0); value.abaToHcKey.fill(0); value.material.srk.fill(0); value.material.sessionNonce.fill(0);
+  const notice = view.status === 'loading' ? '正在恢复本地加密记录…' : view.pendingWrites > 0 || edit !== null ? '正在保存草稿与会话选择，请勿清除浏览器数据。'
+    : recovering ?? selected?.fault ?? value?.blocked ?? (expired ? '会话密钥已过期，当前只读。需要新的授权密钥才能继续。'
+      : missingKey ? '本地缺少此会话的恢复密钥，当前只读。请核对执行端状态。'
+        : !view.online ? '连接已断开。历史和草稿在此浏览器中加密保留；重新连接后会先核对授权，再恢复原始消息。'
+          : workspaceBusy ? '此工作区有另一个会话正在执行或需要确认。草稿已保留，请等待或选择不同工作区。'
+            : full ? '会话达到本地显示上限，请新建对话。' : value !== undefined && value.keys === null && !terminal ? '正在准备安全会话，草稿尚未发送。' : null);
+  return <ChatWorkspace draft={draft} onDraftChange={changeDraft} onSubmit={() => perform(submit, '本次发送尚未确认，草稿已保留。请检查会话状态后再操作。')}
+    onNewChat={() => perform(() => manager?.select(null) ?? Promise.resolve(), '无法保存新对话选择。')}
+    onEndChat={session !== undefined && !terminal ? () => perform(() => manager!.close(session.sessionId), '关闭会话未确认，请核对执行端状态。') : null}
+    {...(value?.runtime.cancelSupported && !readOnly && view.online ? { onCancelTurn: () => perform(() => manager!.cancel(value.session.sessionId), '停止请求未确认，请检查当前轮次。'), cancelPending: value.cancelPending } : {})}
+    renderTurnActivity={(turnId) => value === undefined ? null : <RuntimeActivity key={value.session.sessionId} state={value.runtime} turnId={turnId}
+      disabled={!view.online || readOnly || value.cancelPending || actionBusy}
+      onDecision={(id, option) => perform(() => manager!.decide(value.session.sessionId, id, option), '权限请求已失效或提交未确认，请核对当前会话。')} />}
+    onOpenSettings={onOpenSettings} onSelectConversation={(id) => perform(() => manager?.select(id) ?? Promise.resolve(), '无法保存会话选择。')}
+    conversations={conversations} selectedConversationId={selectedId} messages={value?.messages ?? []}
+    title={conversationTitle(value?.messages.find((message) => message.role === 'user')?.text ?? '')} agent={session?.runtimeProfileId ?? runtimeProfileId}
+    online={view.online} connected busy={creating || actionBusy} responding={responding}
+    canSubmit={canSubmit} readOnly={readOnly} hasActiveSession={session !== undefined && !terminal} targetSettings={targetSettings}
+    error={error ?? view.error} notice={notice} />;
 }

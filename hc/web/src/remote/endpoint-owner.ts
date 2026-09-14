@@ -1,6 +1,7 @@
 /** Own the endpoint transport before refresh/token rotation; never steal a live tab's lock. */
 export type EndpointOwnerState = 'waiting' | 'owned' | 'unsupported' | 'released';
 export interface OwnershipHandle { readonly done: Promise<void>; release(): void }
+export type RegisterEndpointShutdown = (shutdown: () => Promise<void>) => () => void;
 export function ownEndpoint(locks: Pick<LockManager, 'request'> | undefined,
   changed: (state: EndpointOwnerState) => void): OwnershipHandle {
   if (locks === undefined) {
