@@ -27,6 +27,8 @@ ABA 本地配置通过 `publish_catalog = true` 明确允许发布上述元数�
 
 ## 浏览器身份恢复
 
+创建与恢复使用端点范围的精确查询：`POST /gateway/v1/sessions/{id}/status` 返回该 HC 的会话状态，`POST /gateway/v1/session-operations/{key}` 查询原创建结果。查询不到不被解释为“从未执行”。`POST /gateway/v1/session-operations/{key}/cancel` 与原创建共享唯一操作键：先取消则留下终态记录，延迟创建被拒绝；已经创建则返回原 Session，由用户的关闭动作处理。重复取消不会生成另一份操作，取消有审计记录。
+
 重新登录使用新的人类会话与新的持有证明，在两把公钥、owner、tenant 和现有有效 HC 身份一致时复用 Endpoint ID，签发新的短期凭据。事务内再次检查吊销与绑定，吊销不能被重新登录撤销。
 
 已吊销身份可经明确的界面动作登记新的浏览器身份。IndexedDB v4 只增加活动身份引用，旧身份行、信任 pin 和加密内容均保留；替换使用 compare-and-swap 检查，不清空历史或重用旧授权。新身份仍须正常登录注册，不能据此读取旧 Endpoint 的受限会话。

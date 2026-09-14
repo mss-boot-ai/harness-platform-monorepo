@@ -276,13 +276,34 @@ export function createEndpointSession(
   });
 }
 
-export async function getEndpointSession(sessionId: string): Promise<EndpointSessionSummary> {
-  const sessions = await listEndpointSessions();
-  const session = sessions.find((candidate) => candidate.sessionId === sessionId);
-  if (session === undefined) {
-    throw new HcApiError('Created session was not found', 'HC_SESSION_NOT_FOUND', 404);
-  }
-  return session;
+export async function getEndpointSession(identity: EndpointIdentity, registration: RegistrationSession, sessionId: string): Promise<EndpointSessionSummary> {
+  if (!/^[0-9a-f]{32}$/u.test(sessionId)) throw new HcApiError('Session ID is invalid', 'HC_INVALID_SESSION_ID', 400);
+  return parseEndpointSession(await gatewayOperation(identity, registration, `/gateway/v1/sessions/${sessionId}/status`));
+}
+
+export interface SessionCreationState {
+  readonly state: 'not-found' | 'pending' | 'created' | 'cancelled';
+  readonly session: EndpointSessionSummary | null;
+}
+export async function inspectSessionCreation(identity: EndpointIdentity, registration: RegistrationSession, operationKey: string, cancel = false): Promise<SessionCreationState> {
+  if (!/^[A-Za-z0-9-]{16,128}$/u.test(operationKey)) throw new HcApiError('Creation ID is invalid', 'HC_INVALID_CREATION_ID', 400);
+  const raw = objectValue(await gatewayOperation(identity, registration, `/gateway/v1/session-operations/${encodeURIComponent(operationKey)}${cancel ? '/cancel' : ''}`), 'creation state');
+  if (!['not-found', 'pending', 'created', 'cancelled'].includes(String(raw.state))) throw new HcApiError('Creation state is invalid', 'HC_INVALID_RESPONSE', 500);
+  return { state: raw.state as SessionCreationState['state'], session: raw.state === 'created' ? parseEndpointSession(raw.session) : null };
+}
+
+function gatewayOperation(identity: EndpointIdentity, registration: RegistrationSession, path: string): Promise<unknown> {
+  return withGatewayNonceLock(async () => {
+    const operationKey = crypto.randomUUID();
+    const challenge = await gatewaySessionRequest(path, registration.accessToken, operationKey, '{}');
+    const nonce = challenge.headers.get('DPoP-Nonce');
+    if (challenge.status !== 401 || nonce === null || nonce === '') throw await gatewayFailure(challenge);
+    const proof = await createDpopProof({ accessToken: registration.accessToken, htm: 'POST', htu: new URL(path, window.location.origin).toString(), nonce,
+      privateKey: identity.signing.privateKey, publicJwk: identity.signing.publicJwk });
+    const response = await gatewaySessionRequest(path, registration.accessToken, operationKey, '{}', proof.proof);
+    if (!response.ok) throw await gatewayFailure(response);
+    return response.json();
+  });
 }
 
 export async function listEndpointSessions(): Promise<readonly EndpointSessionSummary[]> {

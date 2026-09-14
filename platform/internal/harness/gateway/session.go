@@ -108,6 +108,10 @@ func (server *Server) createSession(writer http.ResponseWriter, request *http.Re
 	}
 	previous, lookupErr := server.persistence.GetEndpointSessionCreation(request.Context(), endpoint.OwnerUserID, endpoint.TenantID, endpoint.ID, idempotencyKey)
 	if lookupErr == nil {
+		if previous.ErrorCode == "CREATION_CANCELLED" {
+			writeGatewayError(writer, http.StatusConflict, "CREATION_CANCELLED", "original creation was cancelled")
+			return
+		}
 		if previous.RequestHash != requestHash {
 			writeGatewayError(writer, http.StatusConflict, "IDEMPOTENCY_CONFLICT", "creation key belongs to a different target")
 			return
