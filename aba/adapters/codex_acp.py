@@ -169,6 +169,7 @@ class CodexACP:
             "model_provider": "harness", "model_providers.harness.name": "Harness model gateway",
             "model_providers.harness.base_url": base, "model_providers.harness.env_key": "HARNESS_CODEX_API_KEY",
             "model_providers.harness.wire_api": "responses", "shell_environment_policy.ignore_default_excludes": False,
+            "model_providers.harness.request_max_retries": 0, "model_providers.harness.stream_max_retries": 0,
             "web_search": "disabled",
         }
         command = [str(bundled_codex_path())]

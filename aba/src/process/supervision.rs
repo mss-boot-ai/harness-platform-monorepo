@@ -638,11 +638,20 @@ pub fn enter_and_exec(
     println!("{{\"scopeReady\":true}}");
     std::io::stdout().flush().map_err(unavailable)?;
     let mut command = Command::new("/usr/bin/bwrap");
-    command
-        .args(args)
-        .env_remove("HARNESS_CODEX_API_BASE_URL")
-        .env_remove("HARNESS_CODEX_API_KEY")
-        .env_remove("HARNESS_CODEX_PROVIDER_TRANSPORT");
+    command.args(args).env_clear();
+    for name in [
+        "HOME",
+        "PATH",
+        "LANG",
+        "LC_ALL",
+        "TZ",
+        "HARNESS_CODEX_MODEL",
+        "HARNESS_CODEX_MODELS",
+    ] {
+        if let Some(value) = std::env::var_os(name) {
+            command.env(name, value);
+        }
+    }
     if provider_socket.is_some() {
         command
             .env("HARNESS_CODEX_API_BASE_URL", "http://127.0.0.1:39121/v1")

@@ -29,9 +29,9 @@ def cannot_connect(family, address):
 
 
 def probe():
-    canary, port, abstract, host_pid_ns = sys.argv[1:]
+    canary, port, abstract, host_pid_ns, expected_uid = sys.argv[1:]
     facts = {
-        "same_existing_uid": os.getuid() != 0,
+        "same_existing_uid": os.getuid() == int(expected_uid),
         "host_state_hidden": inaccessible(canary),
         "host_state_via_proc_hidden": inaccessible("/proc/self/root" + canary),
         "endpoint_key_path_hidden": inaccessible("/var/lib/harness-aba/identity.json"),
@@ -42,8 +42,20 @@ def probe():
         "host_private_network_denied": cannot_connect(socket.AF_INET, ("172.16.0.42", int(port))),
         "host_abstract_socket_denied": cannot_connect(socket.AF_UNIX, "\0" + abstract),
         "workspace_control_socket_denied": cannot_connect(socket.AF_UNIX, str(Path.cwd() / "host-control-sentinel.sock")),
+        "provider_socket_hidden_from_runtime": inaccessible("/run/harness-provider.sock"),
+        "upstream_credential_not_in_runtime_env": os.environ.get("HARNESS_CODEX_API_KEY") in (None, "local-isolated-provider"),
         "isolated_home": os.environ.get("HOME") == "/home/runtime",
     }
+    pairs = []
+    try:
+        pairs = socket.socketpair(socket.AF_UNIX, socket.SOCK_DGRAM)
+        pairs[0].connect(str(Path.cwd() / "host-datagram-sentinel.sock"))
+        facts["datagram_pair_cannot_reach_host"] = False
+    except OSError:
+        facts["datagram_pair_cannot_reach_host"] = True
+    finally:
+        for pair in pairs:
+            pair.close()
     inherited = []
     for descriptor in Path("/proc/self/fd").iterdir():
         try:

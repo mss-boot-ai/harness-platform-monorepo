@@ -1,5 +1,6 @@
 //! A purpose-specific provider data path, not a general HTTP/SOCKS or host-control proxy.
 //! Runs inside the Run's cgroup but outside its network/PID namespace; no root privileges.
+use std::collections::BTreeSet;
 use std::io::{BufReader, Read, Write};
 use std::net::{Shutdown, TcpListener, TcpStream};
 use std::os::fd::AsRawFd as _;
@@ -11,9 +12,9 @@ use std::sync::{
     atomic::{AtomicUsize, Ordering},
 };
 use std::thread;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
-use reqwest::blocking::Client;
+use reqwest::Client;
 use url::Url;
 
 use super::ProcessError;
@@ -23,6 +24,7 @@ const MAX_BODY: usize = 4 * 1024 * 1024;
 const MAX_RESPONSE: u64 = 128 * 1024 * 1024;
 const TIMEOUT: Duration = Duration::from_secs(120);
 const MAX_CONNECTIONS: usize = 4;
+const MAX_REQUESTS: usize = 256;
 const LOCAL_PROVIDER: &str = "http://127.0.0.1:39121/v1";
 
 fn failed<T>(_: T) -> ProcessError {
@@ -50,17 +52,13 @@ pub(super) fn start_host_proxy(socket: &Path) -> Result<(), ProcessError> {
     let base = std::env::var("HARNESS_CODEX_API_BASE_URL").map_err(failed)?;
     let key = std::env::var("HARNESS_CODEX_API_KEY").map_err(failed)?;
     let base = provider_base(&base)?;
+    let model = std::env::var("HARNESS_CODEX_MODEL").map_err(failed)?;
+    let models = std::env::var("HARNESS_CODEX_MODELS").unwrap_or(model.clone());
+    let policy = Arc::new(ProviderPolicy::new(&model, &models)?);
     if key.is_empty() || key.len() > 4096 || key.bytes().any(|byte| byte < 0x20 || byte == 0x7f) {
         return Err(ProcessError::UnsafeProfile);
     }
     let listener = UnixListener::bind(socket).map_err(failed)?; // Never removes/replaces an old socket.
-    let client = Client::builder()
-        .no_proxy()
-        .redirect(reqwest::redirect::Policy::none())
-        .connect_timeout(Duration::from_secs(10))
-        .timeout(Duration::from_secs(300))
-        .build()
-        .map_err(failed)?;
     let count = Arc::new(AtomicUsize::new(0));
     thread::Builder::new()
         .name("aba-provider-listener".into())
@@ -72,7 +70,7 @@ pub(super) fn start_host_proxy(socket: &Path) -> Result<(), ProcessError> {
                 let Some(permit) = Permit::acquire(&count) else {
                     continue;
                 };
-                let client = client.clone();
+                let policy = Arc::clone(&policy);
                 let base = base.clone();
                 let key = key.clone();
                 let _ = thread::Builder::new()
@@ -82,7 +80,7 @@ pub(super) fn start_host_proxy(socket: &Path) -> Result<(), ProcessError> {
                         let _ = stream.set_read_timeout(Some(TIMEOUT));
                         let _ = stream.set_write_timeout(Some(TIMEOUT));
                         // Only constant diagnostics go on the wire; no local credentials/error chains in logs.
-                        if proxy_request(&mut stream, &client, &base, &key).is_err() {
+                        if proxy_request(&mut stream, &base, &key, &policy).is_err() {
                             let _ = stream.shutdown(Shutdown::Both);
                         }
                     });
@@ -111,6 +109,166 @@ struct Request {
     method: &'static str,
     suffix: &'static str,
     body: Vec<u8>,
+}
+
+struct ProviderPolicy {
+    models: BTreeSet<String>,
+    requests: AtomicUsize,
+}
+impl ProviderPolicy {
+    fn new(model: &str, models: &str) -> Result<Self, ProcessError> {
+        let models: BTreeSet<String> = models
+            .split(',')
+            .map(|value| value.trim().to_owned())
+            .collect();
+        if !models.contains(model)
+            || models.is_empty()
+            || models.len() > 16
+            || models
+                .iter()
+                .any(|value| value.is_empty() || value.len() > 128)
+        {
+            return Err(ProcessError::UnsafeProfile);
+        }
+        Ok(Self {
+            models,
+            requests: AtomicUsize::new(0),
+        })
+    }
+    fn authorize(&self, request: &mut Request) -> Result<(), ProcessError> {
+        if request.method == "POST" {
+            let mut value: serde_json::Value =
+                serde_json::from_slice(&request.body).map_err(failed)?;
+            let object = value.as_object_mut().ok_or(ProcessError::Protocol)?;
+            if object.keys().any(|key| {
+                !matches!(
+                    key.as_str(),
+                    "model"
+                        | "input"
+                        | "instructions"
+                        | "tools"
+                        | "tool_choice"
+                        | "parallel_tool_calls"
+                        | "reasoning"
+                        | "text"
+                        | "stream"
+                        | "stream_options"
+                        | "store"
+                        | "include"
+                        | "temperature"
+                        | "top_p"
+                        | "max_output_tokens"
+                        | "metadata"
+                        | "service_tier"
+                        | "prompt_cache_key"
+                        | "prompt_cache_retention"
+                        | "safety_identifier"
+                        | "truncation"
+                )
+            }) || object
+                .get("model")
+                .and_then(serde_json::Value::as_str)
+                .is_none_or(|model| !self.models.contains(model))
+                || object
+                    .get("store")
+                    .is_some_and(|value| value != &serde_json::Value::Bool(false))
+                || object
+                    .get("service_tier")
+                    .is_some_and(|value| !matches!(value.as_str(), Some("auto" | "default")))
+                || object
+                    .get("input")
+                    .is_some_and(|input| !safe_input(input, 0))
+            {
+                return Err(ProcessError::Protocol);
+            }
+            if let Some(tools) = object.get("tools") {
+                validate_tools(tools, 0)?;
+            }
+            if let Some(choice) = object.get("tool_choice") {
+                if !matches!(choice.as_str(), Some("auto" | "none" | "required"))
+                    && !matches!(
+                        choice.get("type").and_then(serde_json::Value::as_str),
+                        Some("function" | "custom")
+                    )
+                {
+                    return Err(ProcessError::Protocol);
+                }
+            }
+            if let Some(include) = object.get("include") {
+                if include.as_array().is_none_or(|values| {
+                    values.len() > 1
+                        || values
+                            .iter()
+                            .any(|value| value.as_str() != Some("reasoning.encrypted_content"))
+                }) {
+                    return Err(ProcessError::Protocol);
+                }
+            }
+            if object.get("max_output_tokens").is_some_and(|value| {
+                value
+                    .as_u64()
+                    .is_none_or(|value| value == 0 || value > 16_384)
+            }) {
+                return Err(ProcessError::Limit);
+            }
+            object.insert("store".into(), false.into());
+            object.entry("max_output_tokens").or_insert(16_384.into());
+            request.body = serde_json::to_vec(&value).map_err(failed)?;
+        }
+        self.requests
+            .fetch_update(Ordering::AcqRel, Ordering::Acquire, |value| {
+                (value < MAX_REQUESTS).then_some(value + 1)
+            })
+            .map_err(|_| ProcessError::Limit)?;
+        Ok(())
+    }
+}
+fn validate_tools(tools: &serde_json::Value, depth: usize) -> Result<(), ProcessError> {
+    let tools = tools.as_array().ok_or(ProcessError::Protocol)?;
+    if tools.len() > 64 || depth > 2 {
+        return Err(ProcessError::Limit);
+    }
+    for tool in tools {
+        match tool.get("type").and_then(serde_json::Value::as_str) {
+            Some("function" | "custom") => {}
+            Some("namespace") => {
+                validate_tools(tool.get("tools").ok_or(ProcessError::Protocol)?, depth + 1)?
+            }
+            _ => return Err(ProcessError::Protocol),
+        }
+    }
+    Ok(())
+}
+fn safe_input(value: &serde_json::Value, depth: usize) -> bool {
+    if depth > 32 {
+        return false;
+    }
+    match value {
+        serde_json::Value::Array(items) => items.iter().all(|item| safe_input(item, depth + 1)),
+        serde_json::Value::Object(object) => {
+            !matches!(
+                object.get("type").and_then(serde_json::Value::as_str),
+                Some("input_file" | "input_image" | "input_video" | "item_reference")
+            ) && object.values().all(|item| safe_input(item, depth + 1))
+        }
+        _ => true, // Never inspect prompt or tool-output text as instructions/policy.
+    }
+}
+
+struct DeadlineReader<'a> {
+    stream: &'a mut UnixStream,
+    deadline: Instant,
+}
+impl Read for DeadlineReader<'_> {
+    fn read(&mut self, buffer: &mut [u8]) -> std::io::Result<usize> {
+        let remaining = self
+            .deadline
+            .checked_duration_since(Instant::now())
+            .filter(|duration| !duration.is_zero())
+            .ok_or(std::io::ErrorKind::TimedOut)?;
+        self.stream.set_read_timeout(Some(remaining))?;
+        self.stream.read(buffer)
+    }
 }
 
 fn read_request(input: &mut impl Read) -> Result<Request, ProcessError> {
@@ -182,11 +340,19 @@ fn read_request(input: &mut impl Read) -> Result<Request, ProcessError> {
 
 fn proxy_request(
     stream: &mut UnixStream,
-    client: &Client,
     base: &str,
     key: &str,
+    policy: &ProviderPolicy,
 ) -> Result<(), ProcessError> {
-    let request = match read_request(&mut BufReader::new(&mut *stream)) {
+    let request = read_request(&mut BufReader::new(DeadlineReader {
+        stream: &mut *stream,
+        deadline: Instant::now() + Duration::from_secs(30),
+    }))
+    .and_then(|mut request| {
+        policy.authorize(&mut request)?;
+        Ok(request)
+    });
+    let request = match request {
         Ok(request) => request,
         Err(error) => {
             stream
@@ -197,19 +363,27 @@ fn proxy_request(
             return Err(error);
         }
     };
-    let url = format!("{base}{}", request.suffix);
-    let builder = if request.method == "POST" {
-        client.post(url)
-    } else {
-        client.get(url)
-    };
-    let response = builder
-        .bearer_auth(key)
-        .header("Accept", "text/event-stream, application/json")
-        .header("Content-Type", "application/json")
-        .body(request.body)
-        .send()
+    stream
+        .set_write_timeout(Some(Duration::from_secs(2)))
         .map_err(failed)?;
+    let runtime = tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()
+        .map_err(failed)?;
+    runtime.block_on(async {
+    // A connection-local async client gives cancellation a real owned future to drop,
+    // without retaining a blocking upstream worker or a pool tied to a dead I/O runtime.
+    let client = Client::builder().no_proxy().retry(reqwest::retry::never())
+        .redirect(reqwest::redirect::Policy::none()).connect_timeout(Duration::from_secs(10))
+        .timeout(TIMEOUT).build().map_err(failed)?;
+    let url = format!("{base}{}", request.suffix);
+    let builder = if request.method == "POST" { client.post(url) } else { client.get(url) };
+    let sending = builder.bearer_auth(key).header("Accept", "text/event-stream, application/json")
+        .header("Content-Type", "application/json").body(request.body).send();
+    let mut response = tokio::select! {
+        response = sending => response.map_err(failed)?,
+        _ = disconnected(stream) => return Err(ProcessError::Transport),
+    };
     let content_type = response
         .headers()
         .get("content-type")
@@ -217,20 +391,41 @@ fn proxy_request(
         .unwrap_or("application/octet-stream");
     write!(stream, "HTTP/1.1 {} Upstream\r\nConnection: close\r\nContent-Type: {content_type}\r\nCache-Control: no-store\r\n\r\n",
         response.status().as_u16()).map_err(failed)?;
-    let mut response = response.take(MAX_RESPONSE + 1);
-    let mut bytes = [0; 16 * 1024];
     let mut total = 0u64;
     loop {
-        let count = response.read(&mut bytes).map_err(failed)?;
-        if count == 0 {
-            return Ok(());
-        }
-        total += count as u64;
+        let chunk = tokio::select! {
+            chunk = response.chunk() => chunk.map_err(failed)?,
+            _ = disconnected(stream) => return Err(ProcessError::Transport),
+        };
+        let Some(chunk) = chunk else { return Ok(()); };
+        total += chunk.len() as u64;
         if total > MAX_RESPONSE {
             return Err(ProcessError::Limit);
         }
-        stream.write_all(&bytes[..count]).map_err(failed)?;
+        stream.write_all(&chunk).map_err(failed)?;
         stream.flush().map_err(failed)?;
+    }
+    })
+}
+
+async fn disconnected(stream: &UnixStream) {
+    use rustix::event::{PollFd, PollFlags, Timespec, poll};
+    loop {
+        let flags = PollFlags::HUP | PollFlags::ERR | PollFlags::NVAL | PollFlags::RDHUP;
+        let mut descriptors = [PollFd::new(stream, flags)];
+        if poll(
+            &mut descriptors,
+            Some(&Timespec {
+                tv_sec: 0,
+                tv_nsec: 0,
+            }),
+        )
+        .is_err()
+            || descriptors[0].revents().intersects(flags)
+        {
+            return;
+        }
+        tokio::time::sleep(Duration::from_millis(25)).await;
     }
 }
 
@@ -260,6 +455,8 @@ pub fn run_contained(
             "/proc",
             "--dev",
             "/dev",
+            "--tmpfs",
+            "/run", // The actual runtime does not need the outer relay's Unix socket.
             "--die-with-parent",
             "--new-session",
             "--cap-drop",
@@ -348,14 +545,21 @@ fn syscall_filter() -> Result<std::fs::File, ProcessError> {
         (0x45, 0, 1, 0x40000000),
         (0x06, 0, 0, 0x80000000),
     ];
-    for syscall in [101, 248, 249, 250, 310, 311, 438] {
+    for syscall in [101, 248, 249, 250, 310, 311, 425, 426, 427, 438] {
         program.extend([(0x15, 0, 1, syscall), (0x06, 0, 0, 0x00050001)]);
     }
-    // socket(AF_UNIX, ...) is denied. socketpair remains available for private process IPC.
+    // Native bwrap needs private connected stream/seqpacket pairs. Datagram pairs can
+    // be re-targeted to workspace pathname services, so explicitly deny that path too.
     program.extend([
-        (0x15, 0, 3, 41),
+        (0x15, 0, 4, 41),
         (0x20, 0, 0, 16),
         (0x15, 0, 1, 1),
+        (0x06, 0, 0, 0x00050001),
+        (0x06, 0, 0, 0x7fff0000),
+        (0x15, 0, 4, 53),
+        (0x20, 0, 0, 24),
+        (0x54, 0, 0, 0xf),
+        (0x15, 0, 1, 2),
         (0x06, 0, 0, 0x00050001),
         (0x06, 0, 0, 0x7fff0000),
     ]);
@@ -419,5 +623,167 @@ mod tests {
         assert!(Permit::acquire(&count).is_none());
         drop(permits);
         assert!(Permit::acquire(&count).is_some());
+    }
+
+    #[test]
+    fn provider_capabilities_are_frozen_to_the_local_policy() -> Result<(), ProcessError> {
+        let policy = ProviderPolicy::new("allowed-model", "allowed-model")?;
+        for body in [
+            serde_json::json!({"model":"other-model","input":"test"}),
+            serde_json::json!({"model":"allowed-model","background":true}),
+            serde_json::json!({"model":"allowed-model","previous_response_id":"foreign"}),
+            serde_json::json!({"model":"allowed-model","store":true}),
+            serde_json::json!({"model":"allowed-model","tools":[{"type":"web_search"}]}),
+            serde_json::json!({"model":"allowed-model","tools":[{"type":"mcp","server_url":"https://example.com"}]}),
+            serde_json::json!({"model":"allowed-model","input":[{"type":"input_file","file_url":"https://example.com"}]}),
+            serde_json::json!({"model":"allowed-model","max_output_tokens":1_000_000}),
+        ] {
+            let mut request = Request {
+                method: "POST",
+                suffix: "/responses",
+                body: serde_json::to_vec(&body).map_err(failed)?,
+            };
+            assert!(policy.authorize(&mut request).is_err());
+        }
+        let mut request = Request { method: "POST", suffix: "/responses", body: serde_json::to_vec(&serde_json::json!({
+            "model":"allowed-model", "input":"Opaque text mentioning file_url and instructions remains text.",
+            "tools":[{"type":"namespace","name":"functions","tools":[{"type":"function","name":"read_file"},{"type":"custom","name":"apply_patch"}]}]
+        })).map_err(failed)? };
+        policy.authorize(&mut request)?;
+        let value: serde_json::Value = serde_json::from_slice(&request.body).map_err(failed)?;
+        assert_eq!(value["store"], false);
+        assert_eq!(value["max_output_tokens"], 16_384);
+        Ok(())
+    }
+
+    #[test]
+    fn slow_drip_does_not_extend_the_absolute_acquisition_deadline()
+    -> Result<(), Box<dyn std::error::Error>> {
+        let (mut server, mut client) = UnixStream::pair()?;
+        let writer = thread::spawn(move || {
+            for _ in 0..100 {
+                if client.write_all(b"x").is_err() {
+                    break;
+                }
+                thread::sleep(Duration::from_millis(10));
+            }
+        });
+        let began = Instant::now();
+        let result = read_request(&mut BufReader::new(DeadlineReader {
+            stream: &mut server,
+            deadline: began + Duration::from_millis(55),
+        }));
+        assert!(result.is_err());
+        assert!(began.elapsed() < Duration::from_secs(1));
+        drop(server);
+        writer.join().map_err(|_| "deadline writer failed")?;
+        Ok(())
+    }
+
+    fn synthetic_request() -> Vec<u8> {
+        let body = r#"{"model":"allowed-model","input":"synthetic"}"#;
+        format!("POST /v1/responses HTTP/1.1\r\nHost: attacker.invalid\r\nAuthorization: Bearer wrong\r\nX-Forwarded-Host: attacker.invalid\r\nContent-Length: {}\r\n\r\n{body}", body.len()).into_bytes()
+    }
+
+    fn capture_headers(stream: &mut TcpStream) -> std::io::Result<String> {
+        let mut header = Vec::new();
+        let mut byte = [0];
+        while header.len() < MAX_HEADERS && !header.ends_with(b"\r\n\r\n") {
+            stream.read_exact(&mut byte)?;
+            header.push(byte[0]);
+        }
+        String::from_utf8(header).map_err(std::io::Error::other)
+    }
+
+    #[test]
+    fn actual_forwarding_ignores_header_overrides_and_does_not_follow_redirects()
+    -> Result<(), Box<dyn std::error::Error>> {
+        let upstream = TcpListener::bind("127.0.0.1:0")?;
+        let unexpected = TcpListener::bind("127.0.0.1:0")?;
+        unexpected.set_nonblocking(true)?;
+        let base = format!("http://{}/v1", upstream.local_addr()?); // Test-only direct helper; public bootstrap requires HTTPS.
+        let destination = unexpected.local_addr()?;
+        let (captured, headers) = std::sync::mpsc::channel();
+        let receiver = thread::spawn(move || -> std::io::Result<()> {
+            let (mut stream, _) = upstream.accept()?;
+            stream.set_read_timeout(Some(Duration::from_secs(2)))?;
+            captured
+                .send(capture_headers(&mut stream)?)
+                .map_err(std::io::Error::other)?;
+            write!(
+                stream,
+                "HTTP/1.1 302 Found\r\nLocation: http://{destination}/steal\r\nContent-Length: 0\r\n\r\n"
+            )?;
+            Ok(())
+        });
+        let (mut server, mut client) = UnixStream::pair()?;
+        let worker = thread::spawn(move || -> Result<(), ProcessError> {
+            proxy_request(
+                &mut server,
+                &base,
+                "synthetic-upstream-credential",
+                &ProviderPolicy::new("allowed-model", "allowed-model")?,
+            )
+        });
+        client.write_all(&synthetic_request())?;
+        client.set_read_timeout(Some(Duration::from_secs(2)))?;
+        let mut response = String::new();
+        client.read_to_string(&mut response)?;
+        worker.join().map_err(|_| "proxy worker failed")??;
+        receiver.join().map_err(|_| "upstream worker failed")??;
+        let headers = headers
+            .recv_timeout(Duration::from_secs(1))?
+            .to_ascii_lowercase();
+        assert!(headers.starts_with("post /v1/responses http/1.1"));
+        assert!(headers.contains("authorization: bearer synthetic-upstream-credential\r\n"));
+        assert!(!headers.contains("attacker.invalid"));
+        assert!(!headers.contains("x-forwarded-host"));
+        assert!(response.starts_with("HTTP/1.1 302"));
+        assert!(!response.to_ascii_lowercase().contains("location:"));
+        assert!(
+            matches!(unexpected.accept(), Err(error) if error.kind() == std::io::ErrorKind::WouldBlock)
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn repeated_downstream_abandonment_releases_upstream_worker_permits()
+    -> Result<(), Box<dyn std::error::Error>> {
+        let count = Arc::new(AtomicUsize::new(0));
+        for _ in 0..4 {
+            let listener = TcpListener::bind("127.0.0.1:0")?;
+            let base = format!("http://{}/v1", listener.local_addr()?);
+            let (accepted, ready) = std::sync::mpsc::channel();
+            let (finish, finished) = std::sync::mpsc::channel();
+            let upstream = thread::spawn(move || -> std::io::Result<()> {
+                let (mut stream, _) = listener.accept()?;
+                stream.set_read_timeout(Some(Duration::from_secs(2)))?;
+                capture_headers(&mut stream)?;
+                accepted.send(()).map_err(std::io::Error::other)?;
+                let _ = finished.recv_timeout(Duration::from_secs(3));
+                Ok(())
+            });
+            let permit = Permit::acquire(&count).ok_or("permit leaked")?;
+            let (mut server, mut client) = UnixStream::pair()?;
+            let worker = thread::spawn(move || -> Result<(), ProcessError> {
+                let _permit = permit;
+                proxy_request(
+                    &mut server,
+                    &base,
+                    "synthetic-key",
+                    &ProviderPolicy::new("allowed-model", "allowed-model")?,
+                )
+            });
+            client.write_all(&synthetic_request())?;
+            ready.recv_timeout(Duration::from_secs(2))?;
+            let began = Instant::now();
+            drop(client);
+            assert!(worker.join().map_err(|_| "cancel worker failed")?.is_err());
+            assert!(began.elapsed() < Duration::from_secs(1));
+            assert_eq!(count.load(Ordering::Acquire), 0);
+            finish.send(())?;
+            upstream.join().map_err(|_| "upstream join failed")??;
+        }
+        Ok(())
     }
 }
