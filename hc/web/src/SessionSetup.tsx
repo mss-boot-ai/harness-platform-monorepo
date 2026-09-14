@@ -9,7 +9,7 @@ import type { EndpointAccess } from './remote/endpoint-access';
 import type { RegisterEndpointShutdown } from './remote/endpoint-owner';
 import { RuntimeActivity, RuntimeConfiguration, type PendingConfig } from './remote/RuntimeControls';
 
-const loading: ManagerView = { status: 'loading', online: false, creating: false, workspace: null, conversations: [],
+const loading: ManagerView = { status: 'loading', online: false, creating: false, workspace: null, selectedId: null, conversations: [],
   endpoints: [], unrecoverable: [], recovery: {}, error: null, pendingWrites: 0 };
 const noSubscription = () => () => undefined;
 const loadingSnapshot = () => loading;
@@ -60,7 +60,7 @@ export function SessionSetup({ connection, access, registration, secureStore, in
     return () => { active = false; manager.disconnect(); };
   }, [manager, connection]);
   const view = useSyncExternalStore(manager?.subscribe ?? noSubscription, manager?.snapshot ?? loadingSnapshot);
-  const selectedId = view.workspace?.selectedId ?? null;
+  const selectedId = view.selectedId;
   const selected = view.conversations.find((item) => item.data.session.sessionId === selectedId);
   const value = selected?.data;
   const session = value?.session;
@@ -98,8 +98,14 @@ export function SessionSetup({ connection, access, registration, secureStore, in
     const version = ++editVersion.current; const id = selectedId;
     setEdit({ id, text, version });
     if (manager === null) return;
-    void manager.draft(id, text).then(() => { if (mounted.current) setEdit((current) => current?.version === version ? null : current); })
+    void Promise.resolve().then(() => manager.draft(id, text)).then(() => { if (mounted.current) setEdit((current) => current?.version === version ? null : current); })
       .catch(() => { if (mounted.current) setError('草稿尚未保存。请保留此页并检查存储空间，不要刷新。'); });
+  };
+  const selectConversation = (id: string | null) => {
+    if (manager === null) return;
+    setError(null);
+    // Navigation takes effect before another input event; persistence cannot change its destination later.
+    void manager.select(id).catch(() => { if (mounted.current) setError('会话选择尚未保存，请保留此页并检查存储。'); });
   };
   const submit = async () => {
     if (manager === null || !canSubmit || responding || draft.trim() === '') return;
@@ -150,13 +156,14 @@ export function SessionSetup({ connection, access, registration, secureStore, in
             : value?.awaiting !== null && value?.awaiting !== undefined && value.outbox.length === 0 ? '消息已安全送达，正在等待执行结果。'
               : full ? '会话达到本地显示上限，请新建对话。' : value !== undefined && value.keys === null && !terminal ? '正在准备安全会话，草稿尚未发送。' : null);
   return <ChatWorkspace draft={draft} onDraftChange={changeDraft} onSubmit={() => perform(submit, '本次发送尚未确认，草稿已保留。请检查会话状态后再操作。')}
-    onNewChat={() => perform(() => manager?.select(null) ?? Promise.resolve(), '无法保存新对话选择。')}
+    onNewChat={() => selectConversation(null)} newChatDisabled={creating || view.creating}
+    draftSaved={edit?.id !== selectedId && view.pendingWrites === 0 && view.status === 'ready'} composerDisabled={creating || view.creating}
     onEndChat={session !== undefined && !terminal ? () => perform(() => manager!.close(session.sessionId), '关闭会话未确认，请核对执行端状态。') : null}
     {...(value?.runtime.cancelSupported && !readOnly && view.online ? { onCancelTurn: () => perform(() => manager!.cancel(value.session.sessionId), '停止请求未确认，请检查当前轮次。'), cancelPending: value.cancelPending } : {})}
     renderTurnActivity={(turnId) => value === undefined ? null : <RuntimeActivity key={value.session.sessionId} state={value.runtime} turnId={turnId}
       disabled={!view.online || readOnly || value.cancelPending || actionBusy}
       onDecision={(id, option) => perform(() => manager!.decide(value.session.sessionId, id, option), '权限请求已失效或提交未确认，请核对当前会话。')} />}
-    onOpenSettings={onOpenSettings} onSelectConversation={(id) => perform(() => manager?.select(id) ?? Promise.resolve(), '无法保存会话选择。')}
+    onOpenSettings={onOpenSettings} onSelectConversation={selectConversation}
     conversations={conversations} selectedConversationId={selectedId} messages={value?.messages ?? []}
     title={conversationTitle(value?.messages.find((message) => message.role === 'user')?.text ?? '')} agent={session?.runtimeProfileId ?? runtimeProfileId}
     online={view.online} connected busy={creating || actionBusy} responding={responding}

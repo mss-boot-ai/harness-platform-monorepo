@@ -76,7 +76,11 @@ try {
     await page.getByRole('button', { name: '发送消息', exact: true }).click();
   };
   const completed = async (count) => until(async () => await page.getByRole('button', { name: '复制回复', exact: true }).count() === count, 'completed response');
-  const selection = async (prefix) => { await page.locator('.conversation-item').filter({ hasText: prefix }).click(); };
+  const selection = async (prefix) => {
+    const target = page.locator('.conversation-item').filter({ hasText: prefix }); await target.click();
+    await until(async () => await target.getAttribute('aria-current') === 'page', 'selected conversation visible');
+  };
+  const savedDraft = () => page.getByText('草稿已加密保存', { exact: true }).waitFor();
   const sessionFor = async (workspace) => (await stack.adminRequest('/admin/api/harness/v1/sessions?limit=200')).items.find((item) => item.workspaceId === workspace);
   const canary = `HC_C3_CANARY_${randomUUID()}`;
   await environment('workspace-a'); await send(canary); await completed(1);
@@ -90,9 +94,15 @@ try {
   await environment('workspace-b'); await send('permission'); await page.getByRole('region', { name: '工具权限请求', exact: true }).waitFor();
   const b = await sessionFor('workspace-b'); assert.ok(b); assert.equal((await sessionFor('workspace-a')).status, 'ACTIVE');
   await page.getByRole('textbox', { name: '消息', exact: true }).fill('draft B retained');
-  await until(async () => !await page.getByText('正在保存草稿与会话选择，请勿清除浏览器数据。', { exact: true }).isVisible(), 'draft B durable');
-  await selection(canary.slice(0, 20)); await page.getByRole('textbox', { name: '消息', exact: true }).fill('draft A retained');
-  await until(async () => !await page.getByText('正在保存草稿与会话选择，请勿清除浏览器数据。', { exact: true }).isVisible(), 'draft A durable');
+  await savedDraft();
+  // Deliberately type immediately after each click, without the settled-selection helper.
+  await page.locator('.conversation-item').filter({ hasText: canary.slice(0, 20) }).click();
+  await page.getByRole('textbox', { name: '消息', exact: true }).fill('draft A first');
+  await page.locator('.conversation-item').filter({ hasText: 'permission' }).click();
+  await page.getByRole('textbox', { name: '消息', exact: true }).fill('draft B retained');
+  await page.locator('.conversation-item').filter({ hasText: canary.slice(0, 20) }).click();
+  await page.getByRole('textbox', { name: '消息', exact: true }).fill('draft A retained');
+  await savedDraft();
   await selection('permission');
   assert.equal(await page.getByRole('textbox', { name: '消息', exact: true }).inputValue(), 'draft B retained');
   await page.reload({ waitUntil: 'networkidle' });

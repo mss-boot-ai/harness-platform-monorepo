@@ -16,6 +16,7 @@ export interface ConversationAPI {
 }
 export interface ManagerView {
   readonly status: 'loading' | 'ready' | 'failed'; readonly online: boolean; readonly creating: boolean;
+  readonly selectedId: string | null;
   readonly workspace: ConversationWorkspace | null; readonly conversations: readonly ConversationView[];
   readonly endpoints: readonly ABAEndpointSummary[]; readonly unrecoverable: readonly EndpointSessionSummary[];
   readonly recovery: Readonly<Record<string, string>>; readonly error: string | null; readonly pendingWrites: number;
@@ -40,6 +41,8 @@ export class ConversationManager {
   private restoring = false;
   private creating = false;
   private pendingWrites = 0;
+  private selectionVersion = 0;
+  private selection: { readonly id: string | null; readonly version: number } | null = null;
   private buffer: Uint8Array[] = [];
   private bufferBytes = 0;
   private controlSequence = 0n;
@@ -51,7 +54,7 @@ export class ConversationManager {
   private unrecoverable: readonly EndpointSessionSummary[] = [];
   private error: string | null = null;
   private status: ManagerView['status'] = 'loading';
-  private view: ManagerView = { status: 'loading', online: false, creating: false, workspace: null,
+  private view: ManagerView = { status: 'loading', online: false, creating: false, workspace: null, selectedId: null,
     conversations: [], endpoints: [], unrecoverable: [], recovery: {}, error: null, pendingWrites: 0 };
   public constructor(private readonly store: ConversationStore, private readonly identity: EndpointIdentity,
     private readonly endpointId: string, private readonly api: ConversationAPI, private readonly now = Date.now) {}
@@ -60,6 +63,7 @@ export class ConversationManager {
   private emit(): void {
     this.view = { status: this.status, online: this.connection?.socket.readyState === 1 && !this.restoring,
       creating: this.creating, workspace: this.workspace?.value ?? null,
+      selectedId: this.selection === null ? this.workspace?.value.selectedId ?? null : this.selection.id,
       conversations: [...this.controllers.values()].map((controller) => controller.snapshot()), endpoints: this.endpoints,
       unrecoverable: this.unrecoverable, recovery: { ...this.recovery }, error: this.error, pendingWrites: this.pendingWrites };
     if (!this.closed) for (const listener of this.listeners) listener();
@@ -236,8 +240,13 @@ export class ConversationManager {
     }
   }
   public select(id: string | null): Promise<void> {
+    try { this.assertOpen(); } catch (cause) { return Promise.reject(cause); }
     if (id !== null && !this.controllers.has(id)) return Promise.reject(new Error('Unknown conversation'));
-    return this.metadata((value) => ({ ...value, selectedId: id }));
+    const intent = { id, version: ++this.selectionVersion };
+    this.selection = intent; this.emit();
+    return this.metadata((value) => ({ ...value, selectedId: id })).then(() => {
+      if (this.selection === intent) { this.selection = null; this.emit(); }
+    });
   }
   public draft(id: string | null, text: string): Promise<void> {
     this.assertOpen();
@@ -278,7 +287,7 @@ export class ConversationManager {
       const intent: CreationIntent = this.workspace.value.creation ?? { ...input, id: crypto.randomUUID() };
       const aba = this.endpoints.find((item) => item.id === intent.abaEndpointId && item.status === 'ACTIVE');
       if (aba === undefined || (!retry && this.workspaceConflict(aba.id, intent.workspaceId))) throw new Error('Execution workspace is unavailable or busy');
-      this.creating = true; this.error = null; this.emit(); const epoch = this.epoch;
+      this.creating = true; this.error = null; this.emit(); const epoch = this.epoch; const selectionVersion = this.selectionVersion;
       try {
         await this.metadata((value) => ({ ...value, creation: intent }));
         if (!this.current(epoch)) throw new Error('Connection changed before create');
@@ -292,7 +301,7 @@ export class ConversationManager {
         }
         if (!this.current(epoch)) throw new Error('Connection changed while saving session');
         this.allowed.add(session.sessionId);
-        await this.metadata((value) => ({ ...value, creation: null, selectedId: session.sessionId,
+        await this.metadata((value) => ({ ...value, creation: null, selectedId: this.selectionVersion === selectionVersion ? session.sessionId : value.selectedId,
           draft: value.draft === intent.draft ? '' : value.draft }));
         this.unrecoverable = this.unrecoverable.filter((item) => item.sessionId !== session.sessionId);
         this.flush(); this.emit(); return session.sessionId;

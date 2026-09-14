@@ -13,6 +13,7 @@ export interface ChatWorkspaceProps {
   readonly canSubmit: boolean; readonly readOnly: boolean; readonly hasActiveSession: boolean;
   readonly notice: string | null; readonly error: string | null; readonly targetSettings: ReactNode;
   readonly onCancelTurn?: () => void; readonly cancelPending?: boolean;
+  readonly newChatDisabled?: boolean; readonly composerDisabled?: boolean; readonly draftSaved?: boolean;
   readonly renderTurnActivity?: (turnId: string) => ReactNode;
 }
 const suggestions: readonly { readonly icon: IconName; readonly title: string; readonly detail: string; readonly prompt: string }[] = [
@@ -64,7 +65,7 @@ export function ChatWorkspace(props: ChatWorkspaceProps) {
     {props.readOnly ? <div className="readonly-note">此对话当前只读。请核对会话或端点状态；历史消息不会自动重新执行。</div> : <>
       <form className="composer" onSubmit={(event) => { event.preventDefault(); submit(); }}>
         <label className="sr-only" htmlFor="chat-prompt">消息</label>
-        <textarea id="chat-prompt" ref={textarea} rows={1} value={props.draft} maxLength={16_000}
+        <textarea id="chat-prompt" ref={textarea} rows={1} value={props.draft} maxLength={16_000} disabled={props.composerDisabled}
           placeholder={props.connected ? '给你的 Agent 发送消息…' : '有什么想交给 Agent 的？'}
           onChange={(event) => props.onDraftChange(event.target.value)}
           onCompositionStart={() => { composing.current = true; }}
@@ -80,7 +81,7 @@ export function ChatWorkspace(props: ChatWorkspaceProps) {
             : <button className="send-button" type="submit" aria-label={props.connected ? '发送消息' : '连接 Agent'} title={props.connected ? '发送消息' : '先连接 Agent，草稿会保留'} disabled={!props.canSubmit || props.busy || props.draft.trim() === ''}><Icon name="arrow" /></button>}
         </div>
       </form>
-      <p className="composer-hint">{props.responding ? props.onCancelTurn !== undefined ? props.cancelPending ? '已请求停止，等待执行端确认；会话仍然保留。' : 'Agent 正在回复；方形按钮停止本轮。' : 'Agent 正在回复；方形按钮将结束整个会话。' : props.busy ? '正在建立会话或发送消息…' : 'Enter 发送 · Shift + Enter 换行'}<span>请核对重要内容</span></p>
+      <p className="composer-hint">{props.responding ? props.onCancelTurn !== undefined ? props.cancelPending ? '已请求停止，等待执行端确认；会话仍然保留。' : 'Agent 正在回复；方形按钮停止本轮。' : 'Agent 正在回复；方形按钮将结束整个会话。' : props.busy ? '正在建立会话或发送消息…' : 'Enter 发送 · Shift + Enter 换行'}<span role="status">{props.draftSaved === true ? '草稿已加密保存' : props.draftSaved === false ? '草稿保存中' : '请核对重要内容'}</span></p>
     </>}
   </div>;
   return <div className={`chat-shell ${collapsed ? 'sidebar-collapsed' : ''} ${sidebarOpen ? 'sidebar-open' : ''}`}>
@@ -88,7 +89,7 @@ export function ChatWorkspace(props: ChatWorkspaceProps) {
     {sidebarOpen ? <button type="button" className="sidebar-backdrop" aria-label="关闭会话导航" onClick={() => setSidebarOpen(false)} /> : null}
     <aside className="chat-sidebar" aria-label="会话导航">
       <div className="sidebar-brand"><span className="brand-mark">H</span><strong>Harness</strong><button type="button" className="icon-button desktop-only" aria-label="收起侧边栏" onClick={() => setCollapsed(true)}><Icon name="menu" /></button><button type="button" className="icon-button mobile-only" aria-label="关闭侧边栏" onClick={() => setSidebarOpen(false)}><Icon name="close" /></button></div>
-      <button type="button" className="new-chat-button" disabled={props.busy} onClick={newChat}><Icon name="plus" /><span>新建对话</span></button>
+      <button type="button" className="new-chat-button" disabled={props.newChatDisabled} onClick={newChat}><Icon name="plus" /><span>新建对话</span></button>
       <button type="button" className="sidebar-action" onClick={() => setSearching((value) => !value)} aria-expanded={searching}><Icon name="search" />搜索本地会话</button>
       {searching ? <input className="conversation-search" autoFocus type="search" value={query} onChange={(event) => setQuery(event.target.value)} placeholder="搜索对话…" aria-label="搜索本地会话" /> : null}
       <div className="sidebar-section-label">本地会话</div>

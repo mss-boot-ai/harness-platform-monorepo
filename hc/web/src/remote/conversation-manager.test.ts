@@ -32,6 +32,45 @@ async function fixture() {
 }
 const chunk = (sessionId: string, text: string) => ({ jsonrpc: '2.0', method: 'session/update', params: { sessionId, update: { sessionUpdate: 'agent_message_chunk', content: { type: 'text', text } } } });
 describe('endpoint conversation coordination', () => {
+  it('binds immediate typing to visible selection while older metadata writes are delayed', async () => {
+    const f = await fixture(); await f.manager.load();
+    const write = f.a.store.writeWorkspace.bind(f.a.store); let release = () => undefined;
+    const gate = new Promise<void>((resolve) => { release = resolve; });
+    vi.spyOn(f.a.store, 'writeWorkspace').mockImplementationOnce(async (...args) => { await gate; return write(...args); });
+    const first = f.manager.select(f.a.session.sessionId);
+    expect(f.manager.snapshot().selectedId).toBe(f.a.session.sessionId);
+    await f.manager.draft(f.manager.snapshot().selectedId, 'A first edit');
+    const second = f.manager.select(f.b.session.sessionId);
+    expect(f.manager.snapshot().selectedId).toBe(f.b.session.sessionId);
+    await f.manager.draft(f.manager.snapshot().selectedId, 'B immediate edit');
+    const third = f.manager.select(f.a.session.sessionId);
+    await f.manager.draft(f.manager.snapshot().selectedId, 'A final edit');
+    release(); await Promise.all([first, second, third]);
+    expect(f.manager.snapshot().selectedId).toBe(f.a.session.sessionId);
+    expect((await f.a.store.read(f.a.session.sessionId))?.value.draft).toBe('A final edit');
+    expect((await f.a.store.read(f.b.session.sessionId))?.value.draft).toBe('B immediate edit');
+    expect((await f.a.store.readWorkspace()).value.selectedId).toBe(f.a.session.sessionId);
+  });
+  it('keeps the intended visible destination when selection persistence fails', async () => {
+    const f = await fixture(); await f.manager.load(); await f.manager.select(f.a.session.sessionId);
+    vi.spyOn(f.a.store, 'writeWorkspace').mockRejectedValueOnce(new Error('disk full'));
+    const selecting = f.manager.select(f.b.session.sessionId);
+    expect(f.manager.snapshot().selectedId).toBe(f.b.session.sessionId);
+    await expect(selecting).rejects.toThrow('disk full');
+    expect(f.manager.snapshot().selectedId).toBe(f.b.session.sessionId); expect(f.manager.snapshot().status).toBe('failed');
+    expect((await f.a.store.readWorkspace()).value.selectedId).toBe(f.a.session.sessionId);
+  });
+  it('does not steal a newer navigation choice when an earlier create response completes', async () => {
+    const f = await fixture(); await f.manager.load(); await f.manager.bind(connection(f.socket));
+    let finish: (session: EndpointSessionSummary) => void = () => undefined;
+    vi.mocked(f.api.create).mockImplementationOnce(() => new Promise((resolve) => { finish = resolve; }));
+    const creating = f.manager.create({ abaEndpointId: f.a.session.abaEndpointId, runtimeProfileId: 'fixture', workspaceId: 'fixture', draft: 'new session' });
+    await vi.waitFor(() => expect(f.api.create).toHaveBeenCalled());
+    await f.manager.select(f.b.session.sessionId);
+    finish({ ...f.a.session, sessionId: '06'.repeat(16), status: 'CREATING' }); await creating;
+    expect(f.manager.snapshot().selectedId).toBe(f.b.session.sessionId);
+    expect((await f.a.store.readWorkspace()).value.selectedId).toBe(f.b.session.sessionId);
+  });
   it('holds the local workspace guard while a first prompt is still being persisted', async () => {
     const f = await fixture();
     const second = { ...f.b.value, aba: f.a.value.aba, session: { ...f.b.session, abaEndpointId: f.a.session.abaEndpointId, workspaceId: f.a.session.workspaceId } };
