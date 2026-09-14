@@ -1,6 +1,6 @@
 # 同端点持久 Host 契约
 
-日期：2026-09-15。状态：H0 设计检查点，尚未实现/部署。
+日期：2026-09-15。状态：H0 设计检查点；H1 迟到事件已实现并单测，进程隔离实施中，均尚未部署。
 
 本阶段落实 ADR-0007，不改变既有 AWP v1 的 AAD、签名、Nonce、方向和原始帧重放含义。当前已验收部署 `b482117a406545e9e6a20a6d641d827b1688244d` 保持运行；只有新候选完整验证后才协调更新。
 
@@ -48,9 +48,17 @@ Platform 只负责当前用户/端点授权、最小路由元数据及密文投�
 
 不得以 leader 已退出或内存 map 为空证明所有后代结束。清理结果必须显式返回，不能由 `Drop` 的执行或发出信号推断。TERM、强制停止及确认检查均有界，且不能阻塞其他运行的 I/O；未确认时保留目录所有权并拒绝成功关闭回执。
 
-目标主机已只读核对为 cgroup v2、systemd 249。拟以本机 provisioned、每 Run 独立的 systemd/cgroup 范围管理后代，包括改变进程组的进程。记录范围名、启动/调用身份和受限本地 profile 绑定，再允许运行时工作；重启先核对此范围，绝不向未经验证、可能已复用的 PID 发破坏性指令。
+目标主机已只读核对为 cgroup v2、systemd 249、Linux 5.15 和 bubblewrap 0.6.1。每 Run 独立 cgroup 管理后代，包括改变进程组的进程。记录范围随机身份、boot ID、cgroup inode 和受限本地 profile/工作区绑定，再允许运行时工作；重启先核对此范围，绝不向未经验证、可能已复用的 PID 发破坏性指令。
 
 需要特权的包含/查询操作仅由 purpose-specific 本地组件执行：没有公网接口，校验调用者 OS 身份，只接受固定操作与不透明 Run/profile ID，真实程序/参数/cwd/env 取 root/owner 管理的本地配置。不能成为任意 root 命令代理。运行时 UID/文件可见范围与 Host key 分离；目录 mode 0700 不是对同 UID 子进程的隔离证明。此部署接缝先在隔离环境验证，不能直接改动正在运行的版本。
+
+### 2026-09-15 用户补充：不新增账号
+
+用户授权开发环境部署/权限变更，但明确要求直接复用现有 admin，不创建新的账号。平台 admin 登录和密码、端点身份保持原样；主机不存在 OS admin，继续使用现有 `harness-aba` 服务身份，不创建第二个运行账号，也不修改无关的 port-forward 身份。
+
+优先使用现有 ABA systemd 单元的 cgroup v2 delegation，由 ABA 在**自己的已委派子树**内管理每 Run 范围，无需新增 root 管理服务或授权通用 systemctl。可信启动助手必须先进入已记录范围，再启动 Agent。bubblewrap 只挂载所选工作区、只读运行时和独立 runtime HOME，使用新的 PID/mount/user/IPC/UTS/cgroup namespace；不暴露 Host 状态、密钥、宿主 `/proc`、`/run` 控制接口或可写 cgroup。新 UID 不是必要条件，实际 namespace 和句柄隔离证据是必要条件。
+
+关闭使用整个已验证范围的 `cgroup.kill`，再确认 `cgroup.events` 的 populated=0；leader 退出不提前返回。清理或持久提交失败继续占用工作区。范围记录及关闭 tombstone 保留以处理重启/丢失回执，缺失记录不等于已关闭。该 H1 元数据登记不是 H2 的业务操作存储，不宣称已经具备完整持久 Host。
 
 Adapter 保留有界的 runtime thread/turn/item 映射。A 结束后开始 B，A 的迟到工具结果仍只更新 A；没有可信归属时进入有界 unknown/诊断状态，不套用当前 awaiting，也不把 Turn 结束当成所有工具成功。
 
