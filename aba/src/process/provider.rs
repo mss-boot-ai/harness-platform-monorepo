@@ -294,6 +294,9 @@ impl ProviderPolicy {
             let mut value: serde_json::Value =
                 serde_json::from_slice(&request.body).map_err(failed)?;
             let object = value.as_object_mut().ok_or(ProcessError::Protocol)?;
+            // Pinned Codex 0.147 sends client_metadata. It is not execution authority;
+            // do not forward arbitrary client annotations to the credential-bearing provider.
+            object.remove("client_metadata");
             if object.keys().any(|key| !allowed_control(key))
                 || object
                     .get("model")
@@ -813,12 +816,15 @@ mod tests {
         }
         let mut request = Request { method: "POST", suffix: "/responses", body: serde_json::to_vec(&serde_json::json!({
             "model":"allowed-model", "input":"Opaque text mentioning file_url and instructions remains text.",
-            "tools":[{"type":"namespace","name":"functions","tools":[{"type":"function","name":"read_file"},{"type":"custom","name":"apply_patch"}]}]
+            "tools":[{"type":"namespace","name":"functions","tools":[{"type":"function","name":"read_file"},{"type":"custom","name":"apply_patch"}]}],
+            "client_metadata":{"upstream_url":"https://not-approved.example","authorization":"synthetic-annotation"}
         })).map_err(failed)? };
         policy.authorize(&mut request)?;
         let value: serde_json::Value = serde_json::from_slice(&request.body).map_err(failed)?;
         assert_eq!(value["store"], false);
         assert_eq!(value["max_output_tokens"], 16_384);
+        assert!(value.get("client_metadata").is_none());
+        assert!(!String::from_utf8_lossy(&request.body).contains("synthetic-annotation"));
         Ok(())
     }
 
