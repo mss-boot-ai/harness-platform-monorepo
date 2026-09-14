@@ -74,7 +74,7 @@ struct PermissionBinding {
 }
 
 pub struct AgentProcess {
-    child: Child,
+    child: Option<Child>,
     // Directory inode lock: aliases and other ABA processes cannot bypass it.
     _workspace_lease: Option<fs::File>,
     scope: Option<supervision::Scope>,
@@ -170,7 +170,7 @@ impl AgentProcess {
             }
         };
         let mut process = Self {
-            child,
+            child: Some(child),
             _workspace_lease: workspace_lease,
             scope,
             writer: Some(pumps.writer),
@@ -201,9 +201,14 @@ impl AgentProcess {
     pub fn shutdown(&mut self) -> Result<(), ProcessError> {
         self.receiver.take();
         self.writer.take();
-        terminate_child(&mut self.child);
+        if let Some(child) = &mut self.child {
+            terminate_child(child);
+        }
         if let Some(scope) = &self.scope {
-            scope.close()
+            scope.close()?;
+            self.scope.take();
+            self.child.take();
+            Ok(())
         } else {
             Err(ProcessError::CleanupUnconfirmed)
         }
@@ -824,7 +829,25 @@ impl AgentProcess {
 
 impl Drop for AgentProcess {
     fn drop(&mut self) {
-        let _ = self.shutdown();
+        if self.scope.is_some() {
+            // Error paths also clean up off the network loop; durable scope claims survive Drop.
+            self.receiver.take();
+            self.writer.take();
+            let mut child = self.child.take();
+            let scope = self.scope.take();
+            let _ = thread::Builder::new()
+                .name("aba-abandoned-scope".into())
+                .spawn(move || {
+                    if let Some(child) = &mut child {
+                        terminate_child(child);
+                    }
+                    if let Some(scope) = scope {
+                        let _ = scope.close();
+                    }
+                });
+        } else {
+            let _ = self.shutdown();
+        }
         for thread in self.threads.drain(..) {
             // A hostile escaped descendant must not block the Gateway in an unbounded join.
             if thread.is_finished() {

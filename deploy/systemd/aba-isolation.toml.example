@@ -4,3 +4,6 @@
 state_directory = "/var/lib/harness-aba/process-scopes-v1"
 cgroup_root = "/sys/fs/cgroup/system.slice/harness-aba.service"
 runtime_roots = ["/opt/harness/bin/codex-acp", "/opt/harness/codex-venv"]
+network = "none" # Fixture/containment verification only until approved provider egress is implemented.
+run_memory_bytes = 1073741824
+run_tasks = 96

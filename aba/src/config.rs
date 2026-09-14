@@ -46,6 +46,24 @@ pub struct IsolationConfig {
     pub cgroup_root: PathBuf,
     /// Read-only locally provisioned runtime files, in addition to the system /usr.
     pub runtime_roots: Vec<PathBuf>,
+    /// Only an isolated network is supported; provider egress is a separate, fixed local path.
+    pub network: IsolationNetwork,
+    #[serde(default = "default_run_memory")]
+    pub run_memory_bytes: u64,
+    #[serde(default = "default_run_tasks")]
+    pub run_tasks: u32,
+}
+
+#[derive(Debug, Clone, Copy, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum IsolationNetwork {
+    None,
+}
+fn default_run_memory() -> u64 {
+    1_073_741_824
+}
+fn default_run_tasks() -> u32 {
+    96
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -200,6 +218,8 @@ impl AgentConfig {
                 || isolation.cgroup_root == Path::new("/sys/fs/cgroup")
                 || isolation.runtime_roots.is_empty()
                 || isolation.runtime_roots.len() > 16
+                || !(134_217_728..=2_147_483_648).contains(&isolation.run_memory_bytes)
+                || !(16..=128).contains(&isolation.run_tasks)
                 || isolation.runtime_roots.iter().any(|path| {
                     !path.starts_with("/opt/harness") || path == Path::new("/opt/harness")
                 })

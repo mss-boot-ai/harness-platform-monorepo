@@ -33,6 +33,8 @@ struct Record {
     workspace_device: u64,
     workspace_inode: u64,
     profile_digest: String,
+    runtime_id: String,
+    workspace_id: String,
     closed: bool,
 }
 
@@ -48,6 +50,7 @@ struct Registry {
     // A failed cleanup keeps the inode lease here, even when AgentProcess is dropped.
     leases: BTreeMap<String, File>,
     _lock: File,
+    faulted: bool,
 }
 
 #[derive(Clone)]
@@ -69,7 +72,8 @@ fn unavailable<T>(_: T) -> ProcessError {
 impl Supervisor {
     pub fn open(config: &IsolationConfig) -> Result<Self, ProcessError> {
         let actual_root = current_cgroup()?;
-        if canonical_safe_directory(&config.cgroup_root)? != actual_root
+        if (canonical_safe_directory(&config.cgroup_root)? != actual_root
+            && config.cgroup_root.join("host") != actual_root)
             || !config.cgroup_root.join("cgroup.kill").exists()
             || !fs::read_to_string("/proc/self/mountinfo")
                 .map_err(unavailable)?
@@ -129,6 +133,7 @@ impl Supervisor {
                 state,
                 leases: BTreeMap::new(),
                 _lock: lock,
+                faulted: false,
             })),
         };
         // Fresh Host never re-executes an old Run. This only retires its process scope.
@@ -144,6 +149,15 @@ impl Supervisor {
             .collect();
         for record in records {
             this.close_record(&record)?;
+        }
+        establish_topology(&config.cgroup_root)?;
+        // Do not silently adopt unknown remnants, including a prepared directory whose
+        // record failed to commit. An operator must reconcile it using the private evidence.
+        for entry in fs::read_dir(config.cgroup_root.join("runs")).map_err(unavailable)? {
+            let entry = entry.map_err(unavailable)?;
+            if entry.file_type().map_err(unavailable)?.is_dir() {
+                return Err(ProcessError::CleanupUnconfirmed);
+            }
         }
         Ok(this)
     }
@@ -196,11 +210,17 @@ impl Supervisor {
                     .iter()
                     .any(|root| command.starts_with(root)))
             || run == [0; 16]
+            || !workspace_path.starts_with("/srv/harness-workspaces")
+            || workspace_path == Path::new("/srv/harness-workspaces")
+            || runtime.env_allow.iter().any(|name| !safe_runtime_env(name))
         {
             return Err(ProcessError::UnsafeProfile);
         }
         let metadata = fs::metadata(&workspace_path).map_err(unavailable)?;
         let mut registry = self.registry.lock().map_err(unavailable)?;
+        if registry.faulted {
+            return Err(ProcessError::CleanupUnconfirmed);
+        }
         let id = hex(&run);
         if registry.state.records.contains_key(&id) {
             return Err(ProcessError::CleanupUnconfirmed); // Includes retired IDs: no respawn.
@@ -222,9 +242,18 @@ impl Supervisor {
         let mut nonce = [0u8; 16];
         OsRng.fill_bytes(&mut nonce);
         let scope_name = format!("harness-run-{}-{}", id, hex(&nonce));
-        let group = self.config.cgroup_root.join(&scope_name);
+        let group = self.config.cgroup_root.join("runs").join(&scope_name);
         // An empty orphan from a crash here cannot have executed an Agent.
         fs::create_dir(&group).map_err(unavailable)?;
+        fs::write(
+            group.join("memory.max"),
+            self.config.run_memory_bytes.to_string(),
+        )
+        .map_err(unavailable)?;
+        fs::write(group.join("memory.oom.group"), b"1").map_err(unavailable)?;
+        fs::write(group.join("pids.max"), self.config.run_tasks.to_string())
+            .map_err(unavailable)?;
+        fs::write(group.join("cpu.max"), b"200000 100000").map_err(unavailable)?;
         let group_metadata = fs::metadata(&group).map_err(unavailable)?;
         let mut gate = OpenOptions::new()
             .read(true)
@@ -255,12 +284,18 @@ impl Supervisor {
             workspace_device: metadata.dev(),
             workspace_inode: metadata.ino(),
             profile_digest: hex(&Sha256::digest(&digest)),
+            runtime_id: runtime.id.clone(),
+            workspace_id: workspace.id.clone(),
             closed: false,
         };
         let mut next = registry.state.clone();
         next.records.insert(id.clone(), record.clone());
         // Durable scope claim precedes both spawning the trusted launcher and all runtime work.
-        persist(&self.config.state_directory, &next)?;
+        if let Err(error) = persist(&self.config.state_directory, &next) {
+            registry.faulted = true;
+            registry.leases.insert(id, lease);
+            return Err(error);
+        }
         registry.state = next;
         registry.leases.insert(id, lease);
         Ok(Scope {
@@ -284,8 +319,22 @@ impl Supervisor {
     }
 
     fn close_record(&self, record: &Record) -> Result<(), ProcessError> {
-        if record.closed {
-            return Ok(());
+        {
+            let registry = self.registry.lock().map_err(unavailable)?;
+            if registry.faulted {
+                return Err(ProcessError::CleanupUnconfirmed);
+            }
+            let current = registry
+                .state
+                .records
+                .get(&record.run)
+                .ok_or(ProcessError::CleanupUnconfirmed)?;
+            if current.scope != record.scope || current.inode != record.inode {
+                return Err(ProcessError::CleanupUnconfirmed);
+            }
+            if current.closed {
+                return Ok(());
+            }
         }
         // Serialize with the trusted launcher's join+spawn. A late starter cannot enter
         // after the emptiness proof, including when the previous Host died before join.
@@ -300,7 +349,7 @@ impl Supervisor {
             .and_then(|()| gate.write_all(b"shut\n"))
             .and_then(|()| gate.sync_all())
             .map_err(unavailable)?;
-        let group = self.config.cgroup_root.join(&record.scope);
+        let group = self.config.cgroup_root.join("runs").join(&record.scope);
         if record.boot == self.boot {
             match fs::symlink_metadata(&group) {
                 Ok(metadata) => {
@@ -333,6 +382,9 @@ impl Supervisor {
         }
         // Changed boot ID proves previous-boot processes are gone, not that their operations succeeded.
         let mut registry = self.registry.lock().map_err(unavailable)?;
+        if registry.faulted {
+            return Err(ProcessError::CleanupUnconfirmed);
+        }
         let mut next = registry.state.clone();
         let current = next
             .records
@@ -342,7 +394,10 @@ impl Supervisor {
             return Err(ProcessError::CleanupUnconfirmed);
         }
         current.closed = true;
-        persist(&self.config.state_directory, &next)?;
+        if let Err(error) = persist(&self.config.state_directory, &next) {
+            registry.faulted = true;
+            return Err(error);
+        }
         registry.state = next;
         registry.leases.remove(&record.run);
         // Empty scope may stay after a failure. Never remove a different/reused inode.
@@ -363,12 +418,32 @@ impl Scope {
         command: &mut Command,
         runtime: &RuntimeProfile,
     ) -> Result<(), ProcessError> {
-        let home_root = self.supervisor.config.state_directory.join("runtime-homes");
-        if !home_root.exists() {
-            fs::create_dir(&home_root).map_err(unavailable)?;
+        let metadata =
+            fs::metadata(canonical_safe_directory(&self.record.workspace)?).map_err(unavailable)?;
+        let digest = serde_json::to_vec(&(
+            runtime.id.as_str(),
+            canonical_safe_file(&runtime.command)?,
+            &runtime.args,
+            &runtime.env_allow,
+            self.record.workspace_id.as_str(),
+            &self.record.workspace,
+        ))
+        .map_err(unavailable)?;
+        if metadata.dev() != self.record.workspace_device
+            || metadata.ino() != self.record.workspace_inode
+            || runtime.id != self.record.runtime_id
+            || hex(&Sha256::digest(&digest)) != self.record.profile_digest
+        {
+            return Err(ProcessError::UnsafeProfile);
         }
-        fs::set_permissions(&home_root, fs::Permissions::from_mode(0o700)).map_err(unavailable)?;
+        let home_root = self.supervisor.config.state_directory.join("runtime-homes");
+        match fs::create_dir(&home_root) {
+            Ok(()) => {}
+            Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => {}
+            Err(error) => return Err(unavailable(error)),
+        }
         canonical_safe_directory(&home_root)?;
+        fs::set_permissions(&home_root, fs::Permissions::from_mode(0o700)).map_err(unavailable)?;
         let home = home_root.join(&self.record.run);
         fs::create_dir(&home).map_err(unavailable)?;
         fs::set_permissions(&home, fs::Permissions::from_mode(0o700)).map_err(unavailable)?;
@@ -376,7 +451,7 @@ impl Scope {
         command
             .arg("scope-exec")
             .arg("--cgroup")
-            .arg(config.cgroup_root.join(&self.record.scope))
+            .arg(config.cgroup_root.join("runs").join(&self.record.scope))
             .arg("--device")
             .arg(self.record.device.to_string())
             .arg("--inode")
@@ -392,6 +467,7 @@ impl Scope {
             .arg("--");
         command.args([
             "--unshare-user",
+            "--unshare-net",
             "--unshare-pid",
             "--unshare-ipc",
             "--unshare-uts",
@@ -489,16 +565,16 @@ pub fn enter_and_exec(
         .file_name()
         .and_then(|name| name.to_str())
         .ok_or(ProcessError::UnsafeProfile)?;
-    if group.parent() != Some(parent.as_path()) || !valid_scope_name(name) || args.len() > 256 {
+    let delegated = parent.parent().ok_or(ProcessError::UnsafeProfile)?;
+    if parent.file_name().is_none_or(|name| name != "host")
+        || group.parent() != Some(delegated.join("runs").as_path())
+        || !valid_scope_name(name)
+        || args.len() > 256
+    {
         return Err(ProcessError::UnsafeProfile);
     }
     let mut gate = open_gate(gate)?;
-    lock_gate(&gate, rustix::fs::FlockOperation::NonBlockingLockShared)?;
-    let mut gate_state = [0; 5];
-    gate.read_exact(&mut gate_state).map_err(unavailable)?;
-    if &gate_state != b"open\n" {
-        return Err(ProcessError::CleanupUnconfirmed);
-    }
+    claim_launch(&mut gate)?;
     let metadata = fs::symlink_metadata(group).map_err(unavailable)?;
     if !metadata.is_dir()
         || metadata.file_type().is_symlink()
@@ -550,6 +626,79 @@ impl Drop for Scope {
     fn drop(&mut self) {
         let _ = self.close();
     }
+}
+
+fn establish_topology(root: &Path) -> Result<(), ProcessError> {
+    for leaf in ["host", "runs"] {
+        let path = root.join(leaf);
+        match fs::create_dir(&path) {
+            Ok(()) => {}
+            Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => {}
+            Err(error) => return Err(unavailable(error)),
+        }
+        canonical_safe_directory(&path)?;
+    }
+    fs::write(
+        root.join("host/cgroup.procs"),
+        std::process::id().to_string(),
+    )
+    .map_err(unavailable)?;
+    if !fs::read_to_string(root.join("cgroup.procs"))
+        .map_err(unavailable)?
+        .trim()
+        .is_empty()
+    {
+        return Err(ProcessError::CleanupUnconfirmed);
+    }
+    for path in [root.to_path_buf(), root.join("runs")] {
+        let available = fs::read_to_string(path.join("cgroup.controllers")).map_err(unavailable)?;
+        if ["cpu", "memory", "pids"]
+            .iter()
+            .any(|wanted| !available.split_whitespace().any(|got| got == *wanted))
+        {
+            return Err(ProcessError::UnsafeProfile);
+        }
+        fs::write(path.join("cgroup.subtree_control"), b"+cpu +memory +pids")
+            .map_err(unavailable)?;
+    }
+    let memory: u64 = fs::read_to_string(root.join("memory.max"))
+        .map_err(unavailable)?
+        .trim()
+        .parse()
+        .map_err(unavailable)?;
+    let tasks: u32 = fs::read_to_string(root.join("pids.max"))
+        .map_err(unavailable)?
+        .trim()
+        .parse()
+        .map_err(unavailable)?;
+    if memory < 1_073_741_824 || tasks < 128 {
+        return Err(ProcessError::UnsafeProfile);
+    }
+    // Aggregate runtime budgets reserve 25% memory and 64 tasks for the Host and cleanup.
+    fs::write(root.join("runs/memory.max"), (memory / 4 * 3).to_string()).map_err(unavailable)?;
+    fs::write(root.join("runs/pids.max"), (tasks - 64).to_string()).map_err(unavailable)?;
+    Ok(())
+}
+
+pub(super) fn safe_runtime_env(name: &str) -> bool {
+    matches!(name, "HOME" | "PATH" | "LANG" | "LC_ALL" | "TZ")
+        || name.starts_with("HARNESS_CODEX_")
+        || name.starts_with("MSS_HARNESS_")
+}
+
+fn claim_launch(gate: &mut File) -> Result<(), ProcessError> {
+    lock_gate(gate, rustix::fs::FlockOperation::NonBlockingLockExclusive)?;
+    let mut gate_state = [0; 5];
+    gate.rewind()
+        .and_then(|()| gate.read_exact(&mut gate_state))
+        .map_err(unavailable)?;
+    if &gate_state != b"open\n" {
+        return Err(ProcessError::CleanupUnconfirmed);
+    }
+    gate.rewind()
+        .and_then(|()| gate.write_all(b"used\n"))
+        .and_then(|()| gate.sync_all())
+        .map_err(unavailable)
 }
 
 fn open_gate(path: &Path) -> Result<File, ProcessError> {
