@@ -1,14 +1,17 @@
-export type MessageState = 'streaming' | 'complete' | 'uncertain' | 'cancelled';
+export type MessageState = 'streaming' | 'complete' | 'failed' | 'uncertain' | 'cancelled';
 export interface ChatMessage {
   readonly id: string;
   readonly role: 'user' | 'assistant' | 'system';
   readonly text: string;
   readonly state: MessageState;
+  readonly error?: string;
 }
 export interface ConversationItem {
   readonly id: string;
   readonly title: string;
   readonly detail: string;
+  readonly archived?: boolean;
+  readonly canArchive?: boolean;
 }
 export interface SavedConversation extends ConversationItem {
   readonly agent: string;
@@ -35,6 +38,16 @@ export function settleTurn(messages: readonly ChatMessage[], id: string | null, 
 function record(value: unknown): Record<string, unknown> | null {
   return value !== null && typeof value === 'object' && !Array.isArray(value) ? value as Record<string, unknown> : null;
 }
+export function turnFailureMessage(payload: unknown): string {
+  const error = record(record(payload)?.error);
+  const data = record(error?.data);
+  if (data?.executionState === 'unknown') return '执行结果不确定，请检查项目状态后结束这次运行。';
+  if (data?.status === 504 || error?.message === 'PROVIDER_TIMEOUT') return '模型服务超时（504），请稍后继续。';
+  if (data?.status === 429) return '模型服务暂时限流，请稍后继续。';
+  if (data?.status === 401 || data?.status === 403) return '模型服务认证失败，请检查执行端的模型设置。';
+  if (data?.runtimeStopped === true) return 'Agent 运行环境已停止，请结束旧运行后继续。';
+  return '这一轮未能完成，历史已保留，可以继续发送新的消息。';
+}
 /** Presentation only: call after the existing signed frame verification and durable inbox ACK. */
 export function receiveAcp(
   messages: readonly ChatMessage[], payload: unknown, requestId: string | null,
@@ -51,7 +64,9 @@ export function receiveAcp(
   if (value === null || requestId === null) return { messages, completed: false, failed: false };
   if (value.id === requestId && ('result' in value || 'error' in value)) {
     const failed = 'error' in value;
-    return { messages: settleTurn(messages, requestId, failed ? 'uncertain' : record(value.result)?.stopReason === 'cancelled' ? 'cancelled' : 'complete'), completed: true, failed };
+    const uncertain = record(record(value.error)?.data)?.executionState === 'unknown';
+    const settled = settleTurn(messages, requestId, failed ? uncertain ? 'uncertain' : 'failed' : record(value.result)?.stopReason === 'cancelled' ? 'cancelled' : 'complete');
+    return { messages: failed ? settled.map((message) => message.id === `assistant-${requestId}` ? { ...message, error: turnFailureMessage(value) } : message) : settled, completed: true, failed };
   }
   const params = record(value.params);
   const update = record(params?.update);

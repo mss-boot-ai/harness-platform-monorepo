@@ -157,7 +157,7 @@ export function issueWebSocketTicket(
 export function refreshEndpointSession(identity: EndpointIdentity): Promise<RegistrationSession> {
   return withGatewayNonceLock(async () => {
     const path = '/gateway/v1/tokens/refresh';
-    const challengeResponse = await fetch(path, { credentials: 'include', method: 'POST' });
+    const challengeResponse = await apiFetch(path, { credentials: 'include', method: 'POST' });
     const nonce = challengeResponse.headers.get('DPoP-Nonce');
     if (challengeResponse.status !== 401 || nonce === null || nonce === '') {
       throw await gatewayFailure(challengeResponse);
@@ -169,7 +169,7 @@ export function refreshEndpointSession(identity: EndpointIdentity): Promise<Regi
       privateKey: identity.signing.privateKey,
       publicJwk: identity.signing.publicJwk,
     });
-    const response = await fetch(path, {
+    const response = await apiFetch(path, {
       credentials: 'include',
       headers: { Accept: 'application/json', DPoP: proof.proof },
       method: 'POST',
@@ -182,7 +182,7 @@ export function refreshEndpointSession(identity: EndpointIdentity): Promise<Regi
 }
 
 export async function fetchTrustManifest(): Promise<VerifiedTrustManifest> {
-  const response = await fetch('/gateway/v1/trust-manifest', {
+  const response = await apiFetch('/gateway/v1/trust-manifest', {
     credentials: 'include',
     headers: { Accept: 'application/json' },
   });
@@ -368,7 +368,7 @@ async function requestJson<T>(path: string, init: RequestInit): Promise<T> {
   const headers = new Headers(init.headers);
   headers.set('Accept', 'application/json');
   headers.set('Content-Type', 'application/json');
-  const response = await fetch(path, { ...init, credentials: 'include', headers });
+  const response = await apiFetch(path, { ...init, credentials: 'include', headers });
   const text = await response.text();
   let value: unknown = null;
   if (text !== '') {
@@ -515,7 +515,7 @@ function gatewayRequest(path: string, accessToken: string, proof?: string): Prom
   if (proof !== undefined) {
     headers.set('DPoP', proof);
   }
-  return fetch(path, { credentials: 'include', headers, method: 'POST' });
+  return apiFetch(path, { credentials: 'include', headers, method: 'POST' });
 }
 
 function gatewayAuthorizedRequest(
@@ -528,7 +528,7 @@ function gatewayAuthorizedRequest(
   if (proof !== undefined) {
     headers.set('DPoP', proof);
   }
-  return fetch(path, { credentials: 'include', headers, method });
+  return apiFetch(path, { credentials: 'include', headers, method });
 }
 
 let gatewayNonceTail: Promise<void> = Promise.resolve();
@@ -558,7 +558,7 @@ function gatewaySessionRequest(
   if (proof !== undefined) {
     headers.set('DPoP', proof);
   }
-  return fetch(path, { body, credentials: 'include', headers, method: 'POST' });
+  return apiFetch(path, { body, credentials: 'include', headers, method: 'POST' });
 }
 
 async function gatewayFailure(response: Response): Promise<HcApiError> {
@@ -581,4 +581,10 @@ function objectValue(input: unknown, label: string): Record<string, unknown> {
     throw new HcApiError(`Invalid ${label}`, 'HC_INVALID_RESPONSE', 500);
   }
   return input as Record<string, unknown>;
+}
+
+// Release the endpoint nonce lane after a bounded HTTP failure. Model execution
+// continues on its own channel and is not subject to this request deadline.
+function apiFetch(path: string, init: RequestInit = {}): Promise<Response> {
+  return fetch(path, { ...init, signal: init.signal ?? AbortSignal.timeout(10_000) });
 }

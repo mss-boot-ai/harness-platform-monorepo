@@ -62,7 +62,7 @@ export class ConversationController {
   }
   private async quarantine(message: string): Promise<void> {
     this.fault = message; this.emit();
-    try { await this.persist({ ...this.stored.value, blocked: message }); }
+    try { await this.persist({ ...this.stored.value, blocked: message, recovery: { kind: 'integrity', message } }); }
     catch {
       this.fault = '安全状态未能保存，当前会话已停止操作。请保留此页并检查存储；不会覆盖较新的记录。'; this.emit();
     }
@@ -109,7 +109,7 @@ export class ConversationController {
       if (value.awaiting !== null || value.requests.length > 0 || (!basic && value.runtime.status !== 'ready') || text.trim() === '' ||
           value.messages.length >= MAX_MESSAGES || text.length > 16_000 || value.messages.reduce((sum, item) => sum + item.text.length, 0) >= 1_048_576) throw new Error('Cannot begin another turn');
       await this.dispatch({ jsonrpc: '2.0', id, method: 'session/prompt', params: { sessionId: value.session.sessionId, prompt: [{ type: 'text', text }] } },
-        (current) => ({ ...current, awaiting: id, cancelPending: false, messages: startTurn(current.messages, id, text), draft: current.draft.trim() === text.trim() ? '' : current.draft }), id);
+        (current) => ({ ...current, recovery: null, awaiting: id, cancelPending: false, messages: startTurn(current.messages, id, text), draft: current.draft.trim() === text.trim() ? '' : current.draft }), id);
     }, text.length * 2 + 1);
   }
   public describe(): Promise<void> {
@@ -182,7 +182,7 @@ export class ConversationController {
       if (packet.body.case === 'error') {
         const error = await openABAUncertainErrorPacket(value.aba.signingPublicJwk, input);
         if (error === null || !this.ownsMessage(hex(error.relatedMessageId))) return;
-        await this.persist({ ...value, blocked: '执行结果不确定。请核对工作区状态，不会自动再次执行。',
+        await this.persist({ ...value, blocked: '执行结果不确定。请核对工作区状态，不会自动再次执行。', recovery: { kind: 'execution-unknown', message: '执行结果不确定，请检查项目并结束旧运行后继续。' },
           messages: settleTurn(value.messages, value.awaiting, 'uncertain'), awaiting: null, cancelPending: false }); return;
       }
       if (packet.body.case === 'ack') {

@@ -1,5 +1,6 @@
 import type { EncryptedLocalVault, EndpointIdentity } from '@harness/hc-core';
-import { hex, idBytes, type Conversation, type CreationIntent } from './conversation-store';
+import { hex, idBytes } from './conversation-id';
+import type { Conversation, CreationIntent } from './conversation-store';
 import { isExecutionTarget, type ExecutionTarget } from './execution-target';
 import { record } from './runtime-state';
 
@@ -11,11 +12,14 @@ export interface ConversationEntry {
   readonly signingJkt: string;
   readonly kemJkt: string;
   readonly title: string | null;
+  readonly notice: string | null;
   readonly draft: string;
+  readonly draftVersion: number;
   readonly target: ExecutionTarget | null;
   readonly runIds: readonly string[];
   readonly activeRunId: string | null;
   readonly creation: CreationIntent | null;
+  readonly closeOperation: { readonly runId: string; readonly id: string } | null;
   readonly archived: boolean;
   readonly createdAt: number;
   readonly updatedAt: number;
@@ -33,7 +37,7 @@ export class ConversationIndex {
   }
   public create(target: ExecutionTarget | null, draft = '', now = Date.now(), id = crypto.randomUUID().replaceAll('-', '')): ConversationEntry {
     return this.validate({ version: 1, id, endpointId: this.endpointId, signingJkt: this.identity.signing.thumbprint, kemJkt: this.identity.kem.thumbprint,
-      title: null, draft, target, runIds: [], activeRunId: null, creation: null, archived: false, createdAt: now, updatedAt: now });
+      title: null, notice: null, draft, draftVersion: 0, target, runIds: [], activeRunId: null, creation: null, closeOperation: null, archived: false, createdAt: now, updatedAt: now });
   }
   public fromRun(run: Conversation): ConversationEntry {
     return this.validate({ ...this.create({ abaEndpointId: run.session.abaEndpointId, workspaceId: run.session.workspaceId, runtimeProfileId: run.session.runtimeProfileId },
@@ -54,13 +58,20 @@ export class ConversationIndex {
       (value.activeRunId !== null && !value.runIds.includes(value.activeRunId)) || typeof value.archived !== 'boolean' ||
       !Number.isSafeInteger(value.createdAt) || !Number.isSafeInteger(value.updatedAt)) throw new Error('Conversation identity or metadata is invalid');
     idBytes(value.id);
+    if (value.draftVersion !== undefined && (!Number.isSafeInteger(value.draftVersion) || Number(value.draftVersion) < 0)) throw new Error('Invalid draft version');
+    if (value.notice !== undefined && value.notice !== null && (typeof value.notice !== 'string' || value.notice.length > 1024)) throw new Error('Invalid conversation notice');
     for (const runId of value.runIds) { if (typeof runId !== 'string') throw new Error('Invalid execution reference'); idBytes(runId); }
     if (value.creation !== null) {
       const intent = record(value.creation);
       if (intent === null || typeof intent.id !== 'string' || !/^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/u.test(intent.id) || !isExecutionTarget(intent) ||
         typeof intent.draft !== 'string' || intent.draft.length > 16_000) throw new Error('Invalid conversation creation intent');
+      if (intent.cancelRequested !== undefined && typeof intent.cancelRequested !== 'boolean') throw new Error('Invalid creation cancellation marker');
     }
-    return value as unknown as ConversationEntry;
+    if (value.closeOperation !== undefined && value.closeOperation !== null) {
+      const close = record(value.closeOperation);
+      if (close === null || typeof close.runId !== 'string' || !value.runIds.includes(close.runId) || typeof close.id !== 'string' || !/^[0-9a-f-]{36}$/u.test(close.id)) throw new Error('Invalid close operation');
+    }
+    return { ...value, draftVersion: value.draftVersion ?? 0, notice: value.notice ?? null, closeOperation: value.closeOperation ?? null } as unknown as ConversationEntry;
   }
   public async read(id: string): Promise<StoredConversationEntry | null> {
     idBytes(id);

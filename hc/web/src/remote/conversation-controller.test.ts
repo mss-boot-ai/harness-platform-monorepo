@@ -4,6 +4,28 @@ import { ConversationController, ConversationTransportInterrupted } from './conv
 import { controllerFixture, testNow } from './conversation-fixture';
 const chunk = (sessionId: string, text: string) => ({ jsonrpc: '2.0', method: 'session/update', params: { sessionId, update: { sessionUpdate: 'agent_message_chunk', content: { type: 'text', text } } } });
 describe('durable conversation controller', () => {
+  it('treats an authenticated terminal provider failure as a failed turn and permits a new turn', async () => {
+    const f = await controllerFixture(); await f.controller.prompt('first turn');
+    const id = f.controller.snapshot().data.awaiting;
+    await f.controller.receive(await f.incoming({ jsonrpc: '2.0', id, error: { code: -32001, message: 'PROVIDER_ERROR', data: { status: 504 } } }, 1n));
+    expect(f.controller.snapshot().data.blocked).toBeNull();
+    expect(f.controller.snapshot().data.recovery?.kind).toBe('turn-failed');
+    expect(f.controller.snapshot().data.messages[1]?.state).toBe('failed');
+    expect(f.controller.snapshot().data.messages[1]?.error).toContain('504');
+    await f.controller.prompt('continue explicitly');
+    expect(f.controller.snapshot().data.outbound).toBe('2');
+    expect(f.controller.snapshot().data.recovery).toBeNull();
+  });
+  it('keeps unknown execution and malformed error responses quarantined across reconstruction', async () => {
+    const f = await controllerFixture(); await f.controller.prompt('unknown execution');
+    const id = f.controller.snapshot().data.awaiting;
+    await f.controller.receive(await f.incoming({ jsonrpc: '2.0', id, error: { code: -32002, message: 'RUNTIME_LOST', data: { executionState: 'unknown', runtimeStopped: true } } }, 1n));
+    expect((await f.store.read(f.session.sessionId))?.value.recovery?.kind).toBe('execution-unknown');
+    await expect(f.controller.prompt('unsafe retry')).rejects.toThrow();
+    const malformed = await controllerFixture(); await malformed.controller.prompt('invalid response');
+    await expect(malformed.controller.receive(await malformed.incoming({ jsonrpc: '2.0', id: malformed.controller.snapshot().data.awaiting, error: null }, 1n))).rejects.toThrow('Invalid ACP error');
+    expect((await malformed.store.read(malformed.session.sessionId))?.value.recovery?.kind).toBe('integrity');
+  });
   it('does not quarantine a verified frame when its gap request is interrupted by connection replacement', async () => {
     const f = await controllerFixture(); await f.controller.prompt('pending turn');
     let rejectControl: (cause: Error) => void = () => undefined;

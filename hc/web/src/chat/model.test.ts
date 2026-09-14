@@ -27,7 +27,7 @@ describe('chat presentation model', () => {
   it('represents errors and interrupted output without declaring rollback or a successful turn', () => {
     const initial = startTurn([], 'a', 'deploy');
     const result = receiveAcp(initial, { id: 'a', error: { code: -1 } }, 'a');
-    expect(result.failed).toBe(true); expect(result.messages[1]?.state).toBe('uncertain');
+    expect(result.failed).toBe(true); expect(result.messages[1]?.state).toBe('failed');
     expect(settleTurn(initial, null, 'uncertain')).toEqual(initial);
   });
   it('bounds response display and keeps Unicode titles intact', () => {

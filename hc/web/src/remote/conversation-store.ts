@@ -4,6 +4,9 @@ import type { ABAEndpointSummary, EndpointSessionSummary } from '../api';
 import type { ChatMessage } from '../chat/model';
 import { newRuntimeState, record, type ConfigOption, type RuntimeState } from './runtime-state';
 import { isExecutionTarget, type ExecutionTarget } from './execution-target';
+import { ConversationIndex, type LocalRecordIssue } from './conversation-index';
+import { hex, idBytes } from './conversation-id';
+export { hex, idBytes } from './conversation-id';
 
 export const MAX_CONVERSATIONS = 32;
 export const MAX_OUTBOX = 16;
@@ -13,11 +16,16 @@ export interface OutboundPacket {
   readonly sequence: string; readonly messageId: string; readonly encoded: string;
   readonly createdAt: number; readonly operationId: string | null;
 }
+export interface RunRecovery {
+  readonly kind: 'turn-failed' | 'execution-unknown' | 'runtime-lost' | 'integrity' | 'storage' | 'unsupported';
+  readonly message: string;
+}
 export interface Conversation {
   readonly version: 1; readonly session: EndpointSessionSummary; readonly aba: ABAEndpointSummary;
   readonly signingJkt: string; readonly kemJkt: string; readonly draft: string;
   readonly keys: OpenedSessionKeyPackage | null; readonly messages: readonly ChatMessage[];
   readonly runtime: RuntimeState; readonly awaiting: string | null; readonly blocked: string | null;
+  readonly recovery: RunRecovery | null;
   readonly inbound: string; readonly outbound: string; readonly outboundAck: string;
   readonly reservation: string | null; readonly outbox: readonly OutboundPacket[];
   readonly requests: readonly RpcContext[]; readonly cancelPending: boolean;
@@ -29,22 +37,19 @@ export interface StoredConversation { readonly revision: number; readonly value:
 export interface CreationIntent {
   readonly id: string; readonly abaEndpointId: string; readonly runtimeProfileId: string;
   readonly workspaceId: string; readonly draft: string;
+  readonly cancelRequested?: boolean;
 }
 export interface ConversationWorkspace {
   readonly version: 1; readonly endpointId: string; readonly signingJkt: string; readonly kemJkt: string;
   readonly selectedId: string | null; readonly draft: string; readonly creation: CreationIntent | null;
   readonly target: ExecutionTarget | null;
+  readonly indexed: boolean;
 }
 export interface StoredWorkspace { readonly revision: number | null; readonly value: ConversationWorkspace }
 const encoder = new TextEncoder();
 const decoder = new TextDecoder('utf-8', { fatal: true });
 const statuses = ['CREATING', 'WAITING_KEY', 'ACTIVE', 'REKEY_REQUIRED', 'DRAINING', 'UNCERTAIN', 'FAILED', 'CLOSED', 'ABA_REVOKED'];
 export function isTerminal(status: string): boolean { return ['CLOSED', 'FAILED', 'ABA_REVOKED'].includes(status); }
-export function hex(bytes: Uint8Array): string { return Array.from(bytes, (byte) => byte.toString(16).padStart(2, '0')).join(''); }
-export function idBytes(id: string): Uint8Array {
-  if (!/^[0-9a-f]{32}$/u.test(id) || /^0+$/u.test(id)) throw new Error('Invalid conversation identity');
-  return Uint8Array.from(id.match(/../gu) ?? [], (byte) => Number.parseInt(byte, 16));
-}
 export function sequence(value: unknown): bigint {
   if (typeof value !== 'string' || !/^(0|[1-9][0-9]{0,19})$/u.test(value) || BigInt(value) > 0xffff_ffff_ffff_ffffn) throw new Error('Invalid conversation cursor');
   return BigInt(value);
@@ -94,7 +99,7 @@ function validatePublicState(raw: unknown, endpoint: string, identity: EndpointI
   if (value.reservation !== null && sequence(value.reservation) !== sequence(value.outbound)) throw new Error('Invalid interrupted reservation');
   for (const message of value.messages) {
     const item = record(message);
-    if (item === null || !boundedText(item.id, 300) || !boundedText(item.text, 262_144) || !['user', 'assistant', 'system'].includes(String(item.role)) || !['streaming', 'complete', 'uncertain', 'cancelled'].includes(String(item.state))) throw new Error('Invalid local message');
+    if (item === null || !boundedText(item.id, 300) || !boundedText(item.text, 262_144) || !['user', 'assistant', 'system'].includes(String(item.role)) || !['streaming', 'complete', 'failed', 'uncertain', 'cancelled'].includes(String(item.state)) || (item.error !== undefined && !boundedText(item.error, 1024))) throw new Error('Invalid local message');
   }
   let last = sequence(value.outboundAck);
   for (const packet of value.outbox) {
@@ -122,6 +127,10 @@ function validatePublicState(raw: unknown, endpoint: string, identity: EndpointI
   }
   if (value.awaiting !== null && !boundedText(value.awaiting, 256)) throw new Error('Invalid pending turn');
   if (value.blocked !== null && !boundedText(value.blocked, 1024)) throw new Error('Invalid recovery status');
+  if (value.recovery !== undefined && value.recovery !== null) {
+    const recovery = record(value.recovery);
+    if (recovery === null || !['turn-failed', 'execution-unknown', 'runtime-lost', 'integrity', 'storage', 'unsupported'].includes(String(recovery.kind)) || !boundedText(recovery.message, 1024)) throw new Error('Invalid execution recovery state');
+  }
   if (value.closeKey !== null && !boundedText(value.closeKey, 128)) throw new Error('Invalid close operation');
   const runtime = record(value.runtime);
   if (runtime === null || !['pending', 'ready', 'unsupported', 'failed'].includes(String(runtime.status)) ||
@@ -130,7 +139,7 @@ function validatePublicState(raw: unknown, endpoint: string, identity: EndpointI
 }
 export function newConversation(session: EndpointSessionSummary, aba: ABAEndpointSummary, identity: EndpointIdentity, draft = ''): Conversation {
   return { version: 1, session, aba, signingJkt: identity.signing.thumbprint, kemJkt: identity.kem.thumbprint,
-    draft, keys: null, messages: [], runtime: newRuntimeState(), awaiting: null, blocked: null,
+    draft, keys: null, messages: [], runtime: newRuntimeState(), awaiting: null, blocked: null, recovery: null,
     inbound: '0', outbound: '0', outboundAck: '0', reservation: null, outbox: [], requests: [],
     inboundHashes: [], sentIds: [], cancelPending: false, closeKey: null, updatedAt: Date.now() };
 }
@@ -140,6 +149,7 @@ export class ConversationStore {
   public constructor(private readonly vault: EncryptedLocalVault, private readonly endpoint: string, private readonly identity: EndpointIdentity) {
     idBytes(endpoint); this.prefix = `remote-v1/${endpoint}/`;
   }
+  public conversationIndex(): ConversationIndex { return new ConversationIndex(this.vault, this.endpoint, this.identity); }
   private workspaceValue(raw: unknown): ConversationWorkspace {
     const value = record(raw);
     if (value === null || value.version !== 1 || value.endpointId !== this.endpoint ||
@@ -147,6 +157,7 @@ export class ConversationStore {
       !boundedText(value.draft, 16_000) || (value.selectedId !== null && !boundedText(value.selectedId, 32))) throw new Error('Workspace binding is invalid');
     if (value.selectedId !== null) idBytes(value.selectedId as string);
     if (value.target !== undefined && value.target !== null && !isExecutionTarget(value.target)) throw new Error('Saved execution target is invalid');
+    if (value.indexed !== undefined && typeof value.indexed !== 'boolean') throw new Error('Conversation index marker is invalid');
     if (value.creation !== null) {
       const intent = record(value.creation);
       if (intent === null || typeof intent.id !== 'string' || !/^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/u.test(intent.id) ||
@@ -154,12 +165,12 @@ export class ConversationStore {
         !boundedText(intent.workspaceId, 128) || intent.workspaceId.trim() === '' || !boundedText(intent.draft, 16_000)) throw new Error('Creation intent is invalid');
       idBytes(intent.abaEndpointId);
     }
-    return { ...value, target: value.target ?? null } as unknown as ConversationWorkspace;
+    return { ...value, target: value.target ?? null, indexed: value.indexed ?? false } as unknown as ConversationWorkspace;
   }
   public async readWorkspace(): Promise<StoredWorkspace> {
     const stored = await this.vault.read(`remote-workspace-v1/${this.endpoint}`);
     if (stored === null) return { revision: null, value: { version: 1, endpointId: this.endpoint,
-      signingJkt: this.identity.signing.thumbprint, kemJkt: this.identity.kem.thumbprint, selectedId: null, draft: '', creation: null, target: null } };
+      signingJkt: this.identity.signing.thumbprint, kemJkt: this.identity.kem.thumbprint, selectedId: null, draft: '', creation: null, target: null, indexed: false } };
     try {
       if (stored.bytes.length > 160_000) throw new Error('Workspace metadata exceeds bound');
       return { revision: stored.revision, value: this.workspaceValue(JSON.parse(decoder.decode(stored.bytes))) };
@@ -177,6 +188,17 @@ export class ConversationStore {
     for (const record of records) { const item = await this.read(record.id.slice(this.prefix.length)); if (item !== null) values.push(item); }
     return values.sort((a, b) => b.value.updatedAt - a.value.updatedAt);
   }
+  public async listRecoverable(): Promise<{ readonly runs: readonly StoredConversation[]; readonly issues: readonly LocalRecordIssue[] }> {
+    const records = await this.vault.list(this.prefix);
+    if (records.length > MAX_CONVERSATIONS) throw new Error('Local execution capacity exceeded');
+    const runs: StoredConversation[] = []; const issues: LocalRecordIssue[] = [];
+    for (const row of records) {
+      const id = row.id.slice(this.prefix.length);
+      try { const value = await this.read(id); if (value !== null) runs.push(value); }
+      catch { issues.push({ id, message: '这份运行记录无法读取，原数据仍保留。' }); }
+    }
+    return { runs: runs.sort((a, b) => b.value.updatedAt - a.value.updatedAt), issues };
+  }
   public async read(sessionId: string): Promise<StoredConversation | null> {
     idBytes(sessionId);
     const stored = await this.vault.read(this.prefix + sessionId);
@@ -188,7 +210,7 @@ export class ConversationStore {
       if (raw.session.sessionId !== sessionId) throw new Error('Conversation scope mismatch');
       if (await publicJwkThumbprint(raw.aba.signingPublicJwk) !== raw.aba.signingJkt) throw new Error('ABA key fingerprint mismatch');
       const keys = await decodeKeys(raw.keys, raw.session);
-      return { revision: stored.revision, value: { ...raw, keys,
+      return { revision: stored.revision, value: { ...raw, keys, recovery: raw.recovery ?? null,
         blocked: raw.reservation !== null ? '上次加密发送在保存完整消息前中断。已停止新发送，避免重用加密序号；请检查执行状态。' : raw.blocked } };
     } finally { stored.bytes.fill(0); }
   }

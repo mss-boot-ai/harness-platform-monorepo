@@ -1,9 +1,9 @@
 import { ControlType, createWireMessage, decodeWireMessage, encodeWireMessage, SessionKeyPackageSchema, WirePacketSchema, type ReadyGatewayConnection } from '@harness/hc-core';
 import { ConversationController } from './conversation-controller';
-import { ConversationManager, type ConversationAPI } from './conversation-manager';
+import { ConversationActionCancelled, ConversationManager, type ConversationAPI } from './conversation-manager';
 import { controllerFixture, testEndpoint, testNow } from './conversation-fixture';
 import { startTurn } from '../chat/model';
-import type { EndpointSessionSummary } from '../api';
+import { HcApiError, type EndpointSessionSummary } from '../api';
 class Socket extends EventTarget {
   public readyState = 1; public bufferedAmount = 0; public sent: Uint8Array[] = [];
   public send(bytes: ArrayBuffer): void { this.sent.push(new Uint8Array(bytes).slice()); }
@@ -21,8 +21,18 @@ async function fixture() {
   const b = await controllerFixture({ identity: a.identity, sessionId: '04'.repeat(16), abaId: '05'.repeat(16), workspaceId: 'other' });
   await a.store.write(b.value, null);
   let sessions: readonly EndpointSessionSummary[] = [a.session, b.session];
+  let nextSession = 6;
+  const created = new Map<string, EndpointSessionSummary>();
   const api: ConversationAPI = { abas: vi.fn(async () => [a.value.aba, b.value.aba]), sessions: vi.fn(async () => sessions),
-    create: vi.fn(async () => ({ ...a.session, sessionId: '06'.repeat(16), status: 'CREATING' as const })),
+    create: vi.fn(async (intent) => {
+      const old = created.get(intent.id); if (old !== undefined) return old;
+      const value = { ...a.session, sessionId: (nextSession++).toString(16).padStart(2, '0').repeat(16), abaEndpointId: intent.abaEndpointId,
+        workspaceId: intent.workspaceId, runtimeProfileId: intent.runtimeProfileId, status: 'CREATING' as const };
+      created.set(intent.id, value); sessions = [...sessions, value]; return value;
+    }),
+    status: vi.fn(async (id) => { const value = sessions.find((item) => item.sessionId === id); if (value === undefined) throw new HcApiError('Missing session', 'SESSION_NOT_FOUND', 404); return value; }),
+    statuses: vi.fn(async (ids) => sessions.filter((item) => ids.includes(item.sessionId))),
+    creation: vi.fn(async (id, cancel) => { const value = created.get(id); return value === undefined ? { state: cancel ? 'cancelled' as const : 'not-found' as const, session: null } : { state: 'created' as const, session: value }; }),
     close: vi.fn(async (id) => {
       const original = sessions.find((item) => item.sessionId === id); if (original === undefined) throw new Error('Missing session');
       const closed = { ...original, status: 'CLOSED' as const }; sessions = sessions.map((item) => item.sessionId === id ? closed : item); return closed;
@@ -33,6 +43,90 @@ async function fixture() {
 }
 const chunk = (sessionId: string, text: string) => ({ jsonrpc: '2.0', method: 'session/update', params: { sessionId, update: { sessionUpdate: 'agent_message_chunk', content: { type: 'text', text } } } });
 describe('endpoint conversation coordination', () => {
+  it('creates a local conversation independently of old runs and scopes failed creation to it', async () => {
+    const f = await fixture(); await f.manager.load(); await f.manager.bind(connection(f.socket));
+    const input = { abaEndpointId: f.a.value.aba.id, workspaceId: 'fixture', runtimeProfileId: 'fixture', draft: 'first draft' };
+    vi.mocked(f.api.create).mockRejectedValueOnce(new Error('response lost'));
+    await expect(f.manager.create(input)).rejects.toThrow('response lost');
+    const firstId = f.manager.snapshot().selectedId!;
+    const intent = f.manager.snapshot().conversations.find((entry) => entry.id === firstId)?.creation;
+    expect(intent).not.toBeNull();
+    const other = await f.manager.newConversation({ abaEndpointId: f.b.value.aba.id, workspaceId: 'other', runtimeProfileId: 'fixture' }, 'second draft');
+    expect(other).not.toBe(firstId); expect(f.manager.snapshot().creating).toBe(false);
+    const created = await f.manager.create({ abaEndpointId: f.b.value.aba.id, workspaceId: 'other', runtimeProfileId: 'fixture', draft: 'second draft' }, false, other);
+    expect(created.conversationId).toBe(other); expect(created.runId).not.toBe(other);
+    expect(f.manager.snapshot().conversations.find((entry) => entry.id === firstId)?.creation?.id).toBe(intent?.id);
+    expect(f.api.close).not.toHaveBeenCalled();
+  });
+  it('releases a proven rejected creation but retains its local draft', async () => {
+    const f = await fixture(); await f.manager.load(); await f.manager.bind(connection(f.socket));
+    const input = { abaEndpointId: f.a.value.aba.id, workspaceId: 'fixture', runtimeProfileId: 'fixture', draft: 'keep rejected draft' };
+    vi.mocked(f.api.create).mockRejectedValueOnce(new HcApiError('Target rejected', 'EXECUTION_TARGET_NOT_ALLOWED', 400));
+    await expect(f.manager.create(input)).rejects.toThrow('Target rejected');
+    const entry = f.manager.snapshot().conversations.find((entry) => entry.id === f.manager.snapshot().selectedId)!;
+    expect(entry.creation).toBeNull(); expect(entry.draft).toBe(input.draft); expect(entry.notice).toContain('调整项目');
+    const next = await f.manager.create(input, false, entry.id);
+    expect(next.conversationId).toBe(entry.id);
+    expect(vi.mocked(f.api.create).mock.calls[0]![0].id).not.toBe(vi.mocked(f.api.create).mock.calls[1]![0].id);
+  });
+  it('cancels an in-flight creation without late adoption or automatic prompt dispatch', async () => {
+    const f = await fixture(); await f.manager.load(); await f.manager.bind(connection(f.socket));
+    let finish: (session: EndpointSessionSummary) => void = () => undefined;
+    vi.mocked(f.api.create).mockImplementationOnce(() => new Promise((resolve) => { finish = resolve; }));
+    const creating = f.manager.create({ abaEndpointId: f.a.value.aba.id, workspaceId: 'fixture', runtimeProfileId: 'fixture', draft: 'cancelled draft' }).catch((error: unknown) => error);
+    await vi.waitFor(() => expect(f.api.create).toHaveBeenCalled());
+    const id = f.manager.snapshot().selectedId!;
+    const run = { ...f.a.session, sessionId: '06'.repeat(16), status: 'CREATING' as const };
+    f.setSessions([f.a.session, f.b.session, run]);
+    vi.mocked(f.api.creation).mockResolvedValueOnce({ state: 'created', session: run });
+    await f.manager.checkCreation(id, true);
+    finish(run); expect(await creating).toBeInstanceOf(ConversationActionCancelled);
+    expect(f.manager.snapshot().conversations.find((entry) => entry.id === id)?.activeRunId).toBeNull();
+    expect(f.api.close).toHaveBeenCalledWith(run.sessionId, expect.any(String));
+    expect(f.socket.sent.some((bytes) => decodeWireMessage(WirePacketSchema, bytes).body.case === 'encrypted')).toBe(false);
+  });
+  it('retains conversation identity across runs and rejects stale-run actions', async () => {
+    const f = await fixture(); await f.manager.load(); await f.manager.bind(connection(f.socket));
+    const id = f.a.session.sessionId;
+    await f.manager.close(id); await f.manager.continueConversation(id);
+    const next = await f.manager.create({ abaEndpointId: f.a.value.aba.id, workspaceId: 'fixture', runtimeProfileId: 'fixture', draft: 'new run' }, false, id);
+    expect(next.conversationId).toBe(id); expect(next.runId).not.toBe(id);
+    expect(f.manager.snapshot().conversations.find((entry) => entry.id === id)?.runIds).toEqual([id, next.runId]);
+    expect(() => f.manager.prompt(id, 'stale continuation', id)).toThrow(ConversationActionCancelled);
+  });
+  it('preserves drafts typed while an earlier prompt is being encrypted', async () => {
+    const f = await fixture(); await f.manager.load(); await f.manager.bind(connection(f.socket));
+    const id = f.a.session.sessionId; await f.manager.draft(id, 'submitted');
+    let release: () => void = () => undefined; let entered = false;
+    const gate = new Promise<void>((resolve) => { release = resolve; });
+    const sign = crypto.subtle.sign.bind(crypto.subtle);
+    vi.spyOn(crypto.subtle, 'sign').mockImplementationOnce(async (...args) => { entered = true; await gate; return sign(...args); });
+    const sent = f.manager.prompt(id, 'submitted'); await vi.waitFor(() => expect(entered).toBe(true));
+    await f.manager.draft(id, 'typed while sending'); release(); await sent;
+    expect(f.manager.snapshot().conversations.find((entry) => entry.id === id)?.draft).toBe('typed while sending');
+  });
+  it('renames and archives without cancelling active work or releasing its workspace', async () => {
+    const f = await fixture(); await f.manager.load(); await f.manager.bind(connection(f.socket));
+    const id = f.a.session.sessionId; await f.manager.select(id); await f.manager.prompt(id, 'background work');
+    await f.manager.rename(id, 'Named conversation'); await f.manager.archive(id, true);
+    const saved = await f.a.store.conversationIndex().read(id);
+    expect(saved?.value.title).toBe('Named conversation'); expect(saved?.value.archived).toBe(true);
+    expect(f.manager.snapshot().selectedId).toBeNull(); expect(f.api.close).not.toHaveBeenCalled();
+    expect(f.manager.workspaceConflict(f.a.value.aba.id, 'fixture')).toBe(true);
+  });
+  it('can close and continue when one execution record is corrupt without replacing that record', async () => {
+    const f = await fixture(); await f.manager.load(); await f.manager.dispose();
+    const id = f.a.session.sessionId; const recordId = `remote-v1/${testEndpoint}/${id}`;
+    const old = await f.a.store.read(id);
+    await f.a.vault.write(recordId, new TextEncoder().encode('{}'), old!.revision);
+    const manager = new ConversationManager(f.a.store, f.a.identity, testEndpoint, f.api, () => testNow); managers.push(manager);
+    await manager.load(); await manager.bind(connection(new Socket()));
+    expect(manager.snapshot().storageIssues).toHaveLength(1);
+    await manager.close(id); await manager.continueConversation(id);
+    const next = await manager.create({ abaEndpointId: f.a.value.aba.id, workspaceId: 'fixture', runtimeProfileId: 'fixture', draft: 'continue' }, false, id);
+    expect(next.conversationId).toBe(id);
+    expect(new TextDecoder().decode((await f.a.vault.read(recordId))!.bytes)).toBe('{}');
+  });
   it('fences delayed control signatures on replacement without poisoning either conversation', async () => {
     const f = await fixture(); await f.manager.load();
     let release: () => void = () => undefined; let entered = false;
@@ -43,7 +137,7 @@ describe('endpoint conversation coordination', () => {
     const next = new Socket(); const replacing = f.manager.bind(connection(next, 2n));
     release(); await Promise.all([old, replacing]);
     expect(f.socket.sent).toHaveLength(0); expect(f.manager.snapshot().online).toBe(true);
-    expect(f.manager.snapshot().conversations.every((item) => item.fault === null && item.data.blocked === null)).toBe(true);
+    expect(f.manager.snapshot().runs.every((item) => item.fault === null && item.data.blocked === null)).toBe(true);
     const sequences = next.sent.map((bytes) => decodeWireMessage(WirePacketSchema, bytes)).flatMap((packet) => packet.body.case === 'control' ? [packet.body.value.controlSequence] : []);
     expect(sequences).toEqual([1n, 2n]);
   });
@@ -58,7 +152,7 @@ describe('endpoint conversation coordination', () => {
     const next = new Socket(); await f.manager.bind(connection(next, 2n));
     const sent = next.sent.filter((bytes) => decodeWireMessage(WirePacketSchema, bytes).body.case === 'encrypted');
     expect(sent).toHaveLength(1); expect(Buffer.from(sent[0]!).toString('base64url')).toBe(packet?.encoded);
-    expect(f.manager.snapshot().conversations.find((item) => item.data.session.sessionId === f.a.session.sessionId)?.data.outbound).toBe('1');
+    expect(f.manager.snapshot().runs.find((item) => item.data.session.sessionId === f.a.session.sessionId)?.data.outbound).toBe('1');
     expect(f.api.close).not.toHaveBeenCalled();
   });
   it('keeps a new creation grant when an older list response finishes and routes its key package', async () => {
@@ -66,7 +160,7 @@ describe('endpoint conversation coordination', () => {
     let release: (sessions: readonly EndpointSessionSummary[]) => void = () => undefined;
     vi.mocked(f.api.sessions).mockImplementationOnce(() => new Promise((resolve) => { release = resolve; }));
     const refreshing = f.manager.refresh(); await vi.waitFor(() => expect(f.api.sessions).toHaveBeenCalledTimes(2));
-    const id = await f.manager.create({ abaEndpointId: f.a.session.abaEndpointId, workspaceId: 'fixture', runtimeProfileId: 'fixture', draft: 'new creation' });
+    const { runId: id } = await f.manager.create({ abaEndpointId: f.a.session.abaEndpointId, workspaceId: 'fixture', runtimeProfileId: 'fixture', draft: 'new creation' });
     const created = { ...f.a.session, sessionId: id, status: 'WAITING_KEY' as const }; f.setSessions([f.a.session, f.b.session, created]);
     release([f.a.session, f.b.session]); await refreshing;
     expect(f.manager.snapshot().recovery[id]).toBeUndefined();
@@ -83,17 +177,17 @@ describe('endpoint conversation coordination', () => {
   it('holds a final frame without ACK while unauthorized, then recovers it once after fresh authorization', async () => {
     const f = await fixture(); await f.manager.load(); await f.manager.bind(connection(f.socket));
     await f.manager.prompt(f.a.session.sessionId, 'one operation');
-    const request = f.manager.snapshot().conversations.find((item) => item.data.session.sessionId === f.a.session.sessionId)?.data.awaiting;
+    const request = f.manager.snapshot().runs.find((item) => item.data.session.sessionId === f.a.session.sessionId)?.data.awaiting;
     f.setSessions([f.b.session]); await f.manager.refresh();
     const final = await f.a.incoming([chunk(f.a.session.sessionId, 'final result'), { jsonrpc: '2.0', id: request, result: { stopReason: 'end_turn' } }], 1n);
     const before = f.socket.sent.length; f.socket.receive(final);
     expect(f.socket.sent).toHaveLength(before);
-    expect(f.manager.snapshot().conversations.find((item) => item.data.session.sessionId === f.a.session.sessionId)?.data.inbound).toBe('0');
+    expect(f.manager.snapshot().runs.find((item) => item.data.session.sessionId === f.a.session.sessionId)?.data.inbound).toBe('0');
     f.setSessions([f.a.session, f.b.session]); await f.manager.refresh();
-    const restored = f.manager.snapshot().conversations.find((item) => item.data.session.sessionId === f.a.session.sessionId)?.data;
+    const restored = f.manager.snapshot().runs.find((item) => item.data.session.sessionId === f.a.session.sessionId)?.data;
     expect(restored?.awaiting).toBeNull(); expect(restored?.messages[1]?.text).toBe('final result'); expect(restored?.inbound).toBe('1');
     f.socket.receive(final);
-    await vi.waitFor(() => expect(f.manager.snapshot().conversations.find((item) => item.data.session.sessionId === f.a.session.sessionId)?.pending).toBe(0));
+    await vi.waitFor(() => expect(f.manager.snapshot().runs.find((item) => item.data.session.sessionId === f.a.session.sessionId)?.pending).toBe(0));
     expect((await f.a.store.read(f.a.session.sessionId))?.value.messages).toEqual(restored?.messages);
     const requests = f.socket.sent.filter((bytes) => decodeWireMessage(WirePacketSchema, bytes).body.case === 'encrypted');
     for (const bytes of requests) expect(bytes).toEqual(requests[0]);
@@ -119,8 +213,8 @@ describe('endpoint conversation coordination', () => {
     await f.manager.draft(f.manager.snapshot().selectedId, 'A final edit');
     release(); await Promise.all([first, second, third]);
     expect(f.manager.snapshot().selectedId).toBe(f.a.session.sessionId);
-    expect((await f.a.store.read(f.a.session.sessionId))?.value.draft).toBe('A final edit');
-    expect((await f.a.store.read(f.b.session.sessionId))?.value.draft).toBe('B immediate edit');
+    expect((await f.a.store.conversationIndex().read(f.a.session.sessionId))?.value.draft).toBe('A final edit');
+    expect((await f.a.store.conversationIndex().read(f.b.session.sessionId))?.value.draft).toBe('B immediate edit');
     expect((await f.a.store.readWorkspace()).value.selectedId).toBe(f.a.session.sessionId);
   });
   it('keeps the intended visible destination when selection persistence fails', async () => {
@@ -151,7 +245,7 @@ describe('endpoint conversation coordination', () => {
     const first = f.manager.prompt(f.a.session.sessionId, 'first workspace writer');
     await expect(f.manager.prompt(f.b.session.sessionId, 'competing writer')).rejects.toThrow('workspace');
     await first;
-    expect(f.manager.snapshot().conversations.find((item) => item.data.session.sessionId === f.b.session.sessionId)?.data.awaiting).toBeNull();
+    expect(f.manager.snapshot().runs.find((item) => item.data.session.sessionId === f.b.session.sessionId)?.data.awaiting).toBeNull();
   });
   it('routes interleaved events with colliding RPC IDs to independent durable controllers', async () => {
     const f = await fixture();
@@ -161,9 +255,9 @@ describe('endpoint conversation coordination', () => {
     await Promise.all([f.manager.draft(f.a.session.sessionId, 'draft A'), f.manager.draft(f.b.session.sessionId, 'draft B')]);
     f.socket.receive(await f.b.incoming(chunk(f.b.session.sessionId, 'reply B'), 1n));
     f.socket.receive(await f.a.incoming(chunk(f.a.session.sessionId, 'reply A'), 1n));
-    await vi.waitFor(() => expect(f.manager.snapshot().conversations.map((item) => item.data.inbound)).toEqual(['1', '1']));
-    const a = f.manager.snapshot().conversations.find((item) => item.data.session.sessionId === f.a.session.sessionId);
-    const b = f.manager.snapshot().conversations.find((item) => item.data.session.sessionId === f.b.session.sessionId);
+    await vi.waitFor(() => expect(f.manager.snapshot().runs.map((item) => item.data.inbound)).toEqual(['1', '1']));
+    const a = f.manager.snapshot().runs.find((item) => item.data.session.sessionId === f.a.session.sessionId);
+    const b = f.manager.snapshot().runs.find((item) => item.data.session.sessionId === f.b.session.sessionId);
     expect(a?.data.messages[1]?.text).toBe('reply A'); expect(b?.data.messages[1]?.text).toBe('reply B');
     expect(a?.data.draft).toBe('draft A'); expect(b?.data.draft).toBe('draft B');
     await f.manager.select(null); expect(f.api.close).not.toHaveBeenCalled();
@@ -178,7 +272,7 @@ describe('endpoint conversation coordination', () => {
     const next = new Socket(); await f.manager.bind(connection(next, 2n));
     expect(sequences(next)).toEqual([1n, 2n]);
     expect(next.sent.find((bytes) => decodeWireMessage(WirePacketSchema, bytes).body.case === 'encrypted')).toEqual(first);
-    expect(f.manager.snapshot().conversations.find((item) => item.data.session.sessionId === f.a.session.sessionId)?.data.outbound).toBe('1');
+    expect(f.manager.snapshot().runs.find((item) => item.data.session.sessionId === f.a.session.sessionId)?.data.outbound).toBe('1');
   });
   it('retains an ambiguous creation intent and retries only its original idempotency identity', async () => {
     const f = await fixture(); await f.manager.load(); await f.manager.bind(connection(f.socket));
@@ -186,11 +280,12 @@ describe('endpoint conversation coordination', () => {
     vi.mocked(f.api.create).mockRejectedValueOnce(new Error('response lost'));
     await f.manager.draft(null, input.draft);
     await expect(f.manager.create(input)).rejects.toThrow('response lost');
-    const saved = await f.a.store.readWorkspace(); expect(saved.value.creation?.draft).toBe(input.draft);
+    const selectedId = f.manager.snapshot().selectedId!;
+    const saved = await f.a.store.conversationIndex().read(selectedId); expect(saved?.value.creation?.draft).toBe(input.draft);
     await expect(f.manager.create(input)).rejects.toThrow('reconciliation');
-    const id = await f.manager.create(input, true);
+    const { runId: id } = await f.manager.create(input, true);
     expect(vi.mocked(f.api.create).mock.calls[0]?.[0].id).toBe(vi.mocked(f.api.create).mock.calls[1]?.[0].id);
-    expect(f.manager.snapshot().workspace?.creation).toBeNull();
+    expect(f.manager.snapshot().conversations.find((entry) => entry.id === selectedId)?.creation).toBeNull();
     expect((await f.a.store.read(id))?.value.draft).toBe(input.draft);
     expect(f.socket.sent.some((bytes) => decodeWireMessage(WirePacketSchema, bytes).body.case === 'encrypted')).toBe(false);
   });
@@ -211,7 +306,7 @@ describe('endpoint conversation coordination', () => {
     const count = replacement.sent.length; finish([f.a.session, f.b.session]); await binding;
     f.socket.receive(await f.a.incoming(chunk(f.a.session.sessionId, 'stale'), 1n));
     expect(replacement.sent).toHaveLength(count); expect(f.manager.snapshot().online).toBe(true);
-    expect(f.manager.snapshot().conversations[0]?.data.inbound).toBe('0');
+    expect(f.manager.snapshot().runs[0]?.data.inbound).toBe('0');
   });
   it('bounds restore buffering and stops the connection when its byte limit is exceeded', async () => {
     const f = await fixture(); await f.manager.load();
@@ -225,10 +320,10 @@ describe('endpoint conversation coordination', () => {
   it('closes only the requested session and drains already accepted draft writes on disposal', async () => {
     const f = await fixture(); await f.manager.load(); await f.manager.bind(connection(f.socket));
     await f.manager.close(f.a.session.sessionId);
-    expect(f.manager.snapshot().conversations.find((item) => item.data.session.sessionId === f.b.session.sessionId)?.data.session.status).toBe('ACTIVE');
+    expect(f.manager.snapshot().runs.find((item) => item.data.session.sessionId === f.b.session.sessionId)?.data.session.status).toBe('ACTIVE');
     const draft = f.manager.draft(f.b.session.sessionId, 'last draft'); const compose = f.manager.draft(null, 'new chat draft');
     await f.manager.dispose(); await Promise.all([draft, compose]);
-    expect((await f.a.store.read(f.b.session.sessionId))?.value.draft).toBe('last draft');
+    expect((await f.a.store.conversationIndex().read(f.b.session.sessionId))?.value.draft).toBe('last draft');
     expect((await f.a.store.readWorkspace()).value.draft).toBe('new chat draft');
     expect(f.api.close).toHaveBeenCalledTimes(1);
   });

@@ -17,6 +17,11 @@ export interface ChatWorkspaceProps {
   readonly newChatDisabled?: boolean; readonly composerDisabled?: boolean; readonly draftSaved?: boolean;
   readonly deliveryPending?: boolean;
   readonly renderTurnActivity?: (turnId: string) => ReactNode;
+  readonly recoveryActions?: ReactNode;
+  readonly lifecycleBusy?: boolean;
+  readonly onRenameConversation?: (id: string, title: string) => void;
+  readonly onArchiveConversation?: (id: string, archived: boolean) => void;
+  readonly onDeleteConversation?: (id: string) => void;
 }
 const suggestions: readonly { readonly icon: IconName; readonly title: string; readonly detail: string; readonly prompt: string }[] = [
   { icon: 'code', title: '审查代码', detail: '找到问题，给出改进建议', prompt: '请帮我审查当前工作区的代码，先说明你会重点检查哪些问题。' },
@@ -28,6 +33,10 @@ export function ChatWorkspace(props: ChatWorkspaceProps) {
   const [collapsed, setCollapsed] = useState(false);
   const [searching, setSearching] = useState(false);
   const [query, setQuery] = useState('');
+  const [showArchived, setShowArchived] = useState(false);
+  const [menuId, setMenuId] = useState<string | null>(null);
+  const [name, setName] = useState('');
+  const [deleting, setDeleting] = useState(false);
   const [confirm, setConfirm] = useState(false);
   const [atBottom, setAtBottom] = useState(true);
   const viewport = useRef<HTMLDivElement>(null);
@@ -36,7 +45,8 @@ export function ChatWorkspace(props: ChatWorkspaceProps) {
   const composing = useRef(false);
   const compositionEnded = useRef(-Infinity);
   const empty = props.messages.length === 0 && !props.readOnly;
-  const filtered = props.conversations.filter((item) => item.title.toLocaleLowerCase().includes(query.toLocaleLowerCase()));
+  const menuItem = props.conversations.find((item) => item.id === menuId);
+  const filtered = props.conversations.filter((item) => (item.archived === true) === showArchived && item.title.toLocaleLowerCase().includes(query.toLocaleLowerCase()));
   useEffect(() => {
     const element = textarea.current;
     if (element === null) return;
@@ -56,7 +66,7 @@ export function ChatWorkspace(props: ChatWorkspaceProps) {
     return () => window.removeEventListener('keydown', onKey);
   }, []);
   const newChat = () => {
-    setSidebarOpen(false);
+    setSidebarOpen(false); setShowArchived(false);
     props.onNewChat();
   };
   const submit = () => {
@@ -95,11 +105,14 @@ export function ChatWorkspace(props: ChatWorkspaceProps) {
       <div className="sidebar-brand"><span className="brand-mark">H</span><strong>Harness</strong><button type="button" className="icon-button desktop-only" aria-label="收起侧边栏" onClick={() => setCollapsed(true)}><Icon name="menu" /></button><button type="button" className="icon-button mobile-only" aria-label="关闭侧边栏" onClick={() => setSidebarOpen(false)}><Icon name="close" /></button></div>
       <button type="button" className="new-chat-button" disabled={props.newChatDisabled} onClick={newChat}><Icon name="plus" /><span>新建对话</span></button>
       <button type="button" className="sidebar-action" onClick={() => setSearching((value) => !value)} aria-expanded={searching}><Icon name="search" />搜索本地会话</button>
+      <button type="button" className="sidebar-action" aria-pressed={showArchived} onClick={() => setShowArchived((value) => !value)}>{showArchived ? '返回对话列表' : '查看已归档对话'}</button>
       {searching ? <input className="conversation-search" autoFocus type="search" value={query} onChange={(event) => setQuery(event.target.value)} placeholder="搜索对话…" aria-label="搜索本地会话" /> : null}
       <div className="sidebar-section-label">本地会话</div>
       <nav className="conversation-list" aria-label="对话列表">
-        {filtered.map((item) => <button type="button" key={item.id} className={`conversation-item ${item.id === props.selectedConversationId ? 'selected' : ''}`} aria-current={item.id === props.selectedConversationId ? 'page' : undefined}
-          onClick={() => { props.onSelectConversation(item.id); setSidebarOpen(false); }}><span>{item.title}</span><small>{item.detail}</small></button>)}
+        {filtered.map((item) => <div className="conversation-row" key={item.id}><button type="button" className={`conversation-item ${item.id === props.selectedConversationId ? 'selected' : ''}`} aria-current={item.id === props.selectedConversationId ? 'page' : undefined}
+          onClick={() => { props.onSelectConversation(item.id); setSidebarOpen(false); }}><span>{item.title}</span><small>{item.detail}</small></button>
+          {props.onRenameConversation === undefined ? null : <button className="conversation-menu" type="button" aria-label={`对话操作 ${item.title}`} onClick={() => { setMenuId(item.id); setName(item.title); setDeleting(false); }}>⋯</button>}
+        </div>)}
         {filtered.length === 0 ? <p className="sidebar-empty">{query !== '' ? '没有匹配的对话' : '开始一段对话，它会出现在这里。'}</p> : null}
       </nav>
       <div className="sidebar-footer"><p>{props.connected ? '历史与草稿在此浏览器中加密保存。' : '连接后可加密保存会话历史与草稿。'}<br />恢复需要原端点密钥和有效授权。</p><button type="button" className="account-button" onClick={() => { props.onOpenSettings(); setSidebarOpen(false); }}><span className="account-avatar"><Icon name="settings" /></span><span><strong>连接与设置</strong><small>{props.online ? '安全连接已就绪' : props.connected ? '连接已断开' : '连接你的工作环境'}</small></span><Icon name="chevron" /></button></div>
@@ -108,9 +121,10 @@ export function ChatWorkspace(props: ChatWorkspaceProps) {
       <header className="chat-header"><div className="header-left"><button type="button" className="icon-button sidebar-toggle" aria-label="展开会话导航" aria-expanded={sidebarOpen} onClick={() => { setCollapsed(false); setSidebarOpen(true); }}><Icon name="menu" /></button>
         {props.targetSettings !== null ? <details className="agent-picker"><summary><strong>{props.project || props.agent || '选择项目'}</strong><Icon name="chevron" /></summary><div className="agent-popover">{props.targetSettings}</div></details>
           : <button className="header-agent" type="button" onClick={props.onOpenSettings}>Harness<Icon name="chevron" /></button>}
-      </div><div className="header-left">{props.onEndChat !== null && props.hasActiveSession ? <button type="button" className="secondary-button" disabled={props.busy || !props.online} onClick={() => setConfirm(true)}>结束会话</button> : null}<button className={`connection-badge ${props.online ? 'connected' : ''}`} type="button" onClick={props.onOpenSettings}><span className="connection-dot" />{props.online ? '已连接' : '连接 Agent'}</button></div></header>
+      </div><div className="header-left">{props.onEndChat !== null && props.hasActiveSession ? <button type="button" className="secondary-button" disabled={props.lifecycleBusy ?? false} onClick={() => setConfirm(true)}>结束会话</button> : null}<button className={`connection-badge ${props.online ? 'connected' : ''}`} type="button" onClick={props.onOpenSettings}><span className="connection-dot" />{props.online ? '已连接' : '连接 Agent'}</button></div></header>
       {props.notice !== null ? <div className="chat-notice" role="status">{props.notice}</div> : null}
       {props.error !== null ? <div className="chat-error" role="alert">{props.error}</div> : null}
+      {props.recoveryActions}
       <div className={`chat-scroll ${empty ? 'is-empty' : ''}`} ref={viewport} onScroll={() => {
         const element = viewport.current;
         if (element !== null) { nearBottom.current = element.scrollHeight - element.scrollTop - element.clientHeight < 100; setAtBottom(nearBottom.current); }
@@ -122,12 +136,13 @@ export function ChatWorkspace(props: ChatWorkspaceProps) {
               <div className="message-body">{message.role === 'assistant' ? <>
                 <div className="message-author">{props.agent || 'Agent'}</div>
                 {props.renderTurnActivity?.(message.id.replace(/^assistant-/u, ''))}
-                {message.text !== '' ? <Markdown text={message.text} /> : message.state === 'streaming' && props.deliveryPending ? <p className="message-muted">消息已加密保存，等待送达确认。</p> : message.state === 'streaming' ? <div className="thinking"><span /><span /><span /><span className="sr-only">正在等待 Agent 回复</span></div> : <p className="message-muted">{message.state === 'uncertain' ? '回复中断，请检查执行状态，不要直接重发。' : '本次回复未返回文本。'}</p>}
+                {message.text !== '' ? <Markdown text={message.text} /> : message.error !== undefined ? null : message.state === 'streaming' && props.deliveryPending ? <p className="message-muted">消息已加密保存，等待送达确认。</p> : message.state === 'streaming' ? <div className="thinking"><span /><span /><span /><span className="sr-only">正在等待 Agent 回复</span></div> : <p className="message-muted">{message.state === 'uncertain' ? '回复中断，请检查执行状态，不要直接重发。' : '本次回复未返回文本。'}</p>}
+                {message.error === undefined ? null : <p className="turn-error" role="status">{message.error}</p>}
                 {message.text.length >= MAX_REPLY_CHARACTERS ? <p className="message-muted">回复超过本页显示上限，请在执行端查看完整结果。</p> : null}
                 {message.state === 'cancelled' ? <p className="message-muted">本轮已停止，可以继续对话；已发生的操作不受影响。</p> : null}
                 {message.state === 'uncertain' ? <p className="uncertain-label">执行结果待确认</p> : null}
                 {message.text !== '' && message.state !== 'streaming' ? <CopyButton text={message.text} label="复制回复" /> : null}
-              </> : <p className="plain-message">{message.text}</p>}</div>
+              </> : <><p className="plain-message">{message.text}</p>{message.role === 'user' ? <CopyButton text={message.text} label="复制消息" /> : null}</>}</div>
             </article>)}
           </section>}
       </div>
@@ -135,5 +150,15 @@ export function ChatWorkspace(props: ChatWorkspaceProps) {
       <span className="sr-only" role="status">{props.responding ? 'Agent 正在回复' : '可以继续操作'}</span>
     </main>
     <Dialog open={confirm} onClose={() => setConfirm(false)} title="结束当前会话？"><p>将向执行端发送关闭当前会话的请求。其他会话继续保留，已经执行的操作不会撤销。</p><div className="dialog-actions"><button className="secondary-button" type="button" onClick={() => setConfirm(false)}>继续当前会话</button><button className="primary-button" type="button" onClick={() => { setConfirm(false); props.onEndChat?.(); }}>确认结束</button></div></Dialog>
+    <Dialog open={menuItem !== undefined} onClose={() => setMenuId(null)} title={deleting ? '删除对话记录？' : '对话操作'}>
+      {deleting ? <><p>将删除这份对话的本地历史。所有运行须先结束；项目文件不会因此删除。</p>
+        <button className="secondary-button" type="button" onClick={() => setDeleting(false)}>返回</button>
+        <button className="primary-button" type="button" onClick={() => { if (menuId !== null) props.onDeleteConversation?.(menuId); setMenuId(null); }}>确认删除对话</button></>
+        : <><label className="rename-conversation">对话名称<input value={name} maxLength={120} onChange={(event) => setName(event.target.value)} /></label>
+          <button className="primary-button" type="button" disabled={name.trim() === ''} onClick={() => { if (menuId !== null) props.onRenameConversation?.(menuId, name); setMenuId(null); }}>保存名称</button>
+          <button className="secondary-button" type="button" disabled={menuItem?.canArchive === false} onClick={() => { if (menuItem !== undefined) props.onArchiveConversation?.(menuItem.id, !menuItem.archived); setMenuId(null); }}>{menuItem?.archived ? '恢复归档' : '归档对话'}</button>
+          {props.onDeleteConversation === undefined ? null : <button className="secondary-button" type="button" onClick={() => setDeleting(true)}>删除对话记录</button>}
+        </>}
+    </Dialog>
   </div>;
 }

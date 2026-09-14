@@ -1,4 +1,4 @@
-import { receiveAcp } from '../chat/model';
+import { receiveAcp, turnFailureMessage } from '../chat/model';
 import type { Conversation } from './conversation-store';
 import { closeTurnPermissions, confirmConfiguration, readDescriptor, receiveRuntime, record } from './runtime-state';
 /** Called only for a verified, decrypted frame; persistence and transport ACK follow this projection. */
@@ -9,6 +9,10 @@ export function applyConversationEvent(initial: Conversation, payload: unknown, 
   for (const item of items) {
     const message = record(item);
     if (message?.jsonrpc !== '2.0') throw new Error('Invalid ACP envelope');
+    if ('error' in message) {
+      const error = record(message.error);
+      if (error === null || !Number.isSafeInteger(error.code) || typeof error.message !== 'string' || error.message.length > 4096 || 'result' in message) throw new Error('Invalid ACP error response');
+    }
     const params = record(message.params);
     if (typeof message.method === 'string' && (message.method.startsWith('session/') || message.method.startsWith('_mss/permission/')) && params?.sessionId !== value.session.sessionId) throw new Error('ACP session binding mismatch');
     const request = typeof message.id === 'string' ? value.requests.find((candidate) => candidate.id === message.id) : undefined;
@@ -36,10 +40,15 @@ export function applyConversationEvent(initial: Conversation, payload: unknown, 
     const turnId = value.awaiting;
     const runtime = receiveRuntime(value.runtime, item, value.session.sessionId, turnId, now);
     const response = receiveAcp(value.messages, item, turnId);
-    value = { ...value, runtime: response.completed && turnId !== null ? closeTurnPermissions(runtime, turnId) : runtime,
+    const failure = record(record(message.error)?.data);
+    const unknown = response.failed && failure?.executionState === 'unknown';
+    const runtimeLost = response.failed && failure?.runtimeStopped === true;
+    const failureMessage = response.failed ? turnFailureMessage(message) : null;
+    value = { ...value, runtime: runtimeLost ? { ...closeTurnPermissions(runtime, turnId ?? ''), status: 'failed' } : response.completed && turnId !== null ? closeTurnPermissions(runtime, turnId) : runtime,
       messages: response.messages, awaiting: response.completed ? null : turnId,
       cancelPending: response.completed ? false : value.cancelPending,
-      blocked: response.failed ? 'Agent 未能确认本轮正常完成。请核对执行结果，不会自动重试。' : value.blocked };
+      recovery: response.failed ? { kind: unknown ? 'execution-unknown' : runtimeLost ? 'runtime-lost' : 'turn-failed', message: failureMessage! } : value.recovery,
+      blocked: unknown || runtimeLost ? failureMessage : value.blocked };
   }
   return value;
 }
