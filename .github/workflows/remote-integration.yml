@@ -1,0 +1,45 @@
+name: Remote Integration
+on:
+  pull_request:
+    branches: [main]
+  workflow_dispatch:
+permissions:
+  contents: read
+concurrency:
+  group: remote-integration-${{ github.ref }}
+  cancel-in-progress: false
+jobs:
+  encrypted-duplex:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          persist-credentials: false
+      - name: Install pinned Rust toolchain
+        run: rustup toolchain install 1.88.0 --profile minimal
+      - name: Build actual ABA
+        working-directory: aba
+        run: cargo +1.88.0 build --locked --bin aba
+      - uses: actions/setup-go@v6
+        with:
+          go-version-file: platform/go.mod
+          cache-dependency-path: platform/go.sum
+      - name: Exercise actual binaries through the encrypted Gateway
+        working-directory: platform
+        env:
+          HARNESS_TEST_ABA_BINARY: ${{ github.workspace }}/aba/target/debug/aba
+          HARNESS_TEST_ACP_FIXTURE: ${{ github.workspace }}/aba/tests/fixtures/duplex_agent.py
+        run: |
+          set -Eeuo pipefail
+          test -x "${HARNESS_TEST_ABA_BINARY}"
+          test -f "${HARNESS_TEST_ACP_FIXTURE}"
+          go test -count=1 -race -v -timeout=120s -run '^TestRemoteActualABAGatewayDuplex$' ./internal/harness/gateway | tee "${RUNNER_TEMP}/remote-integration.log"
+      - name: Retain sanitized integration evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: remote-integration-${{ github.sha }}
+          path: ${{ runner.temp }}/remote-integration.log
+          if-no-files-found: warn
+          retention-days: 7
