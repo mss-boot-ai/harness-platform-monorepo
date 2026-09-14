@@ -175,6 +175,8 @@ impl ProviderPolicy {
             "max_tokens",
             "max_completion_tokens",
             "response_format",
+            "generate",
+            "type",
             "model",
             "input",
             "instructions",
@@ -231,9 +233,25 @@ impl ProviderPolicy {
             .and_then(|value| value.get("max_output_tokens"))
             .and_then(serde_json::Value::as_u64)
             .is_some_and(|value| value > 16_384);
+        let store_disabled = shape
+            .and_then(|value| value.get("store"))
+            .is_none_or(|value| value == &serde_json::Value::Bool(false));
+        let include_allowed = shape
+            .and_then(|value| value.get("include"))
+            .is_none_or(|value| {
+                value.as_array().is_some_and(|items| {
+                    items.len() <= 1
+                        && items
+                            .iter()
+                            .all(|value| value.as_str() == Some("reasoning.encrypted_content"))
+                })
+            });
+        let generation_disabled =
+            shape.and_then(|value| value.get("generate")) == Some(&serde_json::Value::Bool(false));
         if let Ok(bytes) = serde_json::to_vec(
             &serde_json::json!({"code":code,"known_controls_present":known,"null_controls":null_controls,
-                "tool_kinds":tool_kinds,"model_allowed":model_allowed,"excessive_output":excessive_output}),
+                "tool_kinds":tool_kinds,"model_allowed":model_allowed,"excessive_output":excessive_output,
+                "store_disabled":store_disabled,"include_allowed":include_allowed,"generation_disabled":generation_disabled}),
         ) && let Ok(mut file) = file.lock()
         {
             let _ = file.write_all(&bytes).and_then(|()| file.write_all(b"\n"));
