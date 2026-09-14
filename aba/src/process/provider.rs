@@ -16,6 +16,7 @@ use std::thread;
 use std::time::{Duration, Instant};
 
 use reqwest::Client;
+use sha2::{Digest as _, Sha256};
 use url::Url;
 
 use super::ProcessError;
@@ -266,11 +267,23 @@ impl ProviderPolicy {
             .map_or(0, |object| {
                 object.keys().filter(|key| !allowed_control(key)).count()
             });
+        let unknown_control_fingerprints: Vec<_> = shape
+            .and_then(serde_json::Value::as_object)
+            .into_iter()
+            .flat_map(|object| object.keys())
+            .filter(|key| !allowed_control(key))
+            .take(4)
+            .map(|key| {
+                serde_json::json!({"length":key.len(),"sha256":Sha256::digest(key.as_bytes()).iter()
+                .map(|byte| format!("{byte:02x}")).collect::<String>()})
+            })
+            .collect();
         if let Ok(bytes) = serde_json::to_vec(
             &serde_json::json!({"code":code,"known_controls_present":known,"null_controls":null_controls,
                 "tool_kinds":tool_kinds,"model_allowed":model_allowed,"excessive_output":excessive_output,
                 "store_disabled":store_disabled,"include_allowed":include_allowed,"generation_disabled":generation_disabled,
-                "input_allowed":input_allowed,"choice_allowed":choice_allowed,"unknown_control_count":unknown_control_count}),
+                "input_allowed":input_allowed,"choice_allowed":choice_allowed,"unknown_control_count":unknown_control_count,
+                "unknown_control_fingerprints":unknown_control_fingerprints}),
         ) && let Ok(mut file) = file.lock()
         {
             let _ = file.write_all(&bytes).and_then(|()| file.write_all(b"\n"));
