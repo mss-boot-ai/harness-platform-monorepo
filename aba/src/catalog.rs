@@ -1,7 +1,17 @@
 //! Safe discovery metadata, projected only from owner-approved local profiles.
 use serde::Serialize;
+use std::sync::mpsc::{Receiver, RecvTimeoutError};
+use std::time::Duration;
 
 use crate::config::{AgentConfig, ValidationError};
+
+pub(crate) const RENEWAL_INTERVAL: Duration = Duration::from_secs(5 * 60);
+
+pub(crate) fn renew_until_stopped(stop: Receiver<()>, interval: Duration, mut renew: impl FnMut()) {
+    while matches!(stop.recv_timeout(interval), Err(RecvTimeoutError::Timeout)) {
+        renew();
+    }
+}
 
 #[derive(Debug, Clone, Serialize, PartialEq, Eq)]
 #[serde(rename_all = "camelCase")]
@@ -68,6 +78,22 @@ impl ExecutionCatalog {
 mod tests {
     use super::ExecutionCatalog;
     use crate::config::AgentConfig;
+
+    #[test]
+    fn renewal_is_periodic_and_stops_without_waiting_for_the_next_interval()
+    -> Result<(), Box<dyn std::error::Error>> {
+        let (stop, receiver) = std::sync::mpsc::sync_channel(1);
+        let (renewed, observed) = std::sync::mpsc::sync_channel(1);
+        let worker = std::thread::spawn(move || {
+            super::renew_until_stopped(receiver, std::time::Duration::from_millis(10), || {
+                let _ = renewed.try_send(());
+            })
+        });
+        observed.recv_timeout(std::time::Duration::from_secs(1))?;
+        stop.send(())?;
+        worker.join().map_err(|_| "renewal thread failed")?;
+        Ok(())
+    }
 
     #[test]
     fn catalog_requires_opt_in_and_does_not_publish_execution_secrets()

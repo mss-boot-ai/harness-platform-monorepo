@@ -22,7 +22,7 @@ use super::transcript::{
     connection_ready, server_challenge,
 };
 use super::trust::{TrustManifestEnvelope, VerifiedTrust};
-use crate::catalog::ExecutionCatalog;
+use crate::catalog::{ExecutionCatalog, RENEWAL_INTERVAL, renew_until_stopped};
 use crate::config::AgentConfig;
 use crate::crypto::dpop::{DpopInput, NonceDpopInput, create_dpop_proof, create_nonce_dpop_proof};
 use crate::crypto::{sign_p1363_low_s, verify_p1363_low_s};
@@ -155,7 +155,27 @@ impl GatewayClient {
                 ready.endpoint_id, ready.connection_generation
             );
             let connected_at = Instant::now();
-            match ready.run_once(identity, config, &mut controls) {
+            let credentials = store.load_credentials()?;
+            let generation = ready.connection_generation;
+            let result = thread::scope(|scope| {
+                let (stop, receiver) = std::sync::mpsc::sync_channel(1);
+                let catalog = &catalog;
+                scope.spawn(move || {
+                    renew_until_stopped(receiver, RENEWAL_INTERVAL, || {
+                        if self
+                            .publish_catalog(identity, &credentials, generation, catalog)
+                            .is_err()
+                        {
+                            // Admission becomes stale on expiry; existing runs do not lose transport.
+                            eprintln!("catalog renewal unavailable");
+                        }
+                    })
+                });
+                let result = ready.run_once(identity, config, &mut controls);
+                let _ = stop.send(());
+                result
+            });
+            match result {
                 Ok(()) | Err(GatewayError::WebSocket(_)) => {}
                 Err(error) => return Err(error),
             }
