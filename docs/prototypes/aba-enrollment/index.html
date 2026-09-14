@@ -1,0 +1,250 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>ABA 设备授权（Enrollment）— 原型</title>
+<style>
+*,*::before,*::after{box-sizing:border-box}
+:root{
+  --bg:#f5f6f8;--surface:#fff;--surface-2:#f0f2f4;
+  --ink:#1f2328;--ink-2:#586069;--ink-3:#8b9198;
+  --line:#e1e4e8;--line-2:#c9ced4;
+  --blue:#185fa5;--blue-bg:#e6f1fb;
+  --green:#3b6d11;--green-bg:#eaf3de;
+  --amber:#854f0b;--amber-bg:#faeeda;
+  --red:#a32d2d;--red-bg:#fcebeb;
+  --purple:#534ab7;--purple-bg:#eeedfe;
+  --teal:#0f6e56;--teal-bg:#e1f5ee;
+  --r:12px;--r-sm:8px;
+  --font:-apple-system,BlinkMacSystemFont,"Segoe UI","PingFang SC","Hiragino Sans GB","Microsoft YaHei",sans-serif;
+  --mono:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;
+}
+@media (prefers-color-scheme:dark){
+  :root{
+    --bg:#1a1c1e;--surface:#232629;--surface-2:#2b2f33;
+    --ink:#e8eaed;--ink-2:#a8afb6;--ink-3:#7d858d;
+    --line:#34383c;--line-2:#454a4f;
+    --blue:#85b7eb;--blue-bg:#12293f;
+    --green:#97c459;--green-bg:#1e2a12;
+    --amber:#ef9f27;--amber-bg:#2e2210;
+    --red:#f09595;--red-bg:#331818;
+    --purple:#afa9ec;--purple-bg:#1f1c3d;
+    --teal:#5dcaa5;--teal-bg:#102a23;
+  }
+}
+body{margin:0;background:var(--bg);color:var(--ink);font:14px/1.6 var(--font);-webkit-font-smoothing:antialiased}
+.doc{max-width:1040px;margin:0 auto;padding:32px 24px 72px}
+h1{font-size:22px;font-weight:600;margin:0 0 6px}
+h2{font-size:15px;font-weight:600;margin:36px 0 12px;padding-bottom:8px;border-bottom:1px solid var(--line)}
+p{margin:0 0 10px}
+.sub{color:var(--ink-2);margin:0 0 14px;max-width:78ch}
+.muted{color:var(--ink-3)}
+.mono{font-family:var(--mono);font-size:12px}
+.badges{display:flex;flex-wrap:wrap;gap:8px;margin:0 0 6px}
+.badge{display:inline-flex;align-items:center;gap:6px;padding:3px 9px;border-radius:999px;
+  font-size:12px;line-height:1.5;border:1px solid var(--line-2);background:var(--surface);color:var(--ink-2)}
+.badge--design{border-color:var(--purple);background:var(--purple-bg);color:var(--purple)}
+.badge--partial{border-color:var(--amber);background:var(--amber-bg);color:var(--amber)}
+.badge--baseline{border-color:var(--green);background:var(--green-bg);color:var(--green)}
+.badge--ver{border-color:var(--ink-2);background:var(--surface-2);color:var(--ink);font-family:var(--mono)}
+.card{background:var(--surface);border:1px solid var(--line);border-radius:var(--r);padding:16px}
+.card__title{font-size:13px;font-weight:600;margin:0 0 10px}
+.row{display:flex;gap:10px;align-items:center;flex-wrap:wrap}
+.row--top{align-items:flex-start}
+.grid{display:grid;gap:16px}
+.grid--2{grid-template-columns:repeat(2,minmax(0,1fr))}
+@media (max-width:760px){.grid--2{grid-template-columns:1fr}}
+.kv{display:grid;grid-template-columns:auto 1fr;gap:4px 14px;font-size:13px}
+.kv__k{color:var(--ink-3);white-space:nowrap}
+.btn{display:inline-flex;align-items:center;justify-content:center;gap:6px;padding:7px 14px;
+  font:inherit;font-size:13px;border-radius:var(--r-sm);border:1px solid var(--line-2);
+  background:var(--surface);color:var(--ink);cursor:default;white-space:nowrap}
+.btn--primary{background:var(--blue);border-color:var(--blue);color:#fff}
+.btn--ghost{background:transparent}
+.btn--danger{background:transparent;border-color:var(--red);color:var(--red)}
+.btn--sm{padding:4px 10px;font-size:12px}
+.btn--block{width:100%}
+.banner{display:flex;gap:10px;padding:11px 13px;border-radius:var(--r-sm);border:1px solid var(--line-2);
+  background:var(--surface-2);font-size:13px}
+.banner--info{border-color:var(--blue);background:var(--blue-bg);color:var(--blue)}
+.banner--warn{border-color:var(--amber);background:var(--amber-bg);color:var(--amber)}
+.banner--danger{border-color:var(--red);background:var(--red-bg);color:var(--red)}
+.banner--ok{border-color:var(--green);background:var(--green-bg);color:var(--green)}
+.banner__k{font-weight:600;white-space:nowrap}
+.code{background:var(--surface-2);border:1px solid var(--line);border-radius:var(--r-sm);
+  padding:12px 14px;font-family:var(--mono);font-size:12px;line-height:1.9;color:var(--ink-2);white-space:pre-wrap}
+.code b{color:var(--ink);font-weight:600}
+.code .g{color:var(--green)}
+.code .a{color:var(--amber)}
+.code .r{color:var(--red)}
+.code-big{font-family:var(--mono);font-size:30px;font-weight:600;letter-spacing:.16em;
+  text-align:center;padding:16px 10px;border:1px dashed var(--line-2);border-radius:var(--r);
+  background:var(--surface-2);color:var(--ink)}
+.steps{display:grid;gap:9px}
+.step{display:flex;gap:12px;align-items:flex-start;border:1px solid var(--line);border-radius:var(--r-sm);
+  background:var(--surface);padding:11px 13px;font-size:13px}
+.step__n{flex:none;width:22px;height:22px;border-radius:50%;background:var(--blue-bg);color:var(--blue);
+  border:1px solid var(--blue);display:flex;align-items:center;justify-content:center;font-size:12px;font-family:var(--mono)}
+.step__t{font-weight:600;margin-bottom:2px}
+.phone{width:390px;max-width:100%;border:1px solid var(--line-2);border-radius:22px;background:var(--surface);
+  overflow:hidden;display:flex;flex-direction:column}
+.appbar{display:flex;align-items:center;justify-content:space-between;gap:10px;padding:10px 14px;
+  border-bottom:1px solid var(--line);background:var(--surface)}
+.appbar__title{font-size:14px;font-weight:600}
+.appbar__meta{font-size:12px;color:var(--ink-3)}
+.pbody{padding:14px;display:flex;flex-direction:column;gap:12px;background:var(--bg)}
+.dev{border:1px solid var(--line);border-radius:var(--r-sm);background:var(--surface);padding:11px 12px;font-size:12px}
+.dev__h{display:flex;justify-content:space-between;align-items:center;gap:8px;margin-bottom:6px;font-weight:600}
+.tbl-wrap{border:1px solid var(--line);border-radius:var(--r);overflow:hidden}
+table{width:100%;border-collapse:collapse;font-size:12px;background:var(--surface)}
+th,td{text-align:left;padding:9px 12px;border-bottom:1px solid var(--line);vertical-align:top}
+th{font-weight:600;color:var(--ink-2);background:var(--surface-2);white-space:nowrap}
+td:first-child{white-space:nowrap}
+.note{font-size:12px;color:var(--ink-3);border-left:2px solid var(--line-2);padding-left:10px;margin:12px 0}
+.state{display:inline-flex;align-items:center;gap:6px;font-size:12px}
+.dot{width:7px;height:7px;border-radius:50%;background:var(--ink-3);flex:none}
+.dot--ok{background:var(--green)}.dot--warn{background:var(--amber)}.dot--bad{background:var(--red)}.dot--busy{background:var(--blue)}
+</style>
+</head>
+<body>
+<main class="doc">
+
+  <h1>ABA 设备授权（Enrollment）</h1>
+  <p class="sub">本机启动 ABA 后，用户在一个已认证的 HC 上批准该设备，Platform 才下发用该 ABA KEM 公钥保护的凭据。原型覆盖终端侧提示、HC 授权页、状态机与信任边界说明。</p>
+  <div class="badges">
+    <span class="badge badge--ver">v0.1</span>
+    <span class="badge badge--partial">Partial impl</span>
+    <span class="badge">使用者：最终用户 + 运维</span>
+    <span class="badge">关联代码：platform/internal/harness/enrollment</span>
+  </div>
+  <p class="note">版本 v0.1 · 最后更新 2026-09-15 · 对齐 <span class="mono">docs/architecture/ARCHITECTURE.md</span> §6.1、<span class="mono">docs/architecture/SECURITY.md</span>、ADR-0005、D-012/D-013/D-014。Platform 侧 Enrollment 域已实现并有契约测试；ABA 完整 Enrollment/Connector 进入 READY 仍未完成。</p>
+
+  <h2>1. 完整流程</h2>
+  <div class="steps">
+    <div class="step"><span class="step__n">1</span><div><div class="step__t">ABA 本地生成密钥</div>
+      <div class="muted">E-SIG 与 E-KEM 分开生成，私钥不出本机。Platform 不参与生成，也不接收私钥。</div></div></div>
+    <div class="step"><span class="step__n">2</span><div><div class="step__t">ABA 主动出站提交注册申请 + 公钥持有证明</div>
+      <div class="muted">ABA 默认无入站端口，连接由 ABA 发起。</div></div></div>
+    <div class="step"><span class="step__n">3</span><div><div class="step__t">Platform 返回设备码</div>
+      <div class="muted">设备码短期有效，服务端只保存哈希。终端显示，用户需要在 HC 上核对。</div></div></div>
+    <div class="step"><span class="step__n">4</span><div><div class="step__t">用户在 HC 待授权列表中核对设备码</div>
+      <div class="muted">列表展示设备名、平台、首次出现时间与指纹摘要。用户必须比对码，不提供「全部批准」。</div></div></div>
+    <div class="step"><span class="step__n">5</span><div><div class="step__t">二次确认（当前 Human Session + 二次认证）</div>
+      <div class="muted">新增 Endpoint 属于敏感操作，按 Assurance 策略要求二次 Human Auth。</div></div></div>
+    <div class="step"><span class="step__n">6</span><div><div class="step__t">Platform 用 ABA KEM 公钥封装并下发凭据</div>
+      <div class="muted">下发内容为该 Endpoint 的 AEC 与绑定凭据。即使设备码泄露，没有 ABA 私钥也不能解封使用。</div></div></div>
+    <div class="step"><span class="step__n">7</span><div><div class="step__t">ABA 校验并安全缓存，进入 READY</div>
+      <div class="muted">信任材料与证书缓存；私钥继续留在本地安全存储。</div></div></div>
+  </div>
+
+  <h2>2. ABA 终端侧</h2>
+  <div class="grid grid--2">
+    <div class="card"><div class="card__title">等待批准</div>
+      <div class="code">$ aba run --config ./aba-lab.toml
+<b>acp-brige-agent</b> v0.1.0  endpoint=<b>aba-lab-01</b>
+E-SIG / E-KEM ............... <span class="g">已生成（本地，不可导出）</span>
+连接 Platform ............... <span class="g">ok</span>  https://platform.example.invalid
+注册申请 .................... <span class="g">已提交</span>
+
+  设备码   <b>K7F2 - 9QDA</b>
+
+  <span class="a">等待在 HC 上确认。</span>  设备码 10 分钟内有效。
+  请核对后批准；本终端不会显示任何私钥
+  或凭据内容。</div>
+    </div>
+    <div class="card"><div class="card__title">批准后 / 被拒绝</div>
+      <div class="code"><span class="a">等待在 HC 上确认…</span>
+
+凭据下发 .................... <span class="g">已收到并解封</span>
+AEC 校验 .................... <span class="g">ok</span>  serial=<b>…7c41</b>
+Trust Manifest .............. <span class="g">已缓存</span>  rev=<b>12</b>
+状态 ........................ <span class="g">READY</span>
+
+<span class="muted">--- 另一种结局 ---</span>
+<span class="r">授权被拒绝或已过期。</span>
+<span class="r">未写入任何凭据；可重新发起注册。</span></div>
+    </div>
+  </div>
+  <p class="note">终端只显示设备码与状态，<strong>不</strong>打印 Token、Ticket、证书完整值、指纹完整值或任何密钥材料。</p>
+
+  <h2>3. HC 授权页</h2>
+  <div class="row row--top" style="gap:20px;align-items:flex-start">
+    <div class="phone">
+      <div class="appbar"><span class="appbar__title">待授权设备</span><span class="appbar__meta">1 个请求</span></div>
+      <div class="pbody">
+        <div class="banner banner--warn"><span class="banner__k">注意</span><span>请先核对下方设备码与本机 ABA 终端显示的一致，再批准。</span></div>
+        <div class="dev">
+          <div class="dev__h"><span>aba-lab-01</span><span class="state"><span class="dot dot--warn"></span>待批准</span></div>
+          <div class="muted">类型 aba · 平台 linux-x86_64 · 首次出现 14:02</div>
+          <div class="muted mono" style="margin-top:4px">签名指纹 SHA-256 9f2c…4a71</div>
+        </div>
+        <div>
+          <div class="muted" style="font-size:12px;margin-bottom:6px">终端显示的设备码</div>
+          <div class="code-big">K7F2 · 9QDA</div>
+        </div>
+        <div class="banner banner--info"><span class="banner__k">有效期</span><span>设备码剩余 09:41。过期后需在 ABA 重新发起。</span></div>
+        <button class="btn btn--primary btn--block">批准此设备</button>
+        <div class="row" style="gap:8px">
+          <button class="btn btn--danger" style="flex:1">拒绝</button>
+          <button class="btn btn--ghost" style="flex:1">稍后</button>
+        </div>
+        <p class="note" style="margin:0">批准后 Platform 会用该设备的 KEM 公钥下发凭据。页面不显示、也不需要你抄写任何密钥。</p>
+      </div>
+    </div>
+    <div style="flex:1;min-width:280px">
+      <div class="banner banner--danger" style="margin-bottom:14px"><span class="banner__k">二次确认</span><span>新增 Endpoint 是敏感操作：弹出重认证，不提供「记住并跳过」。</span></div>
+      <div class="card">
+        <div class="card__title">列表层约束</div>
+        <ul class="muted" style="margin:0;padding-left:20px;font-size:13px">
+          <li>每台设备单独一行，<strong>没有</strong>「全部批准」。</li>
+          <li>设备码必须逐字符核对，不用颜色或图标代替比对。</li>
+          <li>指纹只显示截断值，完整值在设备详情内按需展开。</li>
+          <li>拒绝与过期都不写入凭据，可重新发起。</li>
+          <li>吊销入口与批准入口分离，避免误触。</li>
+        </ul>
+      </div>
+    </div>
+  </div>
+
+  <h2>4. 状态机</h2>
+  <div class="tbl-wrap">
+    <table>
+      <thead><tr><th>状态</th><th>触发</th><th>用户可见</th><th>是否写入凭据</th></tr></thead>
+      <tbody>
+        <tr><td>PENDING</td><td>ABA 提交注册申请</td><td>终端显示设备码；HC 列表出现待批准项</td><td>否</td></tr>
+        <tr><td>APPROVED</td><td>用户核对码并完成二次确认</td><td>终端「凭据下发」；HC 显示已授权</td><td>是（KEM 封装下发）</td></tr>
+        <tr><td>READY</td><td>ABA 解封、校验并缓存</td><td>ABA 可被选择建立 Session</td><td>已缓存于本地安全存储</td></tr>
+        <tr><td>EXPIRED</td><td>设备码超期未批准</td><td>终端与 HC 均提示重新发起</td><td>否</td></tr>
+        <tr><td>DENIED</td><td>用户拒绝</td><td>终端提示被拒绝</td><td>否</td></tr>
+        <tr><td>REVOKED</td><td>用户或管理员吊销 Endpoint</td><td>停止新连接、撤销 Token/Ticket、触发 Rekey</td><td>保留历史，禁止新用</td></tr>
+      </tbody>
+    </table>
+  </div>
+  <p class="note">状态取值来自已接受的架构与安全契约，原型不新增状态。<span class="mono">REVOKED</span> 的具体清理时序与 Token/Ticket 撤销范围仍在实现中。</p>
+
+  <h2>5. 信任边界：Platform 能看到什么</h2>
+  <div class="grid grid--2">
+    <div class="card"><div class="card__title">可见</div>
+      <ul class="muted" style="margin:0;padding-left:20px;font-size:13px">
+        <li>Endpoint ID 与类型（aba / hc-web / …）</li>
+        <li>申请时间与来源</li>
+        <li>公钥指纹</li>
+        <li>证书序列与状态、在线时间</li>
+        <li>批准人与批准时间</li>
+        <li>设备码哈希（不存明文）</li>
+      </ul></div>
+    <div class="card"><div class="card__title">不可见</div>
+      <ul class="muted" style="margin:0;padding-left:20px;font-size:13px">
+        <li>E-SIG / E-KEM 私钥，以及任何端点私钥</li>
+        <li>Session Root Key（SRK）</li>
+        <li>ACP JSON-RPC 明文</li>
+        <li>Runtime 真实 command / args / env</li>
+        <li>Workspace 真实本地路径</li>
+        <li>Token、Ticket 明文</li>
+      </ul></div>
+  </div>
+
+</main>
+</body>
+</html>

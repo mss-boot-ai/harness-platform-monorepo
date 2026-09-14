@@ -1,0 +1,246 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Platform 管理后台五页面 — 原型</title>
+<style>
+*,*::before,*::after{box-sizing:border-box}
+:root{
+  --bg:#f5f6f8;--surface:#fff;--surface-2:#f0f2f4;
+  --ink:#1f2328;--ink-2:#586069;--ink-3:#8b9198;
+  --line:#e1e4e8;--line-2:#c9ced4;
+  --blue:#185fa5;--blue-bg:#e6f1fb;
+  --green:#3b6d11;--green-bg:#eaf3de;
+  --amber:#854f0b;--amber-bg:#faeeda;
+  --red:#a32d2d;--red-bg:#fcebeb;
+  --purple:#534ab7;--purple-bg:#eeedfe;
+  --teal:#0f6e56;--teal-bg:#e1f5ee;
+  --r:12px;--r-sm:8px;
+  --font:-apple-system,BlinkMacSystemFont,"Segoe UI","PingFang SC","Hiragino Sans GB","Microsoft YaHei",sans-serif;
+  --mono:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;
+}
+@media (prefers-color-scheme:dark){
+  :root{
+    --bg:#1a1c1e;--surface:#232629;--surface-2:#2b2f33;
+    --ink:#e8eaed;--ink-2:#a8afb6;--ink-3:#7d858d;
+    --line:#34383c;--line-2:#454a4f;
+    --blue:#85b7eb;--blue-bg:#12293f;
+    --green:#97c459;--green-bg:#1e2a12;
+    --amber:#ef9f27;--amber-bg:#2e2210;
+    --red:#f09595;--red-bg:#331818;
+    --purple:#afa9ec;--purple-bg:#1f1c3d;
+    --teal:#5dcaa5;--teal-bg:#102a23;
+  }
+}
+body{margin:0;background:var(--bg);color:var(--ink);font:14px/1.6 var(--font);-webkit-font-smoothing:antialiased}
+.doc{max-width:1040px;margin:0 auto;padding:32px 24px 72px}
+h1{font-size:22px;font-weight:600;margin:0 0 6px}
+h2{font-size:15px;font-weight:600;margin:36px 0 12px;padding-bottom:8px;border-bottom:1px solid var(--line)}
+h3{font-size:13px;font-weight:600;margin:0 0 8px}
+p{margin:0 0 10px}
+.sub{color:var(--ink-2);margin:0 0 14px;max-width:78ch}
+.muted{color:var(--ink-3)}
+.mono{font-family:var(--mono);font-size:12px}
+.badges{display:flex;flex-wrap:wrap;gap:8px;margin:0 0 6px}
+.badge{display:inline-flex;align-items:center;gap:6px;padding:3px 9px;border-radius:999px;
+  font-size:12px;line-height:1.5;border:1px solid var(--line-2);background:var(--surface);color:var(--ink-2)}
+.badge--design{border-color:var(--purple);background:var(--purple-bg);color:var(--purple)}
+.badge--partial{border-color:var(--amber);background:var(--amber-bg);color:var(--amber)}
+.badge--baseline{border-color:var(--green);background:var(--green-bg);color:var(--green)}
+.badge--ver{border-color:var(--ink-2);background:var(--surface-2);color:var(--ink);font-family:var(--mono)}
+.card{background:var(--surface);border:1px solid var(--line);border-radius:var(--r);padding:16px}
+.row{display:flex;gap:10px;align-items:center;flex-wrap:wrap}
+.grid{display:grid;gap:16px}
+.grid--2{grid-template-columns:repeat(2,minmax(0,1fr))}
+.grid--3{grid-template-columns:repeat(3,minmax(0,1fr))}
+@media (max-width:820px){.grid--2,.grid--3{grid-template-columns:1fr}}
+.kv{display:grid;grid-template-columns:auto 1fr;gap:5px 14px;font-size:13px}
+.kv__k{color:var(--ink-3);white-space:nowrap}
+.btn{display:inline-flex;align-items:center;justify-content:center;gap:6px;padding:7px 14px;
+  font:inherit;font-size:13px;border-radius:var(--r-sm);border:1px solid var(--line-2);
+  background:var(--surface);color:var(--ink);cursor:default;white-space:nowrap}
+.btn--primary{background:var(--blue);border-color:var(--blue);color:#fff}
+.btn--ghost{background:transparent}
+.btn--danger{background:transparent;border-color:var(--red);color:var(--red)}
+.btn--sm{padding:4px 10px;font-size:12px}
+.banner{display:flex;gap:10px;padding:11px 13px;border-radius:var(--r-sm);border:1px solid var(--line-2);
+  background:var(--surface-2);font-size:13px}
+.banner--info{border-color:var(--blue);background:var(--blue-bg);color:var(--blue)}
+.banner--warn{border-color:var(--amber);background:var(--amber-bg);color:var(--amber)}
+.banner--danger{border-color:var(--red);background:var(--red-bg);color:var(--red)}
+.banner--ok{border-color:var(--green);background:var(--green-bg);color:var(--green)}
+.banner__k{font-weight:600;white-space:nowrap}
+.tbl-wrap{border:1px solid var(--line);border-radius:var(--r);overflow:hidden}
+table{width:100%;border-collapse:collapse;font-size:12px;background:var(--surface)}
+th,td{text-align:left;padding:9px 12px;border-bottom:1px solid var(--line);vertical-align:top}
+th{font-weight:600;color:var(--ink-2);background:var(--surface-2);white-space:nowrap}
+td:first-child{white-space:nowrap}
+.desk{border:1px solid var(--line-2);border-radius:var(--r);background:var(--surface);overflow:hidden}
+.desk__bar{display:flex;align-items:center;justify-content:space-between;gap:10px;padding:8px 12px;
+  border-bottom:1px solid var(--line);background:var(--surface-2);font-size:12px;color:var(--ink-3)}
+.desk__body{display:grid;grid-template-columns:200px 1fr}
+@media (max-width:760px){.desk__body{grid-template-columns:1fr}}
+.side{border-right:1px solid var(--line);background:var(--surface-2);padding:10px;font-size:12px}
+.side__item{padding:7px 9px;border-radius:var(--r-sm);color:var(--ink-2);margin-bottom:2px}
+.side__item--on{background:var(--surface);color:var(--ink);font-weight:600;border:1px solid var(--line)}
+.side__cap{padding:8px 9px 4px;color:var(--ink-3);font-size:11px}
+.state{display:inline-flex;align-items:center;gap:6px;font-size:12px}
+.dot{width:7px;height:7px;border-radius:50%;background:var(--ink-3);flex:none}
+.dot--ok{background:var(--green)}.dot--warn{background:var(--amber)}.dot--bad{background:var(--red)}.dot--busy{background:var(--blue)}
+.tabs{display:flex;flex-wrap:wrap;gap:6px}
+.tab{padding:5px 11px;border:1px solid var(--line-2);border-radius:999px;font-size:12px;color:var(--ink-2);background:var(--surface)}
+.tab--on{border-color:var(--blue);background:var(--blue-bg);color:var(--blue);font-weight:600}
+.note{font-size:12px;color:var(--ink-3);border-left:2px solid var(--line-2);padding-left:10px;margin:12px 0}
+.metric{border:1px solid var(--line);border-radius:var(--r-sm);padding:12px;background:var(--surface)}
+.metric__k{font-size:11px;color:var(--ink-3);margin-bottom:4px}
+.metric__v{font-size:22px;font-weight:600;font-family:var(--mono)}
+.page{border:1px solid var(--line);border-radius:var(--r);background:var(--surface);overflow:hidden}
+.page__h{display:flex;align-items:center;justify-content:space-between;gap:8px;padding:11px 13px;
+  border-bottom:1px solid var(--line);background:var(--surface-2)}
+.page__t{font-size:13px;font-weight:600}
+.page__b{padding:12px 13px;font-size:12px}
+.page__b table{border:1px solid var(--line);border-radius:var(--r-sm)}
+.empty{padding:28px 14px;text-align:center;color:var(--ink-3);font-size:13px}
+</style>
+</head>
+<body>
+<main class="doc">
+
+  <h1>Platform 管理后台五页面</h1>
+  <p class="sub">基于 mss-boot-admin v1.3.7 Thin Host 的 Harness 业务后台：Overview、Enrollments、Endpoints、Sessions、Delivery。本原型对应已实现并在浏览器验收过的界面，作为视觉与回归参照，同时给出五态与权限矩阵。</p>
+  <div class="badges">
+    <span class="badge badge--ver">v0.1</span>
+    <span class="badge badge--baseline">Visual baseline</span>
+    <span class="badge">使用者：管理员 + 运维</span>
+    <span class="badge">关联代码：platform/web/src/business/pages</span>
+  </div>
+  <p class="note">版本 v0.1 · 最后更新 2026-09-15 · 实现与验收证据见 <span class="mono">docs/roadmap/verification/2026-09-04-platform-m1.md</span>。本原型不新增字段或路由；页面之间没有第二套导航。</p>
+
+  <h2>1. 导航与页面结构</h2>
+  <div class="desk">
+    <div class="desk__bar"><span>Harness Platform · Admin</span><span class="mono">harness:read harness:operate</span></div>
+    <div class="desk__body">
+      <div class="side">
+        <div class="side__cap">HARNESS</div>
+        <div class="side__item side__item--on">Overview</div>
+        <div class="side__item">Enrollments</div>
+        <div class="side__item">Endpoints</div>
+        <div class="side__item">Sessions</div>
+        <div class="side__item">Delivery</div>
+        <div class="side__cap">FOUNDATION（v1.3.7）</div>
+        <div class="side__item muted">用户 / 角色 / 菜单</div>
+        <div class="side__item muted">审计 / 通知 / 任务</div>
+      </div>
+      <div style="padding:14px">
+        <div class="row" style="margin-bottom:12px">
+          <div class="metric" style="flex:1;min-width:120px"><div class="metric__k">在线 Endpoint</div><div class="metric__v">3</div></div>
+          <div class="metric" style="flex:1;min-width:120px"><div class="metric__k">待批准注册</div><div class="metric__v">1</div></div>
+          <div class="metric" style="flex:1;min-width:120px"><div class="metric__k">活动 Session</div><div class="metric__v">2</div></div>
+          <div class="metric" style="flex:1;min-width:120px"><div class="metric__k">投递积压</div><div class="metric__v">0</div></div>
+        </div>
+        <div class="tbl-wrap">
+          <table>
+            <thead><tr><th>Endpoint</th><th>类型</th><th>状态</th><th>最后可见</th><th>操作</th></tr></thead>
+            <tbody>
+              <tr><td class="mono">aba-lab-01</td><td>aba</td><td><span class="state"><span class="dot dot--ok"></span>在线</span></td><td>2 分钟前</td><td><button class="btn btn--sm btn--ghost">详情</button></td></tr>
+              <tr><td class="mono">aba-lab-02</td><td>aba</td><td><span class="state"><span class="dot dot--warn"></span>离线</span></td><td>6 小时前</td><td><button class="btn btn--sm btn--ghost">详情</button></td></tr>
+              <tr><td class="mono">hc-web-lab</td><td>hc-web</td><td><span class="state"><span class="dot dot--ok"></span>在线</span></td><td>刚刚</td><td><button class="btn btn--danger btn--sm">吊销</button></td></tr>
+            </tbody>
+          </table>
+        </div>
+        <p class="note" style="margin-bottom:0">前端隐藏不授权：无 <span class="mono">harness:revoke</span> 时「吊销」不渲染；但后端权限才是最终权威，直连 API 仍会被拒绝。</p>
+      </div>
+    </div>
+  </div>
+
+  <h2>2. 五个页面的列定义</h2>
+  <div class="grid grid--2">
+    <div class="page"><div class="page__h"><span class="page__t">Overview</span><span class="muted mono">harness:read</span></div>
+      <div class="page__b">
+        <div class="kv">
+          <span class="kv__k">Endpoints</span><span>在线 / 离线 / 待批准 / 已吊销 计数</span>
+          <span class="kv__k">Sessions</span><span>活动 / 空闲 / 已关闭 计数</span>
+          <span class="kv__k">Delivery</span><span>投递积压与重放计数</span>
+          <span class="kv__k">Revision</span><span>Trust Manifest 当前版本与到期</span>
+        </div>
+        <p class="note" style="margin-bottom:0">只展示计数与状态，<strong>不</strong>展示 Prompt、工具参数或会话内容摘要。</p>
+      </div></div>
+
+    <div class="page"><div class="page__h"><span class="page__t">Enrollments</span><span class="muted mono">harness:approve</span></div>
+      <div class="page__b">
+        <table><thead><tr><th>Endpoint</th><th>请求时间</th><th>状态</th><th>操作</th></tr></thead>
+          <tbody>
+            <tr><td class="mono">aba-lab-03</td><td>14:02</td><td><span class="state"><span class="dot dot--warn"></span>待批准</span></td><td class="mono">批准 / 拒绝</td></tr>
+            <tr><td class="mono">aba-lab-02</td><td>09:41</td><td><span class="state"><span class="dot dot--ok"></span>已批准</span></td><td class="mono">—</td></tr>
+          </tbody></table>
+        <p class="note" style="margin-bottom:0">批准动作需要 <span class="mono">harness:approve</span>；写操作带 <span class="mono">Idempotency-Key</span> 并记录脱敏审计。</p>
+      </div></div>
+
+    <div class="page"><div class="page__h"><span class="page__t">Endpoints</span><span class="muted mono">harness:revoke</span></div>
+      <div class="page__b">
+        <table><thead><tr><th>Endpoint</th><th>类型</th><th>证书序列</th><th>状态</th></tr></thead>
+          <tbody>
+            <tr><td class="mono">aba-lab-01</td><td>aba</td><td class="mono">…7c41</td><td><span class="state"><span class="dot dot--ok"></span>有效</span></td></tr>
+            <tr><td class="mono">hc-web-lab</td><td>hc-web</td><td class="mono">…11b0</td><td><span class="state"><span class="dot dot--bad"></span>已吊销</span></td></tr>
+          </tbody></table>
+        <p class="note" style="margin-bottom:0">吊销是独立权限与独立入口，不与批准混在同一按钮组。</p>
+      </div></div>
+
+    <div class="page"><div class="page__h"><span class="page__t">Sessions</span><span class="muted mono">harness:read</span></div>
+      <div class="page__b">
+        <table><thead><tr><th>Session</th><th>ABA / HC</th><th>Key Gen</th><th>状态</th></tr></thead>
+          <tbody>
+            <tr><td class="mono">sess-a41f</td><td class="mono">aba-lab-01 / hc-web-lab</td><td>3</td><td><span class="state"><span class="dot dot--busy"></span>活动</span></td></tr>
+            <tr><td class="mono">sess-77c2</td><td class="mono">aba-lab-01 / hc-web-lab</td><td>1</td><td><span class="state"><span class="dot"></span>空闲</span></td></tr>
+          </tbody></table>
+        <p class="note" style="margin-bottom:0">Platform 只持有路由关系与 Generation，<strong>不</strong>持有 SRK，也不显示会话标题以外的内容。</p>
+      </div></div>
+
+    <div class="page" style="grid-column:1/-1"><div class="page__h"><span class="page__t">Delivery</span><span class="muted mono">harness:operate</span></div>
+      <div class="page__b">
+        <table><thead><tr><th>Channel</th><th>方向</th><th>已持久化</th><th>已 ACK</th><th>重放 / 积压</th><th>操作</th></tr></thead>
+          <tbody>
+            <tr><td class="mono">ch-01</td><td>HC → ABA</td><td>128</td><td>128</td><td><span class="state"><span class="dot dot--ok"></span>0</span></td><td class="mono">—</td></tr>
+            <tr><td class="mono">ch-02</td><td>ABA → HC</td><td>341</td><td>339</td><td><span class="state"><span class="dot dot--warn"></span>积压 2</span></td><td class="mono">暂停 / 恢复</td></tr>
+          </tbody></table>
+        <p class="note" style="margin-bottom:0">Payload 是密文。<strong>ACK 表示安全接收，不等于本地 Agent 已执行</strong>；本页不提供「重试执行」，只做投递层操作。</p>
+      </div></div>
+  </div>
+
+  <h2>3. 五态</h2>
+  <div class="tabs" style="margin-bottom:12px">
+    <span class="tab tab--on">Ready</span><span class="tab">Empty</span><span class="tab">Loading</span><span class="tab">Error</span><span class="tab">403 Forbidden</span>
+  </div>
+  <div class="grid grid--2">
+    <div class="card"><h3>Ready</h3>
+      <p class="muted" style="margin:0">正常渲染数据表，页脚展示总数与分页；写操作按钮按权限出现。</p></div>
+    <div class="card"><h3>Empty</h3>
+      <div class="empty">暂无 Endpoint。<br>先在本地启动 ABA 并完成设备授权。</div></div>
+    <div class="card"><h3>Loading</h3>
+      <p class="muted" style="margin:0">骨架占位，表格列头先出现，避免页面跳动。不显示不确定的计数为 0。</p></div>
+    <div class="card"><h3>Error</h3>
+      <div class="banner banner--danger"><span class="banner__k">加载失败</span><span>无法读取 Endpoint 列表。请重试；若持续失败请联系管理员并附上请求 ID。</span></div>
+      <p class="note" style="margin-bottom:0">只展示稳定错误码与下一步动作，不展示堆栈、SQL 或内部路径。</p></div>
+    <div class="card" style="grid-column:1/-1"><h3>403 Forbidden</h3>
+      <div class="banner banner--warn"><span class="banner__k">无权限</span><span>当前账号缺少 <span class="mono">harness:operate</span>，无法执行该操作。请联系管理员分配角色。</span></div>
+      <p class="note" style="margin-bottom:0">403 是正常兜底：即使前端渲染了控件，后端也必须拒绝。</p></div>
+  </div>
+
+  <h2>4. 权限矩阵</h2>
+  <div class="tbl-wrap">
+    <table>
+      <thead><tr><th>权限</th><th>允许</th><th>页面落点</th></tr></thead>
+      <tbody>
+        <tr><td class="mono">harness:read</td><td>只读查看五类列表与详情</td><td class="muted">Overview、Sessions</td></tr>
+        <tr><td class="mono">harness:operate</td><td>日常操作：审批外的投递暂停/恢复等</td><td class="muted">Delivery</td></tr>
+        <tr><td class="mono">harness:approve</td><td>批准 Enrollment 等敏感变更</td><td class="muted">Enrollments</td></tr>
+        <tr><td class="mono">harness:revoke</td><td>吊销 Endpoint / Credential</td><td class="muted">Endpoints</td></tr>
+      </tbody>
+    </table>
+  </div>
+  <p class="note">权限通过 Migration、路由绑定和拒绝测试落地。原型只表达绑定关系，新增权限必须同步更新正式文档与测试。</p>
+
+</main>
+</body>
+</html>

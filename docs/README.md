@@ -31,6 +31,16 @@
 
 上述为待评审/待实现的设计，不表示设备协议、MCP、审批或真机已验证；不更改旧AWP的Accepted安全契约。
 
+### 2026-09-15 原型图与说明
+
+界面原型与配套说明独立维护在 [`prototypes/`](prototypes/README.md)：
+
+- [`prototypes/README.md`](prototypes/README.md)：目录入口、状态与版本规则、原型清单。
+- [`prototypes/CONVENTIONS.md`](prototypes/CONVENTIONS.md)：制作规范、版本编号与禁止事项。
+- 首批原型：`hc-remote-console/`（HC 远程会话主界面）、`aba-enrollment/`（设备授权）、`platform-admin/`（管理后台五页面）。
+
+原型是低保真表达手段，**不是验收证据**，也不修改任何已接受契约；「已实现/已验证」结论仍只能来自代码、提交、CI 与验证报告。
+
 ## 2. 文档权威顺序
 
 当前 Remote 工作入口：[产品/技术方案](remote/README.md)、[交付矩阵](remote/DELIVERY.md)、[HC C3 验证报告](roadmap/verification/2026-09-14-hc-remote-conversations.md)。报告明确区分同一浏览器安装的恢复与未完成的跨设备、Host 恢复和生产验收。

@@ -1,0 +1,267 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>HC 远程会话主界面 — 原型</title>
+<style>
+*,*::before,*::after{box-sizing:border-box}
+:root{
+  --bg:#f5f6f8;--surface:#fff;--surface-2:#f0f2f4;
+  --ink:#1f2328;--ink-2:#586069;--ink-3:#8b9198;
+  --line:#e1e4e8;--line-2:#c9ced4;
+  --blue:#185fa5;--blue-bg:#e6f1fb;
+  --green:#3b6d11;--green-bg:#eaf3de;
+  --amber:#854f0b;--amber-bg:#faeeda;
+  --red:#a32d2d;--red-bg:#fcebeb;
+  --purple:#534ab7;--purple-bg:#eeedfe;
+  --teal:#0f6e56;--teal-bg:#e1f5ee;
+  --r:12px;--r-sm:8px;
+  --font:-apple-system,BlinkMacSystemFont,"Segoe UI","PingFang SC","Hiragino Sans GB","Microsoft YaHei",sans-serif;
+  --mono:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;
+}
+@media (prefers-color-scheme:dark){
+  :root{
+    --bg:#1a1c1e;--surface:#232629;--surface-2:#2b2f33;
+    --ink:#e8eaed;--ink-2:#a8afb6;--ink-3:#7d858d;
+    --line:#34383c;--line-2:#454a4f;
+    --blue:#85b7eb;--blue-bg:#12293f;
+    --green:#97c459;--green-bg:#1e2a12;
+    --amber:#ef9f27;--amber-bg:#2e2210;
+    --red:#f09595;--red-bg:#331818;
+    --purple:#afa9ec;--purple-bg:#1f1c3d;
+    --teal:#5dcaa5;--teal-bg:#102a23;
+  }
+}
+body{margin:0;background:var(--bg);color:var(--ink);font:14px/1.6 var(--font);-webkit-font-smoothing:antialiased}
+.doc{max-width:1040px;margin:0 auto;padding:32px 24px 72px}
+h1{font-size:22px;font-weight:600;margin:0 0 6px}
+h2{font-size:15px;font-weight:600;margin:36px 0 12px;padding-bottom:8px;border-bottom:1px solid var(--line)}
+p{margin:0 0 10px}
+.sub{color:var(--ink-2);margin:0 0 14px;max-width:78ch}
+.muted{color:var(--ink-3)}
+.mono{font-family:var(--mono);font-size:12px}
+.badges{display:flex;flex-wrap:wrap;gap:8px;margin:0 0 6px}
+.badge{display:inline-flex;align-items:center;gap:6px;padding:3px 9px;border-radius:999px;
+  font-size:12px;line-height:1.5;border:1px solid var(--line-2);background:var(--surface);color:var(--ink-2)}
+.badge--design{border-color:var(--purple);background:var(--purple-bg);color:var(--purple)}
+.badge--partial{border-color:var(--amber);background:var(--amber-bg);color:var(--amber)}
+.badge--baseline{border-color:var(--green);background:var(--green-bg);color:var(--green)}
+.badge--ver{border-color:var(--ink-2);background:var(--surface-2);color:var(--ink);font-family:var(--mono)}
+.card{background:var(--surface);border:1px solid var(--line);border-radius:var(--r);padding:16px}
+.card__title{font-size:13px;font-weight:600;margin:0 0 10px}
+.row{display:flex;gap:10px;align-items:center;flex-wrap:wrap}
+.row--between{justify-content:space-between}
+.row--top{align-items:flex-start}
+.grid{display:grid;gap:16px}
+.grid--2{grid-template-columns:repeat(2,minmax(0,1fr))}
+.grid--3{grid-template-columns:repeat(3,minmax(0,1fr))}
+@media (max-width:760px){.grid--2,.grid--3{grid-template-columns:1fr}}
+.kv{display:grid;grid-template-columns:auto 1fr;gap:4px 14px;font-size:13px}
+.kv__k{color:var(--ink-3);white-space:nowrap}
+.kv__v{color:var(--ink)}
+.btn{display:inline-flex;align-items:center;justify-content:center;gap:6px;padding:7px 14px;
+  font:inherit;font-size:13px;border-radius:var(--r-sm);border:1px solid var(--line-2);
+  background:var(--surface);color:var(--ink);cursor:default;white-space:nowrap}
+.btn--primary{background:var(--blue);border-color:var(--blue);color:#fff}
+.btn--ghost{background:transparent}
+.btn--danger{background:transparent;border-color:var(--red);color:var(--red)}
+.btn--sm{padding:4px 10px;font-size:12px}
+.banner{display:flex;gap:10px;padding:11px 13px;border-radius:var(--r-sm);border:1px solid var(--line-2);
+  background:var(--surface-2);font-size:13px}
+.banner--info{border-color:var(--blue);background:var(--blue-bg);color:var(--blue)}
+.banner--warn{border-color:var(--amber);background:var(--amber-bg);color:var(--amber)}
+.banner--danger{border-color:var(--red);background:var(--red-bg);color:var(--red)}
+.banner__k{font-weight:600;white-space:nowrap}
+.phone{width:390px;max-width:100%;border:1px solid var(--line-2);border-radius:22px;background:var(--surface);
+  overflow:hidden;display:flex;flex-direction:column}
+.appbar{display:flex;align-items:center;justify-content:space-between;gap:10px;padding:10px 14px;
+  border-bottom:1px solid var(--line);background:var(--surface)}
+.appbar__title{font-size:14px;font-weight:600}
+.appbar__meta{font-size:12px;color:var(--ink-3)}
+.pbody{display:flex;flex-direction:column;background:var(--bg)}
+.chat{flex:1;padding:14px;display:flex;flex-direction:column;gap:12px}
+.msg{display:flex;flex-direction:column;gap:4px;max-width:90%}
+.msg--user{align-self:flex-end;align-items:flex-end}
+.msg--agent{align-self:flex-start}
+.msg__who{font-size:11px;color:var(--ink-3)}
+.bubble{padding:9px 12px;border-radius:var(--r);border:1px solid var(--line);background:var(--surface);font-size:13px}
+.msg--user .bubble{background:var(--blue-bg);border-color:var(--blue);color:var(--blue)}
+.item{border:1px solid var(--line);border-radius:var(--r-sm);background:var(--surface);padding:10px 12px;font-size:12px}
+.item__head{display:flex;align-items:center;justify-content:space-between;gap:8px;margin-bottom:6px}
+.item__name{font-weight:600;font-family:var(--mono);font-size:12px}
+.item--approval{border-color:var(--amber);background:var(--amber-bg);color:var(--amber)}
+.item--usage{border-style:dashed;color:var(--ink-2)}
+.state{display:inline-flex;align-items:center;gap:6px;font-size:12px}
+.dot{width:7px;height:7px;border-radius:50%;background:var(--ink-3);flex:none}
+.dot--ok{background:var(--green)}
+.dot--warn{background:var(--amber)}
+.dot--bad{background:var(--red)}
+.dot--busy{background:var(--blue)}
+.composer{border-top:1px solid var(--line);background:var(--surface);padding:10px 12px 12px}
+.composer__box{border:1px solid var(--line-2);border-radius:var(--r);padding:10px 12px;min-height:52px;
+  font-size:13px;color:var(--ink-2);background:var(--surface)}
+.composer__hint{display:flex;justify-content:space-between;gap:10px;margin-top:8px;font-size:11px;color:var(--ink-3)}
+.desk{border:1px solid var(--line-2);border-radius:var(--r);background:var(--surface);overflow:hidden}
+.desk__bar{display:flex;align-items:center;justify-content:space-between;gap:10px;padding:8px 12px;
+  border-bottom:1px solid var(--line);background:var(--surface-2);font-size:12px;color:var(--ink-3)}
+.desk__body{display:grid;grid-template-columns:236px 1fr}
+@media (max-width:760px){.desk__body{grid-template-columns:1fr}}
+.side{border-right:1px solid var(--line);background:var(--surface-2);padding:10px;font-size:12px}
+.side__head{display:flex;justify-content:space-between;align-items:center;margin-bottom:8px;color:var(--ink-2)}
+.side__item{padding:7px 9px;border-radius:var(--r-sm);color:var(--ink-2);margin-bottom:2px}
+.side__item--on{background:var(--surface);color:var(--ink);font-weight:600;border:1px solid var(--line)}
+.side__item small{display:block;color:var(--ink-3);font-weight:400;font-size:11px}
+.legend{display:flex;flex-wrap:wrap;gap:14px;font-size:12px;color:var(--ink-2)}
+.note{font-size:12px;color:var(--ink-3);border-left:2px solid var(--line-2);padding-left:10px;margin:12px 0}
+.tbl-wrap{border:1px solid var(--line);border-radius:var(--r);overflow:hidden}
+table{width:100%;border-collapse:collapse;font-size:12px;background:var(--surface)}
+th,td{text-align:left;padding:9px 12px;border-bottom:1px solid var(--line);vertical-align:top}
+th{font-weight:600;color:var(--ink-2);background:var(--surface-2);white-space:nowrap}
+td:first-child{white-space:nowrap;font-weight:600}
+</style>
+</head>
+<body>
+<main class="doc">
+
+  <h1>HC 远程会话主界面</h1>
+  <p class="sub">用户在手机或桌面浏览器中查看会话、发送输入、处理权限请求并观察执行与连接状态。本原型为低保真线框，用于确认信息层级与状态表达，不是像素稿。</p>
+  <div class="badges">
+    <span class="badge badge--ver">v0.1</span>
+    <span class="badge badge--partial">Partial impl</span>
+    <span class="badge">使用者：最终用户</span>
+    <span class="badge">关联代码：hc/web/src/{chat,remote}</span>
+  </div>
+  <p class="note">版本 v0.1 · 最后更新 2026-09-15 · 版本号只标识设计稿迭代，不代表产品版本或实现进度。</p>
+  <p class="note">对齐 <span class="mono">docs/remote/README.md</span> §9、<span class="mono">docs/product/HC-CHAT-EXPERIENCE.md</span>、<span class="mono">docs/architecture/HC.md</span> §13/§16/§19/§21。持久多会话与刷新恢复已在本机端点范围验证；跨设备授权、真实模型验收未完成。</p>
+
+  <h2>1. 桌面布局</h2>
+  <div class="desk">
+    <div class="desk__bar">
+      <span>Harness Remote · hc-web-lab</span>
+      <span class="row" style="gap:8px">
+        <span class="state"><span class="dot dot--ok"></span>连接正常</span>
+        <span class="state"><span class="dot dot--busy"></span>执行中</span>
+        <button class="btn btn--sm btn--ghost">设置</button>
+      </span>
+    </div>
+    <div class="desk__body">
+      <div class="side">
+        <div class="side__head"><span>会话</span><button class="btn btn--sm btn--ghost">新建</button></div>
+        <div class="side__item side__item--on">修复构建错误<small>aba-lab-01 · 执行中</small></div>
+        <div class="side__item">整理迁移脚本<small>aba-lab-01 · 空闲</small></div>
+        <div class="side__item">排查日志噪声<small>aba-lab-02 · 已归档</small></div>
+      </div>
+      <div class="pbody">
+        <div class="chat">
+          <div class="banner banner--info"><span class="banner__k">Opaque</span><span>会话内容在此 HC 与 ABA 之间加密。Platform 可见连接、时间、大小和路由元数据。</span></div>
+
+          <div class="msg msg--agent"><span class="msg__who">Agent</span>
+            <div class="bubble">已读取工作区结构，发现 3 个未通过的类型检查。</div></div>
+
+          <div class="item"><div class="item__head"><span class="item__name">read_file</span><span class="muted">完成 · 0.4s</span></div>
+            <div class="muted mono">workspace: demo-project · 4 个文件</div></div>
+
+          <div class="msg msg--user"><span class="msg__who">我</span>
+            <div class="bubble">按最小改动修掉这三个。</div></div>
+
+          <div class="item item--approval">
+            <div class="item__head"><span class="item__name">apply_patch</span><span>风险：中</span></div>
+            <div>目标 <span class="mono">src/main.rs</span>（+12 −3）· 来源 <span class="mono">aba-lab-01</span> · 允许范围：仅本次</div>
+            <div class="row" style="margin-top:10px">
+              <button class="btn btn--sm">拒绝</button>
+              <button class="btn btn--primary btn--sm">仅本次允许</button>
+              <button class="btn btn--sm">本 Session 允许</button>
+              <span class="muted" style="font-size:11px">等待你的决定 · 无「永久允许」选项</span>
+            </div>
+          </div>
+
+          <div class="item item--usage muted">usage · 本轮未报告 token 统计，显示为 unknown，不按字符数推算</div>
+        </div>
+        <div class="composer">
+          <div class="composer__box">已接收，等待执行端确认…</div>
+          <div class="composer__hint"><span>Enter 发送 · Shift+Enter 换行</span><span>发送未确认 · 不会自动重发</span></div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <h2>2. 移动布局</h2>
+  <div class="row row--top" style="gap:20px;align-items:flex-start">
+    <div class="phone">
+      <div class="appbar"><span class="appbar__title">修复构建错误</span><span class="appbar__meta">aba-lab-01</span></div>
+      <div class="pbody">
+        <div class="chat">
+          <div class="banner banner--danger"><span class="banner__k">结果不确定</span><span>上一条请求已在执行端开始，但结果无法确认。请检查工作区后手动决定是否继续。</span></div>
+          <div class="item item--approval">
+            <div class="item__head"><span class="item__name">run_command</span><span>风险：高</span></div>
+            <div>请求来源 <span class="mono">aba-lab-01</span> · Workspace <span class="mono">demo-project</span></div>
+            <div class="row" style="margin-top:8px"><button class="btn btn--sm">拒绝</button><button class="btn btn--primary btn--sm">仅本次允许</button></div>
+          </div>
+          <div class="msg msg--agent"><span class="msg__who">Agent</span><div class="bubble">等待权限确认后继续。</div></div>
+        </div>
+        <div class="composer">
+          <div class="composer__box">草稿：再检查一下依赖版本</div>
+          <div class="composer__hint"><span>尚未发送 · 草稿按会话隔离</span><span>取消待确认</span></div>
+        </div>
+      </div>
+    </div>
+    <div style="flex:1;min-width:280px">
+      <div class="card" style="margin-bottom:14px">
+        <div class="card__title">抽屉里的设置（不占首页）</div>
+        <div class="kv">
+          <span class="kv__k">端点类型</span><span class="kv__v">hc-web</span>
+          <span class="kv__k">Assurance</span><span class="kv__v">web-software</span>
+          <span class="kv__k">签名指纹</span><span class="kv__v mono">SHA-256 9f2c…4a71</span>
+          <span class="kv__k">Key Generation</span><span class="kv__v">gen 3（ACTIVE）</span>
+          <span class="kv__k">模式</span><span class="kv__v">Opaque</span>
+        </div>
+        <div class="row" style="margin-top:12px">
+          <button class="btn btn--sm">诊断</button>
+          <button class="btn btn--sm">端点管理</button>
+          <button class="btn btn--sm btn--danger">结束当前会话</button>
+        </div>
+        <p class="note" style="margin-bottom:0">「结束当前会话」映射现有 CloseTunnel 路径，<strong>不</strong>冒充尚未实现的细粒度停止生成，也不宣称撤销已发生的操作。</p>
+      </div>
+      <div class="banner banner--warn"><span class="banner__k">Backpressure</span><span>接收端积压，暂缓发送。未确认内容不会静默丢弃。</span></div>
+    </div>
+  </div>
+
+  <h2>3. 输入框状态矩阵</h2>
+  <p class="sub">输入区必须区分「用户是否已明确发送」「执行端是否已确认」「本轮是否可继续」，不得用一个「发送中」笼统表达。</p>
+  <div class="grid grid--2">
+    <div class="card"><div class="card__title">未发送草稿</div>
+      <div class="composer__box">再检查一下依赖版本</div>
+      <div class="composer__hint"><span>Enter 发送</span><span>尚未发送 · 刷新后按会话恢复</span></div></div>
+    <div class="card"><div class="card__title">发送未确认</div>
+      <div class="composer__box muted">已提交，等待执行端确认</div>
+      <div class="composer__hint"><span>重复点击被禁用</span><span>网络恢复不自动重发</span></div></div>
+    <div class="card"><div class="card__title">执行中（可取消）</div>
+      <div class="composer__box muted">本轮执行中，可请求取消</div>
+      <div class="composer__hint"><span>取消只发送一次</span><span>取消不等于回滚已发生操作</span></div></div>
+    <div class="card"><div class="card__title">取消待确认</div>
+      <div class="composer__box muted">取消请求已发出，等待执行端终态</div>
+      <div class="composer__hint"><span>无终态前不发新轮</span><span>—</span></div></div>
+    <div class="card"><div class="card__title">可继续</div>
+      <div class="composer__box">继续下一轮…</div>
+      <div class="composer__hint"><span>Enter 发送</span><span>上一轮已终止</span></div></div>
+    <div class="card"><div class="card__title">连接断开</div>
+      <div class="composer__box">草稿保留，连接恢复后再发送</div>
+      <div class="composer__hint"><span>Session 不卸载</span><span>只走 Resume，不自动重发</span></div></div>
+  </div>
+
+  <h2>4. 执行状态与连接状态分开展示</h2>
+  <div class="tbl-wrap">
+    <table>
+      <thead><tr><th>维度</th><th>取值</th><th>展示位置</th></tr></thead>
+      <tbody>
+        <tr><td>连接状态</td><td><span class="state"><span class="dot dot--ok"></span>正常</span> · <span class="state"><span class="dot dot--busy"></span>重连中</span> · <span class="state"><span class="dot dot--warn"></span>积压</span> · <span class="state"><span class="dot dot--bad"></span>已吊销</span></td><td class="muted">顶部状态栏</td></tr>
+        <tr><td>执行状态</td><td>空闲 · 执行中 · 等待审批 · 取消待确认 · <strong>结果不确定</strong> · 已失败</td><td class="muted">会话内条目与输入区</td></tr>
+      </tbody>
+    </table>
+  </div>
+  <p class="note">两者组合必须分别可见：例如「连接重连中 + 上一轮执行中」。不能用一个绿灯掩盖执行端的 <span class="mono">UNCERTAIN</span>。</p>
+
+</main>
+</body>
+</html>

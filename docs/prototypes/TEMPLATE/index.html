@@ -1,0 +1,245 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>原型模板与样式源 — Harness Platform</title>
+<!--
+  这是 docs/prototypes/ 的规范样式源与骨架。
+  新增原型：复制本文件 -> 改标题与内容 -> 按 CONVENTIONS.md 补 README.md。
+  约束：自包含单文件，样式内联，禁止外部 CDN / 脚本 / 字体 / 图片。
+-->
+<style>
+*,*::before,*::after{box-sizing:border-box}
+:root{
+  --bg:#f5f6f8;--surface:#fff;--surface-2:#f0f2f4;
+  --ink:#1f2328;--ink-2:#586069;--ink-3:#8b9198;
+  --line:#e1e4e8;--line-2:#c9ced4;
+  --blue:#185fa5;--blue-bg:#e6f1fb;
+  --green:#3b6d11;--green-bg:#eaf3de;
+  --amber:#854f0b;--amber-bg:#faeeda;
+  --red:#a32d2d;--red-bg:#fcebeb;
+  --purple:#534ab7;--purple-bg:#eeedfe;
+  --teal:#0f6e56;--teal-bg:#e1f5ee;
+  --r:12px;--r-sm:8px;
+  --font:-apple-system,BlinkMacSystemFont,"Segoe UI","PingFang SC","Hiragino Sans GB","Microsoft YaHei",sans-serif;
+  --mono:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;
+}
+@media (prefers-color-scheme:dark){
+  :root{
+    --bg:#1a1c1e;--surface:#232629;--surface-2:#2b2f33;
+    --ink:#e8eaed;--ink-2:#a8afb6;--ink-3:#7d858d;
+    --line:#34383c;--line-2:#454a4f;
+    --blue:#85b7eb;--blue-bg:#12293f;
+    --green:#97c459;--green-bg:#1e2a12;
+    --amber:#ef9f27;--amber-bg:#2e2210;
+    --red:#f09595;--red-bg:#331818;
+    --purple:#afa9ec;--purple-bg:#1f1c3d;
+    --teal:#5dcaa5;--teal-bg:#102a23;
+  }
+}
+body{margin:0;background:var(--bg);color:var(--ink);font:14px/1.6 var(--font);-webkit-font-smoothing:antialiased}
+.doc{max-width:1040px;margin:0 auto;padding:32px 24px 72px}
+h1{font-size:22px;font-weight:600;margin:0 0 6px}
+h2{font-size:15px;font-weight:600;margin:36px 0 12px;padding-bottom:8px;border-bottom:1px solid var(--line)}
+h3{font-size:13px;font-weight:600;margin:20px 0 8px;color:var(--ink-2)}
+p{margin:0 0 10px}
+.sub{color:var(--ink-2);margin:0 0 14px;max-width:78ch}
+.muted{color:var(--ink-3)}
+.mono{font-family:var(--mono);font-size:12px}
+.badges{display:flex;flex-wrap:wrap;gap:8px;margin:0 0 6px}
+.badge{display:inline-flex;align-items:center;gap:6px;padding:3px 9px;border-radius:999px;
+  font-size:12px;line-height:1.5;border:1px solid var(--line-2);background:var(--surface);color:var(--ink-2)}
+.badge--design{border-color:var(--purple);background:var(--purple-bg);color:var(--purple)}
+.badge--partial{border-color:var(--amber);background:var(--amber-bg);color:var(--amber)}
+.badge--baseline{border-color:var(--green);background:var(--green-bg);color:var(--green)}
+.badge--ver{border-color:var(--ink-2);background:var(--surface-2);color:var(--ink);font-family:var(--mono)}
+.card{background:var(--surface);border:1px solid var(--line);border-radius:var(--r);padding:16px}
+.card__title{font-size:13px;font-weight:600;margin:0 0 10px}
+.row{display:flex;gap:10px;align-items:center;flex-wrap:wrap}
+.row--between{justify-content:space-between}
+.row--top{align-items:flex-start}
+.grid{display:grid;gap:16px}
+.grid--2{grid-template-columns:repeat(2,minmax(0,1fr))}
+.grid--3{grid-template-columns:repeat(3,minmax(0,1fr))}
+@media (max-width:760px){.grid--2,.grid--3{grid-template-columns:1fr}}
+.kv{display:grid;grid-template-columns:auto 1fr;gap:4px 14px;font-size:13px}
+.kv__k{color:var(--ink-3);white-space:nowrap}
+.kv__v{color:var(--ink)}
+.btn{display:inline-flex;align-items:center;justify-content:center;gap:6px;padding:7px 14px;
+  font:inherit;font-size:13px;border-radius:var(--r-sm);border:1px solid var(--line-2);
+  background:var(--surface);color:var(--ink);cursor:default}
+.btn--primary{background:var(--blue);border-color:var(--blue);color:#fff}
+.btn--ghost{background:transparent}
+.btn--danger{background:transparent;border-color:var(--red);color:var(--red)}
+.btn--sm{padding:4px 10px;font-size:12px}
+.btn[disabled]{opacity:.45}
+.banner{display:flex;gap:10px;padding:11px 13px;border-radius:var(--r-sm);border:1px solid var(--line-2);
+  background:var(--surface-2);font-size:13px}
+.banner--info{border-color:var(--blue);background:var(--blue-bg);color:var(--blue)}
+.banner--warn{border-color:var(--amber);background:var(--amber-bg);color:var(--amber)}
+.banner--danger{border-color:var(--red);background:var(--red-bg);color:var(--red)}
+.banner__k{font-weight:600;white-space:nowrap}
+.phone{width:390px;max-width:100%;border:1px solid var(--line-2);border-radius:22px;background:var(--surface);
+  overflow:hidden;display:flex;flex-direction:column}
+.phone--sm{width:320px}
+.appbar{display:flex;align-items:center;justify-content:space-between;gap:10px;padding:10px 14px;
+  border-bottom:1px solid var(--line);background:var(--surface)}
+.appbar__title{font-size:14px;font-weight:600}
+.appbar__meta{font-size:12px;color:var(--ink-3)}
+.body{flex:1;overflow:hidden;display:flex;flex-direction:column;background:var(--bg)}
+.chat{flex:1;padding:14px;display:flex;flex-direction:column;gap:12px;overflow:hidden}
+.msg{display:flex;flex-direction:column;gap:4px;max-width:88%}
+.msg--user{align-self:flex-end;align-items:flex-end}
+.msg--agent{align-self:flex-start}
+.msg__who{font-size:11px;color:var(--ink-3)}
+.bubble{padding:9px 12px;border-radius:var(--r);border:1px solid var(--line);background:var(--surface);font-size:13px}
+.msg--user .bubble{background:var(--blue-bg);border-color:var(--blue);color:var(--blue)}
+.item{border:1px solid var(--line);border-radius:var(--r-sm);background:var(--surface);padding:10px 12px;font-size:12px}
+.item__head{display:flex;align-items:center;justify-content:space-between;gap:8px;margin-bottom:6px}
+.item__name{font-weight:600;font-family:var(--mono);font-size:12px}
+.item--tool{border-color:var(--line-2)}
+.item--approval{border-color:var(--amber);background:var(--amber-bg);color:var(--amber)}
+.item--usage{border-style:dashed;color:var(--ink-2)}
+.item--agent-text{border:none;background:transparent;padding:0}
+.state{display:inline-flex;align-items:center;gap:6px;font-size:12px}
+.dot{width:7px;height:7px;border-radius:50%;background:var(--ink-3);flex:none}
+.dot--ok{background:var(--green)}
+.dot--warn{background:var(--amber)}
+.dot--bad{background:var(--red)}
+.dot--busy{background:var(--blue)}
+.composer{border-top:1px solid var(--line);background:var(--surface);padding:10px 12px 12px}
+.composer__box{border:1px solid var(--line-2);border-radius:var(--r);padding:10px 12px;min-height:56px;
+  font-size:13px;color:var(--ink-2);background:var(--surface)}
+.composer__hint{display:flex;justify-content:space-between;gap:10px;margin-top:8px;font-size:11px;color:var(--ink-3)}
+.desk{border:1px solid var(--line-2);border-radius:var(--r);background:var(--surface);overflow:hidden}
+.desk__bar{display:flex;align-items:center;gap:8px;padding:8px 12px;border-bottom:1px solid var(--line);
+  background:var(--surface-2);font-size:12px;color:var(--ink-3)}
+.desk__body{display:grid;grid-template-columns:220px 1fr}
+@media (max-width:760px){.desk__body{grid-template-columns:1fr}}
+.side{border-right:1px solid var(--line);background:var(--surface-2);padding:10px;font-size:12px}
+.side__item{padding:7px 9px;border-radius:var(--r-sm);color:var(--ink-2);margin-bottom:2px}
+.side__item--on{background:var(--surface);color:var(--ink);font-weight:600;border:1px solid var(--line)}
+table{width:100%;border-collapse:collapse;font-size:12px;background:var(--surface)}
+th,td{text-align:left;padding:9px 12px;border-bottom:1px solid var(--line)}
+th{font-weight:600;color:var(--ink-2);background:var(--surface-2);white-space:nowrap}
+td.mono{font-family:var(--mono)}
+.tbl-wrap{border:1px solid var(--line);border-radius:var(--r);overflow:hidden}
+.empty{padding:36px 16px;text-align:center;color:var(--ink-3);font-size:13px}
+.legend{display:flex;flex-wrap:wrap;gap:14px;font-size:12px;color:var(--ink-2)}
+.note{font-size:12px;color:var(--ink-3);border-left:2px solid var(--line-2);padding-left:10px;margin:12px 0}
+</style>
+</head>
+<body>
+<main class="doc">
+
+  <header class="proto-head">
+    <h1>原型模板与样式源</h1>
+    <p class="sub">这是 <span class="mono">docs/prototypes/</span> 的规范样式源。新增原型请复制本文件，保留下方样式块，只替换内容与标题。样式类不重复定义第二套。</p>
+    <div class="badges">
+      <span class="badge badge--ver">v0.1</span>
+      <span class="badge badge--design">Design only</span>
+      <span class="badge">复制用模板</span>
+      <span class="badge">自包含单文件</span>
+    </div>
+  </header>
+
+  <h2>1. 版本与状态标签</h2>
+  <div class="row">
+    <span class="badge badge--ver">v0.1</span>
+    <span class="badge badge--design">Design only</span>
+    <span class="badge badge--partial">Partial impl</span>
+    <span class="badge badge--baseline">Visual baseline</span>
+    <span class="badge">Superseded</span>
+  </div>
+  <p class="note">版本与状态各出现一次，且必须与同目录 README 头部、总清单表三处一致。版本号首版固定 <span class="mono">v0.1</span>，只标识设计稿迭代，<strong>不代表产品版本或实现进度</strong>。颜色不作为唯一语义：每个标签都带文字。</p>
+
+  <h2>2. 卡片、键值与按钮</h2>
+  <div class="grid grid--2">
+    <div class="card">
+      <div class="card__title">Endpoint 摘要</div>
+      <div class="kv">
+        <span class="kv__k">Endpoint</span><span class="kv__v mono">aba-lab-01</span>
+        <span class="kv__k">类型</span><span class="kv__v">aba</span>
+        <span class="kv__k">状态</span><span class="kv__v"><span class="state"><span class="dot dot--ok"></span>在线</span></span>
+        <span class="kv__k">Assurance</span><span class="kv__v">web-software</span>
+      </div>
+      <div class="row" style="margin-top:14px">
+        <button class="btn btn--primary btn--sm">批准</button>
+        <button class="btn btn--sm">拒绝</button>
+        <button class="btn btn--ghost btn--sm">查看审计</button>
+        <button class="btn btn--danger btn--sm">吊销</button>
+      </div>
+    </div>
+    <div class="card">
+      <div class="card__title">提示条</div>
+      <div class="banner banner--info" style="margin-bottom:8px"><span class="banner__k">Opaque</span><span>会话内容在此 HC 与 ABA 之间加密。</span></div>
+      <div class="banner banner--warn" style="margin-bottom:8px"><span class="banner__k">等待 Key Package</span><span>ABA 离线，Session 暂不可发送。</span></div>
+      <div class="banner banner--danger"><span class="banner__k">UNCERTAIN</span><span>请求可能已执行，系统不会自动重试。</span></div>
+    </div>
+  </div>
+
+  <h2>3. 会话条目</h2>
+  <div class="grid" style="gap:10px">
+    <div class="item item--tool">
+      <div class="item__head"><span class="item__name">read_file</span><span class="muted">完成 · 0.4s</span></div>
+      <div class="mono muted">workspace: demo-project</div>
+    </div>
+    <div class="item item--approval">
+      <div class="item__head"><span class="item__name">apply_patch</span><span>风险：中</span></div>
+      <div>目标：<span class="mono">src/main.rs</span>（+12 −3），请求来源 <span class="mono">aba-lab-01</span></div>
+      <div class="row" style="margin-top:10px">
+        <button class="btn btn--sm">拒绝</button>
+        <button class="btn btn--primary btn--sm">仅本次允许</button>
+        <button class="btn btn--sm">本 Session 允许</button>
+      </div>
+    </div>
+    <div class="item item--usage"><span class="muted">usage · 本轮读取 1 个文件，未报告 token 统计</span></div>
+  </div>
+
+  <h2>4. 手机与桌面框架</h2>
+  <div class="row row--top" style="gap:20px;align-items:flex-start">
+    <div class="phone">
+      <div class="appbar"><span class="appbar__title">会话</span><span class="appbar__meta">端点已就绪</span></div>
+      <div class="body">
+        <div class="chat">
+          <div class="msg msg--agent"><span class="msg__who">Agent</span><div class="bubble">已读取工作区结构。</div></div>
+          <div class="msg msg--user"><span class="msg__who">我</span><div class="bubble">继续修复构建错误。</div></div>
+        </div>
+        <div class="composer">
+          <div class="composer__box">输入消息…</div>
+          <div class="composer__hint"><span>Enter 发送 · Shift+Enter 换行</span><span>尚未连接</span></div>
+        </div>
+      </div>
+    </div>
+    <div style="flex:1;min-width:280px">
+      <div class="desk">
+        <div class="desk__bar"><span>Platform 管理后台</span><span class="muted">harness · read</span></div>
+        <div class="desk__body">
+          <div class="side">
+            <div class="side__item side__item--on">Overview</div>
+            <div class="side__item">Enrollments</div>
+            <div class="side__item">Endpoints</div>
+          </div>
+          <div style="padding:14px">
+            <div class="tbl-wrap">
+              <table>
+                <thead><tr><th>Endpoint</th><th>状态</th><th>最后可见</th></tr></thead>
+                <tbody>
+                  <tr><td class="mono">aba-lab-01</td><td><span class="state"><span class="dot dot--ok"></span>在线</span></td><td>2 分钟前</td></tr>
+                  <tr><td class="mono">hc-web-lab</td><td><span class="state"><span class="dot dot--warn"></span>待批准</span></td><td>11 分钟前</td></tr>
+                </tbody>
+              </table>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <h2>5. 空态</h2>
+  <div class="empty">暂无 Endpoint。<br>先在本地启动 ABA 并完成设备授权。</div>
+
+</main>
+</body>
+</html>
