@@ -288,8 +288,8 @@ describe('endpoint conversation coordination', () => {
     const second = { ...f.b.value, aba: f.a.value.aba, session: { ...f.b.session, abaEndpointId: f.a.session.abaEndpointId, workspaceId: f.a.session.workspaceId } };
     await f.a.store.write(second, 1); f.setSessions([f.a.session, second.session]);
     await f.manager.load(); await f.manager.bind(connection(f.socket));
-    expect(() => f.manager.prompt(f.a.session.sessionId, 'first workspace writer')).toThrow('workspace');
-    expect(() => f.manager.prompt(f.b.session.sessionId, 'competing writer')).toThrow('workspace');
+    await expect(f.manager.prompt(f.a.session.sessionId, 'first workspace writer')).rejects.toThrow('workspace');
+    await expect(f.manager.prompt(f.b.session.sessionId, 'competing writer')).rejects.toThrow('workspace');
     await f.manager.close(f.b.session.sessionId);
     await f.manager.prompt(f.a.session.sessionId, 'one remaining workspace writer');
     expect(f.manager.snapshot().runs.find((item) => item.data.session.sessionId === f.b.session.sessionId)?.data.awaiting).toBeNull();
