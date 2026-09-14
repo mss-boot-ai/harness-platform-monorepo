@@ -4,6 +4,19 @@ import { ConversationController, ConversationTransportInterrupted } from './conv
 import { controllerFixture, testNow } from './conversation-fixture';
 const chunk = (sessionId: string, text: string) => ({ jsonrpc: '2.0', method: 'session/update', params: { sessionId, update: { sessionUpdate: 'agent_message_chunk', content: { type: 'text', text } } } });
 describe('durable conversation controller', () => {
+  it('persists uncertain configuration and a stopped runtime across refresh instead of claiming rollback', async () => {
+    const f = await controllerFixture(); const option = f.value.runtime.config[0];
+    if (option === undefined) throw new Error('Missing config');
+    await f.controller.configure(option, 'b');
+    const id = f.controller.snapshot().data.requests[0]?.id;
+    await f.controller.receive(await f.incoming({ jsonrpc: '2.0', id, error: { code: -32001, message: 'CONFIGURATION_UNCONFIRMED', data: { executionState: 'unknown', runtimeStopped: true } } }, 1n));
+    await f.controller.observe(f.session);
+    const saved = await f.store.read(f.session.sessionId); if (saved === null) throw new Error('Missing snapshot');
+    expect(saved.value.runtime.status).toBe('failed'); expect(saved.value.recovery?.kind).toBe('execution-unknown');
+    expect(saved.value.runtime.configError).not.toContain('保持不变');
+    const restored = new ConversationController(saved, f.store, f.identity, f.transport, () => undefined);
+    await expect(restored.prompt('must not retry on a stopped runtime')).rejects.toThrow();
+  });
   it('treats an authenticated terminal provider failure as a failed turn and permits a new turn', async () => {
     const f = await controllerFixture(); await f.controller.prompt('first turn');
     const id = f.controller.snapshot().data.awaiting;

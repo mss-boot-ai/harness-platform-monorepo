@@ -19,9 +19,16 @@ export function applyConversationEvent(initial: Conversation, payload: unknown, 
     if (request !== undefined && ('result' in message || 'error' in message)) {
       let runtime = value.runtime;
       let blocked = value.blocked;
+      let recovery = value.recovery;
       if ('error' in message) {
-        runtime = { ...runtime, status: request.kind === 'describe' ? 'unsupported' : runtime.status,
-          configError: request.kind === 'describe' ? '执行端尚不支持此会话控制契约。' : '执行端拒绝了配置修改，原配置保持不变。' };
+        const failure = record(record(message.error)?.data);
+        const unknown = failure?.executionState === 'unknown';
+        const stopped = failure?.runtimeStopped === true;
+        const configError = unknown || stopped ? '执行端无法确认配置或已经停止。请核对并结束旧运行，再继续对话；不会自动重试。'
+          : request.kind === 'describe' ? '执行端尚不支持此会话控制契约。' : '执行端拒绝了配置修改，原配置保持不变。';
+        runtime = { ...runtime, status: unknown || stopped ? 'failed' : request.kind === 'describe' ? 'unsupported' : runtime.status, configError,
+          permissions: unknown || stopped ? runtime.permissions.map((permission) => ({ ...permission, status: 'closed' })) : runtime.permissions };
+        if (unknown || stopped) { blocked = configError; recovery = { kind: unknown ? 'execution-unknown' : 'runtime-lost', message: configError }; }
       } else if (request.kind === 'describe') {
         let next = readDescriptor(runtime, message.result, value.session.sessionId);
         if (runtime.processEpoch !== '' && next.processEpoch !== '' && runtime.processEpoch !== next.processEpoch) {
@@ -34,7 +41,7 @@ export function applyConversationEvent(initial: Conversation, payload: unknown, 
       } else {
         runtime = { ...runtime, status: 'pending' };
       }
-      value = { ...value, runtime, blocked, requests: value.requests.filter((candidate) => candidate.id !== request.id) };
+      value = { ...value, runtime, blocked, recovery, requests: value.requests.filter((candidate) => candidate.id !== request.id) };
       continue;
     }
     const turnId = value.awaiting;
