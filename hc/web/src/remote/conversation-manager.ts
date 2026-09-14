@@ -49,6 +49,8 @@ export class ConversationManager {
   private controlQueue: Promise<void> = Promise.resolve();
   private checking: Promise<void> | null = null;
   private readonly allowed = new Set<string>();
+  private readonly creationGrants = new Map<string, number>();
+  private grantRevision = 0;
   private recovery: Record<string, string> = {};
   private endpoints: readonly ABAEndpointSummary[] = [];
   private unrecoverable: readonly EndpointSessionSummary[] = [];
@@ -169,26 +171,30 @@ export class ConversationManager {
       }
     })());
   }
-  private async reconcile(epoch: number): Promise<void> {
+  private async reconcile(epoch: number): Promise<readonly string[]> {
+    // A server response can only replace authorizations that existed when its request started.
+    const subjects = [...this.controllers.entries()].map(([id, controller]) => ({ id, controller, grant: this.creationGrants.get(id) }));
     const [endpoints, sessions] = await Promise.all([this.api.abas(), this.api.sessions()]);
-    if (!this.current(epoch)) return;
-    this.endpoints = endpoints; const verified = new Set<string>();
+    if (!this.current(epoch)) return [];
+    this.endpoints = endpoints; const restored: string[] = [];
     this.unrecoverable = sessions.filter((session) => session.hcEndpointId === this.endpointId && !this.controllers.has(session.sessionId) && !isTerminal(session.status));
-    await Promise.all([...this.controllers.entries()].map(async ([id, controller]) => {
+    await Promise.all(subjects.map(async ({ id, controller, grant }) => {
+      const applicable = () => this.current(epoch) && this.creationGrants.get(id) === grant;
+      if (!applicable()) return;
       const saved = controller.snapshot().data;
       const session = sessions.find((item) => item.sessionId === id && item.hcEndpointId === this.endpointId);
       const aba = endpoints.find((item) => item.id === saved.aba.id && item.status === 'ACTIVE');
-      if (session === undefined) { this.recovery[id] = '当前账户无法确认这份会话的授权，仅保留本地记录。'; return; }
-      if (!isTerminal(session.status) && (aba === undefined || aba.signingJkt !== saved.aba.signingJkt)) { this.recovery[id] = '执行设备已失效或密钥指纹变化，无法安全恢复此会话。'; return; }
+      if (session === undefined) { this.allowed.delete(id); this.recovery[id] = '当前账户无法确认这份会话的授权，仅保留本地记录。'; return; }
+      if (!isTerminal(session.status) && (aba === undefined || aba.signingJkt !== saved.aba.signingJkt)) { this.allowed.delete(id); this.recovery[id] = '执行设备已失效或密钥指纹变化，无法安全恢复此会话。'; return; }
       try {
         await controller.observe(session);
-        if (!this.current(epoch)) return;
-        delete this.recovery[id]; verified.add(id);
-      } catch { this.recovery[id] = '会话身份或本地保存状态不一致，已暂停操作。'; }
+        if (!applicable()) return;
+        if (!this.allowed.has(id)) restored.push(id);
+        delete this.recovery[id]; this.allowed.add(id);
+      } catch { if (applicable()) { this.allowed.delete(id); this.recovery[id] = '会话身份或本地保存状态不一致，已暂停操作。'; } }
     }));
-    if (!this.current(epoch)) return;
-    this.allowed.clear(); for (const id of verified) this.allowed.add(id);
-    this.emit();
+    if (!this.current(epoch)) return [];
+    this.emit(); return restored;
   }
   public refresh(): Promise<void> {
     if (this.checking !== null) return this.checking;
@@ -196,9 +202,15 @@ export class ConversationManager {
     const operation = this.track((async () => {
       this.assertOpen(); if (this.connection?.socket.readyState !== 1) return;
       try {
-        await this.reconcile(epoch);
-        if (this.current(epoch)) await Promise.all([...this.controllers.keys()].map((id) => this.describe(id)));
-      } catch (cause) { if (this.current(epoch)) { this.allowed.clear(); this.fail('当前会话授权复核失败，已暂停新操作。请检查连接或重新登录。'); } throw cause; }
+        const restored = new Set(await this.reconcile(epoch));
+        if (this.current(epoch)) {
+          this.flush();
+          await Promise.all([...this.controllers.entries()].map(async ([id, controller]) => {
+            try { if (restored.has(id)) await controller.resume(); await this.describe(id); }
+            catch { this.recovery[id] = '会话恢复未确认，请检查连接与执行状态。'; this.emit(); }
+          }));
+        }
+      } catch (cause) { if (this.current(epoch)) { this.disconnect(); this.fail('当前会话授权复核失败，已暂停连接。请重新连接或登录以核对授权并恢复原始消息。'); } throw cause; }
     })());
     this.checking = operation;
     void operation.then(() => { if (this.checking === operation) this.checking = null; }, () => { if (this.checking === operation) this.checking = null; });
@@ -209,7 +221,7 @@ export class ConversationManager {
     this.buffer.push(bytes.slice()); this.bufferBytes += bytes.length;
   }
   private receive(bytes: Uint8Array): void {
-    if (this.closed) return;
+    if (this.closed || this.connection === null) return;
     if (this.restoring || !this.loaded) { this.retain(bytes); return; }
     try {
       const packet = decodeWireMessage(WirePacketSchema, bytes);
@@ -223,8 +235,9 @@ export class ConversationManager {
       }
       if (id === undefined) return;
       const controller = this.controllers.get(id);
-      if (controller === undefined) { if (this.creating) this.retain(bytes); return; }
-      if (!this.allowed.has(id) || this.recovery[id] !== undefined) return;
+      if (controller === undefined) { if (this.creating || this.workspace?.value.creation != null) this.retain(bytes); return; }
+      if (isTerminal(controller.snapshot().data.session.status) || controller.snapshot().fault !== null || controller.snapshot().data.blocked !== null) return;
+      if (!this.allowed.has(id) || this.recovery[id] !== undefined) { this.retain(bytes); return; }
       const routedId = id;
       // Core validates signatures, channel, generation and endpoint after this untrusted routing hint.
       void controller.receive(bytes).then(() => this.describe(routedId)).catch(() => { this.recovery[routedId] = '消息验证或保存失败，此对话已暂停。'; this.emit(); });
@@ -300,13 +313,13 @@ export class ConversationManager {
           const revision = await this.store.write(value, null); this.add({ revision, value });
         }
         if (!this.current(epoch)) throw new Error('Connection changed while saving session');
-        this.allowed.add(session.sessionId);
+        this.creationGrants.set(session.sessionId, ++this.grantRevision); this.allowed.add(session.sessionId);
         await this.metadata((value) => ({ ...value, creation: null, selectedId: this.selectionVersion === selectionVersion ? session.sessionId : value.selectedId,
           draft: value.draft === intent.draft ? '' : value.draft }));
         this.unrecoverable = this.unrecoverable.filter((item) => item.sessionId !== session.sessionId);
         this.flush(); this.emit(); return session.sessionId;
       } catch (cause) { this.fail('会话创建结果尚未确认。草稿和原创建编号已保留，请先确认原请求，避免创建重复会话。'); throw cause; }
-      finally { this.creating = false; this.buffer = []; this.bufferBytes = 0; this.emit(); }
+      finally { this.creating = false; this.flush(); this.emit(); }
     })());
   }
   public waitReady(id: string): Promise<void> {

@@ -1,4 +1,5 @@
-import { decodeWireMessage, WirePacketSchema, type ReadyGatewayConnection } from '@harness/hc-core';
+import { ControlType, createWireMessage, decodeWireMessage, encodeWireMessage, SessionKeyPackageSchema, WirePacketSchema, type ReadyGatewayConnection } from '@harness/hc-core';
+import { ConversationController } from './conversation-controller';
 import { ConversationManager, type ConversationAPI } from './conversation-manager';
 import { controllerFixture, testEndpoint, testNow } from './conversation-fixture';
 import { startTurn } from '../chat/model';
@@ -32,9 +33,52 @@ async function fixture() {
 }
 const chunk = (sessionId: string, text: string) => ({ jsonrpc: '2.0', method: 'session/update', params: { sessionId, update: { sessionUpdate: 'agent_message_chunk', content: { type: 'text', text } } } });
 describe('endpoint conversation coordination', () => {
+  it('keeps a new creation grant when an older list response finishes and routes its key package', async () => {
+    const f = await fixture(); await f.manager.load(); await f.manager.bind(connection(f.socket));
+    let release: (sessions: readonly EndpointSessionSummary[]) => void = () => undefined;
+    vi.mocked(f.api.sessions).mockImplementationOnce(() => new Promise((resolve) => { release = resolve; }));
+    const refreshing = f.manager.refresh(); await vi.waitFor(() => expect(f.api.sessions).toHaveBeenCalledTimes(2));
+    const id = await f.manager.create({ abaEndpointId: f.a.session.abaEndpointId, workspaceId: 'fixture', runtimeProfileId: 'fixture', draft: 'new creation' });
+    const created = { ...f.a.session, sessionId: id, status: 'WAITING_KEY' as const }; f.setSessions([f.a.session, f.b.session, created]);
+    release([f.a.session, f.b.session]); await refreshing;
+    expect(f.manager.snapshot().recovery[id]).toBeUndefined();
+    // This test isolates coordinator routing. Core HPKE/signature verification has its own real-crypto tests.
+    const receive = vi.spyOn(ConversationController.prototype, 'receive').mockResolvedValueOnce(undefined);
+    const packet = encodeWireMessage(WirePacketSchema, createWireMessage(WirePacketSchema, { wireMajor: 1, wireMinor: 0,
+      packetId: new Uint8Array(16).fill(8), body: { case: 'control', value: { type: ControlType.SESSION_KEY_PACKAGE,
+        payload: encodeWireMessage(SessionKeyPackageSchema, createWireMessage(SessionKeyPackageSchema, {
+          sessionId: Uint8Array.from(id.match(/../gu) ?? [], (byte) => Number.parseInt(byte, 16)),
+        })) } } }));
+    f.socket.receive(packet); expect(receive).toHaveBeenCalledWith(packet);
+    expect(f.manager.snapshot().recovery[f.a.session.sessionId]).toBeUndefined();
+  });
+  it('holds a final frame without ACK while unauthorized, then recovers it once after fresh authorization', async () => {
+    const f = await fixture(); await f.manager.load(); await f.manager.bind(connection(f.socket));
+    await f.manager.prompt(f.a.session.sessionId, 'one operation');
+    const request = f.manager.snapshot().conversations.find((item) => item.data.session.sessionId === f.a.session.sessionId)?.data.awaiting;
+    f.setSessions([f.b.session]); await f.manager.refresh();
+    const final = await f.a.incoming([chunk(f.a.session.sessionId, 'final result'), { jsonrpc: '2.0', id: request, result: { stopReason: 'end_turn' } }], 1n);
+    const before = f.socket.sent.length; f.socket.receive(final);
+    expect(f.socket.sent).toHaveLength(before);
+    expect(f.manager.snapshot().conversations.find((item) => item.data.session.sessionId === f.a.session.sessionId)?.data.inbound).toBe('0');
+    f.setSessions([f.a.session, f.b.session]); await f.manager.refresh();
+    const restored = f.manager.snapshot().conversations.find((item) => item.data.session.sessionId === f.a.session.sessionId)?.data;
+    expect(restored?.awaiting).toBeNull(); expect(restored?.messages[1]?.text).toBe('final result'); expect(restored?.inbound).toBe('1');
+    f.socket.receive(final);
+    await vi.waitFor(() => expect(f.manager.snapshot().conversations.find((item) => item.data.session.sessionId === f.a.session.sessionId)?.pending).toBe(0));
+    expect((await f.a.store.read(f.a.session.sessionId))?.value.messages).toEqual(restored?.messages);
+    const requests = f.socket.sent.filter((bytes) => decodeWireMessage(WirePacketSchema, bytes).body.case === 'encrypted');
+    for (const bytes of requests) expect(bytes).toEqual(requests[0]);
+  });
+  it('actively removes a changed ABA fingerprint instead of permanently retaining its grant', async () => {
+    const f = await fixture(); await f.manager.load(); await f.manager.bind(connection(f.socket));
+    vi.mocked(f.api.abas).mockResolvedValueOnce([{ ...f.a.value.aba, signingJkt: 'changed' }, f.b.value.aba]);
+    await f.manager.refresh(); expect(() => f.manager.prompt(f.a.session.sessionId, 'blocked')).toThrow('authorization');
+    expect(f.manager.snapshot().recovery[f.a.session.sessionId]).toContain('指纹');
+  });
   it('binds immediate typing to visible selection while older metadata writes are delayed', async () => {
     const f = await fixture(); await f.manager.load();
-    const write = f.a.store.writeWorkspace.bind(f.a.store); let release = () => undefined;
+    const write = f.a.store.writeWorkspace.bind(f.a.store); let release: () => void = () => undefined;
     const gate = new Promise<void>((resolve) => { release = resolve; });
     vi.spyOn(f.a.store, 'writeWorkspace').mockImplementationOnce(async (...args) => { await gate; return write(...args); });
     const first = f.manager.select(f.a.session.sessionId);
