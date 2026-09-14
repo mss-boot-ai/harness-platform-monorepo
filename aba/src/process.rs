@@ -1,6 +1,8 @@
 //! Local ACP process boundary with non-blocking bidirectional dispatch.
 //! Gateway calls submit/poll; prompt remains only for the CLI probe and legacy tests.
 #[cfg(target_os = "linux")]
+pub mod provider;
+#[cfg(target_os = "linux")]
 pub mod supervision;
 #[cfg(not(target_os = "linux"))]
 #[path = "process/supervision_unsupported.rs"]

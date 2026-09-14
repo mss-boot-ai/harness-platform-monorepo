@@ -56,6 +56,11 @@ abstract = "harness-isolation-" + suffix
 unix = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
 unix.bind("\0" + abstract)
 unix.listen(2)
+pathname = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+pathname.bind(str(workspace / "host-control-sentinel.sock"))
+os.chown(workspace / "host-control-sentinel.sock", user.pw_uid, user.pw_gid)
+os.chmod(workspace / "host-control-sentinel.sock", 0o777)
+pathname.listen(2)
 config = base / "probe.toml"
 config.write_text(f'''schema_version = 1
 [platform]
@@ -113,3 +118,4 @@ try:
 finally:
     tcp.close()
     unix.close()
+    pathname.close()

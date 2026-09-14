@@ -58,6 +58,7 @@ pub struct IsolationConfig {
 #[serde(rename_all = "snake_case")]
 pub enum IsolationNetwork {
     None,
+    CodexProvider,
 }
 fn default_run_memory() -> u64 {
     1_073_741_824

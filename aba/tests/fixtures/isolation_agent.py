@@ -41,6 +41,7 @@ def probe():
         "host_loopback_denied": cannot_connect(socket.AF_INET, ("127.0.0.1", int(port))),
         "host_private_network_denied": cannot_connect(socket.AF_INET, ("172.16.0.42", int(port))),
         "host_abstract_socket_denied": cannot_connect(socket.AF_UNIX, "\0" + abstract),
+        "workspace_control_socket_denied": cannot_connect(socket.AF_UNIX, str(Path.cwd() / "host-control-sentinel.sock")),
         "isolated_home": os.environ.get("HOME") == "/home/runtime",
     }
     inherited = []

@@ -15,7 +15,7 @@ use serde::{Deserialize, Serialize};
 use sha2::{Digest as _, Sha256};
 
 use super::{ProcessError, canonical_safe_directory, canonical_safe_file};
-use crate::config::{IsolationConfig, RuntimeProfile, WorkspaceProfile};
+use crate::config::{IsolationConfig, IsolationNetwork, RuntimeProfile, WorkspaceProfile};
 
 const MAX_RECORDS: usize = 4_096;
 const MAX_STATE_BYTES: usize = 4 * 1024 * 1024;
@@ -448,6 +448,14 @@ impl Scope {
         fs::create_dir(&home).map_err(unavailable)?;
         fs::set_permissions(&home, fs::Permissions::from_mode(0o700)).map_err(unavailable)?;
         let config = &self.supervisor.config;
+        let helper = canonical_safe_file(&std::env::current_exe().map_err(unavailable)?)?;
+        let helper_metadata = fs::metadata(&helper).map_err(unavailable)?;
+        if helper_metadata.uid() != 0 || helper_metadata.permissions().mode() & 0o022 != 0 {
+            return Err(ProcessError::UnsafeProfile);
+        }
+        let provider_socket = config
+            .state_directory
+            .join(format!("{}.provider.sock", self.record.run));
         command
             .arg("scope-exec")
             .arg("--cgroup")
@@ -463,8 +471,11 @@ impl Scope {
                     .join(format!("{}.gate", self.record.run)),
             )
             .arg("--parent")
-            .arg(std::process::id().to_string())
-            .arg("--");
+            .arg(std::process::id().to_string());
+        if config.network == IsolationNetwork::CodexProvider {
+            command.arg("--provider-socket").arg(&provider_socket);
+        }
+        command.arg("--");
         command.args([
             "--unshare-user",
             "--unshare-net",
@@ -520,6 +531,16 @@ impl Scope {
             command.arg("--ro-bind").arg(root).arg(root);
         }
         command
+            .arg("--ro-bind")
+            .arg(helper)
+            .arg("/opt/harness/aba-internal");
+        if config.network == IsolationNetwork::CodexProvider {
+            command
+                .arg("--ro-bind")
+                .arg(provider_socket)
+                .arg("/run/harness-provider.sock");
+        }
+        command
             .arg("--bind")
             .arg(home)
             .arg("/home/runtime")
@@ -529,7 +550,17 @@ impl Scope {
             .arg("--chdir")
             .arg(&self.record.workspace)
             .arg("--")
+            .arg("/opt/harness/aba-internal")
+            .arg("scope-runtime");
+        if config.network == IsolationNetwork::CodexProvider {
+            command
+                .arg("--provider-socket")
+                .arg("/run/harness-provider.sock");
+        }
+        command
+            .arg("--runtime")
             .arg(&runtime.command)
+            .arg("--")
             .args(&runtime.args)
             .env("HOME", "/home/runtime");
         Ok(())
@@ -547,6 +578,7 @@ pub fn enter_and_exec(
     inode: u64,
     gate: &Path,
     parent_id: u32,
+    provider_socket: Option<&Path>,
     args: &[String],
 ) -> Result<(), ProcessError> {
     use rustix::event::{PollFd, PollFlags, Timespec, poll};
@@ -573,7 +605,8 @@ pub fn enter_and_exec(
     {
         return Err(ProcessError::UnsafeProfile);
     }
-    let mut gate = open_gate(gate)?;
+    let gate_path = gate;
+    let mut gate = open_gate(gate_path)?;
     claim_launch(&mut gate)?;
     let metadata = fs::symlink_metadata(group).map_err(unavailable)?;
     if !metadata.is_dir()
@@ -586,6 +619,20 @@ pub fn enter_and_exec(
     fs::write(group.join("cgroup.procs"), std::process::id().to_string()).map_err(unavailable)?;
     if current_cgroup()? != group {
         return Err(ProcessError::UnsafeProfile);
+    }
+    if let Some(socket) = provider_socket {
+        let run = name
+            .strip_prefix("harness-run-")
+            .and_then(|name| name.split_once('-'))
+            .map(|(run, _)| run)
+            .ok_or(ProcessError::UnsafeProfile)?;
+        let directory = gate_path.parent().ok_or(ProcessError::UnsafeProfile)?;
+        if gate_path != directory.join(format!("{run}.gate"))
+            || socket != directory.join(format!("{run}.provider.sock"))
+        {
+            return Err(ProcessError::UnsafeProfile);
+        }
+        super::provider::start_host_proxy(socket)?;
     }
     // The parent receives this before ACP initialize and never sends business work earlier.
     println!("{{\"scopeReady\":true}}");

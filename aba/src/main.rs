@@ -34,6 +34,8 @@ enum Command {
         gate: PathBuf,
         #[arg(long)]
         parent: u32,
+        #[arg(long)]
+        provider_socket: Option<PathBuf>,
         #[arg(last = true, allow_hyphen_values = true)]
         args: Vec<String>,
     },
@@ -42,6 +44,16 @@ enum Command {
     ScopeInit {
         #[arg(long)]
         directory: PathBuf,
+    },
+    #[cfg(target_os = "linux")]
+    #[command(hide = true)]
+    ScopeRuntime {
+        #[arg(long)]
+        provider_socket: Option<PathBuf>,
+        #[arg(long)]
+        runtime: PathBuf,
+        #[arg(last = true, allow_hyphen_values = true)]
+        args: Vec<String>,
     },
     /// Print build, protocol, SDK, and Platform baseline information.
     Version {
@@ -180,10 +192,23 @@ fn execute(cli: Cli) -> Result<(), Box<dyn std::error::Error>> {
             inode,
             gate,
             parent,
+            provider_socket,
             args,
-        } => {
-            aba::process::supervision::enter_and_exec(&cgroup, device, inode, &gate, parent, &args)?
-        }
+        } => aba::process::supervision::enter_and_exec(
+            &cgroup,
+            device,
+            inode,
+            &gate,
+            parent,
+            provider_socket.as_deref(),
+            &args,
+        )?,
+        #[cfg(target_os = "linux")]
+        Command::ScopeRuntime {
+            provider_socket,
+            runtime,
+            args,
+        } => aba::process::provider::run_contained(provider_socket.as_deref(), &runtime, &args)?,
         Command::Version { json } => {
             let info = build_info();
             if json {
