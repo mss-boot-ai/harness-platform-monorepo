@@ -97,7 +97,7 @@ export function ChatWorkspace(props: ChatWorkspaceProps) {
           onClick={() => { props.onSelectConversation(item.id); setSidebarOpen(false); }}><span>{item.title}</span><small>{item.detail}</small></button>)}
         {filtered.length === 0 ? <p className="sidebar-empty">{query !== '' ? '没有匹配的对话' : '开始一段对话，它会出现在这里。'}</p> : null}
       </nav>
-      <div className="sidebar-footer"><p>历史与草稿在此浏览器中加密保存。<br />恢复需要原端点密钥和有效授权。</p><button type="button" className="account-button" onClick={() => { props.onOpenSettings(); setSidebarOpen(false); }}><span className="account-avatar"><Icon name="settings" /></span><span><strong>连接与设置</strong><small>{props.online ? '安全连接已就绪' : props.connected ? '连接已断开' : '连接你的工作环境'}</small></span><Icon name="chevron" /></button></div>
+      <div className="sidebar-footer"><p>{props.connected ? '历史与草稿在此浏览器中加密保存。' : '连接后可加密保存会话历史与草稿。'}<br />恢复需要原端点密钥和有效授权。</p><button type="button" className="account-button" onClick={() => { props.onOpenSettings(); setSidebarOpen(false); }}><span className="account-avatar"><Icon name="settings" /></span><span><strong>连接与设置</strong><small>{props.online ? '安全连接已就绪' : props.connected ? '连接已断开' : '连接你的工作环境'}</small></span><Icon name="chevron" /></button></div>
     </aside>
     <main className="chat-main">
       <header className="chat-header"><div className="header-left"><button type="button" className="icon-button sidebar-toggle" aria-label="展开会话导航" aria-expanded={sidebarOpen} onClick={() => { setCollapsed(false); setSidebarOpen(true); }}><Icon name="menu" /></button>

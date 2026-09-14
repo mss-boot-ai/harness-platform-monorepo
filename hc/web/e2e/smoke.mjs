@@ -91,7 +91,7 @@ try {
   await owner.getByRole('dialog', { name: '连接与设置', exact: true }).waitFor();
   const waiting = await context.newPage(); const waitingMutations = []; const waitingSockets = [];
   waiting.on('request', (request) => { if (request.method() === 'POST') waitingMutations.push(new URL(request.url()).pathname); });
-  waiting.on('websocket', () => waitingSockets.push('opened'));
+  waiting.on('websocket', (socket) => { if (new URL(socket.url()).pathname.startsWith('/gateway/v1/')) waitingSockets.push('opened'); });
   await waiting.goto(base, { waitUntil: 'networkidle' });
   await waiting.getByText(/另一个标签页正在使用此浏览器的安全连接/).waitFor();
   await waiting.locator('.connection-badge').click();
