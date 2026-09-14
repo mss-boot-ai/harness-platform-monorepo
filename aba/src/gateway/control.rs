@@ -1372,7 +1372,7 @@ mod tests {
         // its existing connection. A new session must accept that fresh ACK.
         let mut next_request = request;
         next_request.session_id = vec![24_u8; 16];
-        let next_packets = state.handle(
+        let mut next_packets = state.handle(
             platform_open_packet(&online, &endpoint_id, next_request, unix_millis(now)?, 3)?,
             ControlContext {
                 endpoint_id: &endpoint_id,
@@ -1383,6 +1383,12 @@ mod tests {
                 now,
             },
         )?;
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
+        while next_packets.is_empty() && std::time::Instant::now() < deadline {
+            next_packets.extend(state.poll(&endpoint_id, &identity, now)?);
+            std::thread::sleep(std::time::Duration::from_millis(5));
+        }
+        assert_eq!(next_packets.len(), 2);
         let next_packet = WirePacket::decode(next_packets[1].as_slice())?;
         let Some(wire_packet::Body::Control(next_frame)) = next_packet.body else {
             return Err("missing next key package".into());
