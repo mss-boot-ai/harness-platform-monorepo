@@ -33,6 +33,20 @@ async function fixture() {
 }
 const chunk = (sessionId: string, text: string) => ({ jsonrpc: '2.0', method: 'session/update', params: { sessionId, update: { sessionUpdate: 'agent_message_chunk', content: { type: 'text', text } } } });
 describe('endpoint conversation coordination', () => {
+  it('preserves an unsent packet under backpressure and replays only its original bytes after reconnect', async () => {
+    const f = await fixture(); await f.manager.load(); await f.manager.bind(connection(f.socket));
+    f.socket.bufferedAmount = 4 * 1024 * 1024 + 1;
+    await f.manager.prompt(f.a.session.sessionId, 'saved but unsent');
+    expect(f.manager.snapshot().online).toBe(false); expect(f.manager.snapshot().error).toContain('积压');
+    expect(f.socket.sent.filter((bytes) => decodeWireMessage(WirePacketSchema, bytes).body.case === 'encrypted')).toHaveLength(0);
+    const saved = await f.a.store.read(f.a.session.sessionId); const packet = saved?.value.outbox[0];
+    expect(saved?.value.outbox).toHaveLength(1); expect(saved?.value.awaiting).not.toBeNull(); expect(f.api.close).not.toHaveBeenCalled();
+    const next = new Socket(); await f.manager.bind(connection(next, 2n));
+    const sent = next.sent.filter((bytes) => decodeWireMessage(WirePacketSchema, bytes).body.case === 'encrypted');
+    expect(sent).toHaveLength(1); expect(Buffer.from(sent[0]!).toString('base64url')).toBe(packet?.encoded);
+    expect(f.manager.snapshot().conversations.find((item) => item.data.session.sessionId === f.a.session.sessionId)?.data.outbound).toBe('1');
+    expect(f.api.close).not.toHaveBeenCalled();
+  });
   it('keeps a new creation grant when an older list response finishes and routes its key package', async () => {
     const f = await fixture(); await f.manager.load(); await f.manager.bind(connection(f.socket));
     let release: (sessions: readonly EndpointSessionSummary[]) => void = () => undefined;

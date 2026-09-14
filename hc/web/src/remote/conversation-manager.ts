@@ -97,8 +97,12 @@ export class ConversationManager {
   private transport(): ConversationTransport {
     return { now: this.now, send: (bytes) => {
       const connection = this.connection;
-      if (this.closed || connection === null || connection.socket.readyState !== 1 || connection.socket.bufferedAmount > MAX_BUFFER_BYTES) return false;
-      connection.socket.send(new Uint8Array(bytes).buffer); return true;
+      if (this.closed || connection === null || connection.socket.readyState !== 1) return false;
+      if (connection.socket.bufferedAmount > MAX_BUFFER_BYTES) {
+        this.disconnect(); this.fail('连接发送积压，消息已加密保存。请重新连接以补传原始消息。'); return false;
+      }
+      try { connection.socket.send(new Uint8Array(bytes).buffer); return true; }
+      catch { this.disconnect(); this.fail('连接发送中断，原始消息已保留。请重新连接以确认投递。'); return false; }
     }, control: (encode) => {
       const epoch = this.epoch; const connection = this.connection;
       const operation = this.controlQueue.then(async () => {
@@ -106,7 +110,7 @@ export class ConversationManager {
         if (this.controlSequence >= 0xffff_ffff_ffff_ffffn) throw new Error('Control sequence exhausted');
         const bytes = await encode(++this.controlSequence);
         if (!this.current(epoch) || connection !== this.connection || connection.socket.readyState !== 1) throw new Error('Connection changed during control');
-        if (connection.socket.bufferedAmount > MAX_BUFFER_BYTES) throw new Error('Connection backpressure');
+        if (connection.socket.bufferedAmount > MAX_BUFFER_BYTES) { this.disconnect(); this.fail('连接控制消息积压，请重新连接以恢复会话。'); throw new Error('Connection backpressure'); }
         connection.socket.send(new Uint8Array(bytes).buffer);
       });
       this.controlQueue = operation.catch(() => undefined); return operation;

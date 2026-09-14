@@ -74,13 +74,14 @@ export function SessionSetup({ connection, access, registration, secureStore, in
     expired || missingKey || session?.status === 'UNCERTAIN' || session?.status === 'REKEY_REQUIRED' || session?.status === 'DRAINING';
   const readOnly = terminal || blocked;
   const responding = value?.awaiting !== null && value?.awaiting !== undefined;
+  const deliveryPending = responding && (value?.outbox.length ?? 0) > 0;
   const pendingRequest = value?.requests.find((item) => item.kind === 'config');
   const pendingConfig: PendingConfig | null = pendingRequest?.option === undefined || pendingRequest.requestedValue === undefined ? null : {
     id: pendingRequest.id, option: pendingRequest.option, value: pendingRequest.requestedValue };
   const full = value !== undefined && (value.messages.length >= MAX_MESSAGES || value.messages.reduce((sum, message) => sum + message.text.length, 0) >= 1_048_576);
   const workspaceBusy = value === undefined ? manager?.workspaceConflict(actualABA, workspaceId.trim()) === true
     : manager?.workspaceConflict(value.aba.id, value.session.workspaceId, value.session.sessionId) === true;
-  const canSubmit = view.status === 'ready' && view.online && !readOnly && !full && !workspaceBusy && !creating &&
+  const canSubmit = view.status === 'ready' && view.online && !readOnly && !responding && !full && !workspaceBusy && !creating &&
     (value === undefined ? view.workspace?.creation === null && actualABA !== '' && workspaceId.trim() !== '' && runtimeProfileId.trim() !== ''
       : value.keys !== null && session?.status === 'ACTIVE' && value.requests.length === 0 &&
         (!session.requestedCapabilities.includes('remote-session-v1') || value.runtime.status === 'ready'));
@@ -153,7 +154,8 @@ export function SessionSetup({ connection, access, registration, secureStore, in
       : missingKey ? '本地缺少此会话的恢复密钥，当前只读。请核对执行端状态。'
         : !view.online ? '连接已断开。历史和草稿在此浏览器中加密保留；重新连接后会先核对授权，再恢复原始消息。'
           : workspaceBusy ? '此工作区有另一个会话正在执行或需要确认。草稿已保留，请等待或选择不同工作区。'
-            : value?.awaiting !== null && value?.awaiting !== undefined && value.outbox.length === 0 ? '消息已安全送达，正在等待执行结果。'
+            : deliveryPending ? '消息已加密保存，等待送达确认。'
+              : value?.awaiting !== null && value?.awaiting !== undefined && value.outbox.length === 0 ? '消息已安全送达，正在等待执行结果。'
               : full ? '会话达到本地显示上限，请新建对话。' : value !== undefined && value.keys === null && !terminal ? '正在准备安全会话，草稿尚未发送。' : null);
   return <ChatWorkspace draft={draft} onDraftChange={changeDraft} onSubmit={() => perform(submit, '本次发送尚未确认，草稿已保留。请检查会话状态后再操作。')}
     onNewChat={() => selectConversation(null)} newChatDisabled={creating || view.creating}
@@ -166,7 +168,7 @@ export function SessionSetup({ connection, access, registration, secureStore, in
     onOpenSettings={onOpenSettings} onSelectConversation={selectConversation}
     conversations={conversations} selectedConversationId={selectedId} messages={value?.messages ?? []}
     title={conversationTitle(value?.messages.find((message) => message.role === 'user')?.text ?? '')} agent={session?.runtimeProfileId ?? runtimeProfileId}
-    online={view.online} connected busy={creating || actionBusy} responding={responding}
+    online={view.online} connected busy={creating || actionBusy} responding={responding && !deliveryPending} deliveryPending={deliveryPending}
     canSubmit={canSubmit} readOnly={readOnly} hasActiveSession={session !== undefined && !terminal} targetSettings={targetSettings}
     error={error ?? view.error} notice={notice} />;
 }

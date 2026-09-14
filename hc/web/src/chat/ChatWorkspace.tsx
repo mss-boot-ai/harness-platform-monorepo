@@ -14,6 +14,7 @@ export interface ChatWorkspaceProps {
   readonly notice: string | null; readonly error: string | null; readonly targetSettings: ReactNode;
   readonly onCancelTurn?: () => void; readonly cancelPending?: boolean;
   readonly newChatDisabled?: boolean; readonly composerDisabled?: boolean; readonly draftSaved?: boolean;
+  readonly deliveryPending?: boolean;
   readonly renderTurnActivity?: (turnId: string) => ReactNode;
 }
 const suggestions: readonly { readonly icon: IconName; readonly title: string; readonly detail: string; readonly prompt: string }[] = [
@@ -81,7 +82,7 @@ export function ChatWorkspace(props: ChatWorkspaceProps) {
             : <button className="send-button" type="submit" aria-label={props.connected ? '发送消息' : '连接 Agent'} title={props.connected ? '发送消息' : '先连接 Agent，草稿会保留'} disabled={!props.canSubmit || props.busy || props.draft.trim() === ''}><Icon name="arrow" /></button>}
         </div>
       </form>
-      <p className="composer-hint">{props.responding ? props.onCancelTurn !== undefined ? props.cancelPending ? '已请求停止，等待执行端确认；会话仍然保留。' : 'Agent 正在回复；方形按钮停止本轮。' : 'Agent 正在回复；方形按钮将结束整个会话。' : props.busy ? '正在建立会话或发送消息…' : 'Enter 发送 · Shift + Enter 换行'}<span role="status">{props.draftSaved === true ? '草稿已加密保存' : props.draftSaved === false ? '草稿保存中' : '请核对重要内容'}</span></p>
+      <p className="composer-hint">{props.deliveryPending ? '消息已保存，等待送达确认；断线时请重新连接。' : props.responding ? props.onCancelTurn !== undefined ? props.cancelPending ? '已请求停止，等待执行端确认；会话仍然保留。' : 'Agent 正在回复；方形按钮停止本轮。' : 'Agent 正在回复；方形按钮将结束整个会话。' : props.busy ? '正在建立会话或发送消息…' : 'Enter 发送 · Shift + Enter 换行'}<span role="status">{props.draftSaved === true ? '草稿已加密保存' : props.draftSaved === false ? '草稿保存中' : '请核对重要内容'}</span></p>
     </>}
   </div>;
   return <div className={`chat-shell ${collapsed ? 'sidebar-collapsed' : ''} ${sidebarOpen ? 'sidebar-open' : ''}`}>
@@ -118,7 +119,7 @@ export function ChatWorkspace(props: ChatWorkspaceProps) {
               <div className="message-body">{message.role === 'assistant' ? <>
                 <div className="message-author">{props.agent || 'Agent'}</div>
                 {props.renderTurnActivity?.(message.id.replace(/^assistant-/u, ''))}
-                {message.text !== '' ? <Markdown text={message.text} /> : message.state === 'streaming' ? <div className="thinking"><span /><span /><span /><span className="sr-only">正在等待 Agent 回复</span></div> : <p className="message-muted">{message.state === 'uncertain' ? '回复中断，请检查执行状态，不要直接重发。' : '本次回复未返回文本。'}</p>}
+                {message.text !== '' ? <Markdown text={message.text} /> : message.state === 'streaming' && props.deliveryPending ? <p className="message-muted">消息已加密保存，等待送达确认。</p> : message.state === 'streaming' ? <div className="thinking"><span /><span /><span /><span className="sr-only">正在等待 Agent 回复</span></div> : <p className="message-muted">{message.state === 'uncertain' ? '回复中断，请检查执行状态，不要直接重发。' : '本次回复未返回文本。'}</p>}
                 {message.text.length >= MAX_REPLY_CHARACTERS ? <p className="message-muted">回复超过本页显示上限，请在执行端查看完整结果。</p> : null}
                 {message.state === 'cancelled' ? <p className="message-muted">本轮已停止，可以继续对话；已发生的操作不受影响。</p> : null}
                 {message.state === 'uncertain' ? <p className="uncertain-label">执行结果待确认</p> : null}

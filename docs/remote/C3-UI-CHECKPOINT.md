@@ -48,3 +48,9 @@ Selection source `0ea873d49d69ff28bdd5b9efcc83b12087581e28` passed 90 runtime te
 ## Independent review: reconciliation repair
 
 Each list request now captures its subject controllers and their local creation-grant revisions. Its result can revoke or update only those observed grants; a newer creation is checked by a subsequent fresh request. This is not a permanent union of authorization sets. Known temporarily unauthorized messages remain in the bounded buffer without ACK, and reauthorization flushes that buffer plus requests recovery from durable cursors. A failed overall authorization request disconnects transport so reconnection performs fresh checks and recovery. Tests hold a stale response across creation, retain a pending final frame during an authorization gap, and verify fingerprint changes still remove access. The key-package routing regression isolates routing from the separately tested core HPKE verification.
+
+Source `fe7997e724e5cf22105fe3df36a48dafe9eed702` passed local lint/typecheck, all 93 tests and production build after push. Its full browser/CI result is tracked separately.
+
+## Independent review: backpressure repair
+
+A full socket buffer or synchronous socket-send failure now detaches transport and exposes a recoverable delivery state. The already persisted packet remains in the outbox; a verified replacement connection uses existing exact-byte replay. The UI distinguishes a saved request awaiting delivery from a confirmed delivery awaiting execution. The regression asserts no first transmission under backpressure, unchanged packet bytes/sequence after recovery, and no CloseSession side effect.
