@@ -12,6 +12,17 @@
 - 当前新执行使用固定 Codex App Server/CLI `0.147.0`，模型为本机已经配置并实际验收的 `gpt-5.6-luna`。旧 DeepSeek 身份、运行记录、适配器及原配置备份保留；新项目白名单采用 Codex。
 - 没有合并本分支，也没有把此检查点当作完整 Remote 完成。
 
+实际运行时产物标识（镜像栏为 Pod 报告的 imageID，不与 OCI manifest digest 混称）：
+
+| 组件 | SHA-256 |
+| --- | --- |
+| API imageID | `a1aaa77679fa8347e2019a42ba3851033a64e10a7928ade10b1875951616ad2e` |
+| Admin Web imageID | `4cacf08f6bca008f71e52b6d72fb611bd6120b34c1e4671a936b3bf88ef4eaf6` |
+| Gateway imageID | `48ca227a4dea8dc79f70511fd5fcc89b98d8f32b66ff3fa60130b582d87f80ca` |
+| HC imageID | `dda8c56f3d64a7874c58d75e58b04a6a7fb97f390e0265eda98b1ece779a4e80` |
+| ABA 二进制 | `1113bc877f64a17321b26bba76e795b0b502fe08db386ea73f8a7b1b323e5799` |
+| Codex ACP adapter | `4c6d3aaf394cc6c3ed847e505831f947a6b9e3ec1dfdfb1152454ef7f8ba2429` |
+
 ## 已验证的代码与运行时
 
 HC 的 124 个测试、lint/typecheck/build 通过；真实 ABA/Gateway race 测试增加 Agent 进程失败后的 ABA 重连与确认关闭，连续 3 次通过。此前 42 个 Rust 测试与严格 Clippy、官方 `mss v1.3.7 verify --all` 通过。具体早期失败和修复见[前一检查点](2026-09-15-remote-project-recovery.md)。
