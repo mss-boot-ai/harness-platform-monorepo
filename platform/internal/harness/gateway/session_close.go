@@ -43,11 +43,11 @@ func (server *Server) closeEndpointSession(writer http.ResponseWriter, request *
 	}
 	session, err := server.persistence.GetSession(request.Context(), sessionID)
 	if err != nil {
-		writeDomainError(writer, err)
+		writeSessionLookupError(writer, err)
 		return
 	}
 	if session.HCEndpointID != endpoint.ID || session.OwnerUserID != endpoint.OwnerUserID || session.TenantID != endpoint.TenantID {
-		writeDomainError(writer, domain.NewProblem(domain.CodeNotFound, "session was not found", nil))
+		writeSessionLookupError(writer, domain.NewProblem(domain.CodeNotFound, "session was not found", nil))
 		return
 	}
 	now := server.now().UTC()

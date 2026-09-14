@@ -13,6 +13,14 @@ func endpointSessionView(session domain.Session) endpointSessionResponse {
 		RuntimeProfileID: session.RuntimeProfileID, WorkspaceID: session.WorkspaceID, RequestedCapabilities: append([]string(nil), session.RequestedCapabilities...), Status: session.Status, CreatedAt: session.CreatedAt}
 }
 
+func writeSessionLookupError(writer http.ResponseWriter, err error) {
+	if domain.HasCode(err, domain.CodeNotFound) {
+		writeGatewayError(writer, http.StatusNotFound, "SESSION_NOT_FOUND", "session was not found")
+		return
+	}
+	writeDomainError(writer, err)
+}
+
 func (server *Server) endpointSessionStatus(writer http.ResponseWriter, request *http.Request) {
 	endpoint, _, ok := server.authenticateHCRequest(writer, request)
 	if !ok {
@@ -30,11 +38,11 @@ func (server *Server) endpointSessionStatus(writer http.ResponseWriter, request 
 	}
 	session, err := server.persistence.GetSession(request.Context(), id)
 	if err != nil {
-		writeDomainError(writer, err)
+		writeSessionLookupError(writer, err)
 		return
 	}
 	if session.HCEndpointID != endpoint.ID || session.OwnerUserID != endpoint.OwnerUserID || session.TenantID != endpoint.TenantID {
-		writeDomainError(writer, domain.NewProblem(domain.CodeNotFound, "session was not found", nil))
+		writeSessionLookupError(writer, domain.NewProblem(domain.CodeNotFound, "session was not found", nil))
 		return
 	}
 	writeJSON(writer, http.StatusOK, endpointSessionView(session))
@@ -107,11 +115,11 @@ func (server *Server) sessionCreationOperation(writer http.ResponseWriter, reque
 	}
 	session, err := server.persistence.GetSession(request.Context(), id)
 	if err != nil {
-		writeDomainError(writer, err)
+		writeSessionLookupError(writer, err)
 		return
 	}
 	if session.HCEndpointID != endpoint.ID || session.OwnerUserID != endpoint.OwnerUserID || session.TenantID != endpoint.TenantID {
-		writeDomainError(writer, domain.NewProblem(domain.CodeNotFound, "session was not found", nil))
+		writeSessionLookupError(writer, domain.NewProblem(domain.CodeNotFound, "session was not found", nil))
 		return
 	}
 	writeJSON(writer, http.StatusOK, map[string]any{"state": "created", "session": endpointSessionView(session)})
