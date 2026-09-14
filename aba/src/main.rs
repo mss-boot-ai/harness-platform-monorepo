@@ -156,6 +156,9 @@ enum RuntimeCommand {
         workspace: String,
         #[arg(long)]
         insecure_loopback_development: bool,
+        /// Verify a real provider reply and a read-only workspace file tool using synthetic markers.
+        #[arg(long)]
+        exercise: bool,
     },
 }
 
@@ -262,6 +265,7 @@ fn execute(cli: Cli) -> Result<(), Box<dyn std::error::Error>> {
                     runtime,
                     workspace,
                     insecure_loopback_development,
+                    exercise,
                 },
         }) => {
             let config =
@@ -286,8 +290,59 @@ fn execute(cli: Cli) -> Result<(), Box<dyn std::error::Error>> {
                 rand_core::OsRng.fill_bytes(&mut id);
                 let mut process =
                     AgentProcess::start_supervised(runtime, workspace, &supervisor, id)?;
+                if exercise {
+                    if isolation.network != aba::config::IsolationNetwork::CodexProvider {
+                        return Err(
+                            "real provider exercise requires codex_provider isolation".into()
+                        );
+                    }
+                    let session: String = id.iter().map(|byte| format!("{byte:02x}")).collect();
+                    for (number, text, expected) in [
+                        (
+                            1,
+                            "Reply with exactly HARNESS_SCOPE_MODEL_OK.",
+                            "HARNESS_SCOPE_MODEL_OK",
+                        ),
+                        (
+                            2,
+                            "Read scope-model-probe.txt in this workspace and reply with its exact contents. Do not write any files.",
+                            "HARNESS_SCOPE_FILE_OK",
+                        ),
+                    ] {
+                        let messages = process.prompt(&serde_json::to_vec(&serde_json::json!({
+                            "jsonrpc":"2.0", "id":format!("scope-probe-{number}"), "method":"session/prompt",
+                            "params":{"sessionId":session,"prompt":[{"type":"text","text":text}]}
+                        }))?, &session)?;
+                        let values: Vec<serde_json::Value> = messages
+                            .iter()
+                            .map(|message| serde_json::from_slice(message))
+                            .collect::<Result<_, _>>()?;
+                        let received: String = values
+                            .iter()
+                            .filter_map(|value| {
+                                value
+                                    .pointer("/params/update/content/text")
+                                    .and_then(serde_json::Value::as_str)
+                            })
+                            .collect();
+                        if !received.contains(expected)
+                            || !values.iter().any(|value| {
+                                value
+                                    .pointer("/result/stopReason")
+                                    .and_then(serde_json::Value::as_str)
+                                    == Some("end_turn")
+                            })
+                        {
+                            return Err("isolated real-provider exercise did not confirm the expected result".into());
+                        }
+                    }
+                    println!("Isolated provider reply and read-only workspace tool confirmed.");
+                }
                 process.shutdown()?;
             } else {
+                if exercise {
+                    return Err("real provider exercise requires configured isolation".into());
+                }
                 drop(AgentProcess::start(runtime, workspace)?);
             }
             println!("ACP runtime probe succeeded.");
