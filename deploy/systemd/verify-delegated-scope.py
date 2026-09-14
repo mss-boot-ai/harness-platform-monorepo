@@ -118,7 +118,7 @@ config.chmod(0o644)
 properties = ["Delegate=yes", "ProtectControlGroups=no", "NoNewPrivileges=yes",
     "ProtectSystem=strict", "ProtectHome=yes", "PrivateTmp=yes", "PrivateDevices=yes",
     "CapabilityBoundingSet=", "RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6 AF_NETLINK",
-    "KillMode=control-group", "MemoryMax=4G", "TasksMax=256", "LimitCORE=0", "UMask=0077",
+    "KillMode=control-group", "MemoryMax=4G", "TasksMax=256", "LimitCORE=0", "LimitNOFILE=8192", "UMask=0077",
     f"ReadWritePaths={state} {workspace} /sys/fs/cgroup/system.slice/{unit}.service"]
 if args.codex or args.provider:
     properties += ["EnvironmentFile=/etc/harness-aba/codex.env"]
@@ -130,12 +130,18 @@ command += [str(binary), "runtime", "probe", "--config", str(config), "--runtime
 if args.codex:
     command += ["--exercise"]
 try:
-    result = subprocess.run(command, capture_output=True, text=True, timeout=240 if args.codex else 45)
+    result = subprocess.run(command, capture_output=True, text=True, timeout=480 if args.codex else 45)
     (base / "unit-output.txt").write_text(result.stdout + result.stderr)
     if result.returncode != 0:
         raise RuntimeError("isolated unit probe failed; retained unit-output.txt")
     facts = {"real_provider_and_file_tool": "Isolated provider reply and read-only workspace tool confirmed." in result.stdout} if args.codex else json.loads((workspace / "isolation-result.json").read_text())
-    expected = {"real_provider_and_file_tool"} if args.codex else {
+    if args.codex:
+        facts.update({
+            "approval_deny_allow": "Isolated file approval denial and approval confirmed." in result.stdout,
+            "configuration_confirmed": "Isolated effective configuration change confirmed." in result.stdout,
+            "actual_cancel_and_continue": "Actual sleep tool start, turn cancellation and continuation confirmed." in result.stdout,
+        })
+    expected = {"real_provider_and_file_tool", "approval_deny_allow", "configuration_confirmed", "actual_cancel_and_continue"} if args.codex else {
         "same_existing_uid", "host_state_hidden", "host_state_via_proc_hidden", "endpoint_key_path_hidden",
         "no_system_bus", "no_cgroup_control", "private_pid_namespace", "host_loopback_denied",
         "host_private_network_denied", "host_abstract_socket_denied", "workspace_control_socket_denied",

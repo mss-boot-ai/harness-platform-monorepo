@@ -342,6 +342,7 @@ fn execute(cli: Cli) -> Result<(), Box<dyn std::error::Error>> {
                         }
                     }
                     println!("Isolated provider reply and read-only workspace tool confirmed.");
+                    aba::process::probe::controls(&mut process, &supervisor, id, &workspace.path)?;
                 }
                 process.shutdown()?;
             } else {

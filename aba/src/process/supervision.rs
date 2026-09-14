@@ -318,6 +318,61 @@ impl Supervisor {
         self.close_record(&record)
     }
 
+    /// Read-only diagnostic for the explicit synthetic CLI probe. Never a PID kill authority.
+    pub fn has_process_command(
+        &self,
+        run: [u8; 16],
+        expected: &[&str],
+    ) -> Result<bool, ProcessError> {
+        let record = self
+            .registry
+            .lock()
+            .map_err(unavailable)?
+            .state
+            .records
+            .get(&hex(&run))
+            .cloned()
+            .ok_or(ProcessError::CleanupUnconfirmed)?;
+        if record.closed || record.boot != self.boot || expected.is_empty() {
+            return Ok(false);
+        }
+        let group = self.config.cgroup_root.join("runs").join(&record.scope);
+        let metadata = fs::symlink_metadata(&group).map_err(unavailable)?;
+        if metadata.dev() != record.device || metadata.ino() != record.inode {
+            return Err(ProcessError::CleanupUnconfirmed);
+        }
+        for pid in fs::read_to_string(group.join("cgroup.procs"))
+            .map_err(unavailable)?
+            .lines()
+            .take(1_024)
+        {
+            let Ok(pid) = pid.parse::<u32>() else {
+                return Err(ProcessError::CleanupUnconfirmed);
+            };
+            let Ok(bytes) = fs::read(format!("/proc/{pid}/cmdline")) else {
+                continue;
+            };
+            let values: Vec<_> = bytes
+                .split(|byte| *byte == 0)
+                .filter(|value| !value.is_empty())
+                .collect();
+            if values.len() == expected.len()
+                && std::str::from_utf8(values[0])
+                    .ok()
+                    .and_then(|value| Path::new(value).file_name())
+                    .is_some_and(|value| value == expected[0])
+                && values
+                    .iter()
+                    .skip(1)
+                    .zip(expected.iter().skip(1))
+                    .all(|(left, right)| *left == right.as_bytes())
+            {
+                return Ok(true);
+            }
+        }
+        Ok(false)
+    }
+
     fn close_record(&self, record: &Record) -> Result<(), ProcessError> {
         {
             let registry = self.registry.lock().map_err(unavailable)?;
@@ -620,7 +675,7 @@ pub fn enter_and_exec(
     if current_cgroup()? != group {
         return Err(ProcessError::UnsafeProfile);
     }
-    if let Some(socket) = provider_socket {
+    let provider_health = if let Some(socket) = provider_socket {
         let run = name
             .strip_prefix("harness-run-")
             .and_then(|name| name.split_once('-'))
@@ -632,8 +687,10 @@ pub fn enter_and_exec(
         {
             return Err(ProcessError::UnsafeProfile);
         }
-        super::provider::start_host_proxy(socket)?;
-    }
+        Some(super::provider::start_host_proxy(socket)?)
+    } else {
+        None
+    };
     // The parent receives this before ACP initialize and never sends business work earlier.
     println!("{{\"scopeReady\":true}}");
     std::io::stdout().flush().map_err(unavailable)?;
@@ -661,6 +718,13 @@ pub fn enter_and_exec(
     let mut child = command.spawn().map_err(unavailable)?;
     drop(gate); // All untrusted descendants now inherit the recorded scope.
     loop {
+        if provider_health
+            .as_ref()
+            .is_some_and(|flag| !flag.load(std::sync::atomic::Ordering::Acquire))
+        {
+            let _ = child.kill();
+            return Err(ProcessError::Transport);
+        }
         if let Some(status) = child.try_wait().map_err(unavailable)? {
             return if status.success() {
                 Ok(())

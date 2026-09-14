@@ -4,6 +4,9 @@ use crate::config::{IsolationConfig, RuntimeProfile, WorkspaceProfile};
 pub struct Supervisor;
 pub(super) struct Scope;
 impl Supervisor {
+    pub fn has_process_command(&self, _: [u8; 16], _: &[&str]) -> Result<bool, ProcessError> {
+        Err(ProcessError::UnsafeProfile)
+    }
     pub fn open(_: &IsolationConfig) -> Result<Self, ProcessError> {
         Err(ProcessError::UnsafeProfile)
     }

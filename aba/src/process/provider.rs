@@ -10,7 +10,7 @@ use std::path::Path;
 use std::process::Command;
 use std::sync::{
     Arc, Mutex,
-    atomic::{AtomicUsize, Ordering},
+    atomic::{AtomicBool, AtomicUsize, Ordering},
 };
 use std::thread;
 use std::time::{Duration, Instant};
@@ -50,7 +50,14 @@ impl Drop for Permit {
     }
 }
 
-pub(super) fn start_host_proxy(socket: &Path) -> Result<(), ProcessError> {
+struct ListenerLifetime(Arc<AtomicBool>);
+impl Drop for ListenerLifetime {
+    fn drop(&mut self) {
+        self.0.store(false, Ordering::Release);
+    }
+}
+
+pub(super) fn start_host_proxy(socket: &Path) -> Result<Arc<AtomicBool>, ProcessError> {
     let base = std::env::var("HARNESS_CODEX_API_BASE_URL").map_err(failed)?;
     let key = std::env::var("HARNESS_CODEX_API_KEY").map_err(failed)?;
     let base = provider_base(&base)?;
@@ -71,9 +78,12 @@ pub(super) fn start_host_proxy(socket: &Path) -> Result<(), ProcessError> {
     }
     let listener = UnixListener::bind(socket).map_err(failed)?; // Never removes/replaces an old socket.
     let count = Arc::new(AtomicUsize::new(0));
+    let healthy = Arc::new(AtomicBool::new(true));
+    let lifetime = ListenerLifetime(Arc::clone(&healthy));
     thread::Builder::new()
         .name("aba-provider-listener".into())
         .spawn(move || {
+            let _lifetime = lifetime;
             for incoming in listener.incoming() {
                 let Ok(mut stream) = incoming else {
                     break;
@@ -98,7 +108,7 @@ pub(super) fn start_host_proxy(socket: &Path) -> Result<(), ProcessError> {
             }
         })
         .map_err(failed)?;
-    Ok(())
+    Ok(healthy)
 }
 
 fn provider_base(value: &str) -> Result<String, ProcessError> {
@@ -606,12 +616,14 @@ pub fn run_contained(
     runtime: &Path,
     args: &[String],
 ) -> Result<(), ProcessError> {
-    if let Some(socket) = socket {
+    let healthy = if let Some(socket) = socket {
         if socket != Path::new("/run/harness-provider.sock") {
             return Err(ProcessError::UnsafeProfile);
         }
-        start_namespace_relay(socket)?;
-    }
+        Some(start_namespace_relay(socket)?)
+    } else {
+        None
+    };
     let filter = syscall_filter()?;
     let mut command = Command::new("/usr/bin/bwrap");
     command
@@ -639,21 +651,36 @@ pub fn run_contained(
     if socket.is_some() {
         command.env("HARNESS_CODEX_API_BASE_URL", LOCAL_PROVIDER);
     }
-    let status = command.status().map_err(failed)?;
-    if status.success() {
-        Ok(())
-    } else {
-        Err(ProcessError::Transport)
+    let mut child = command.spawn().map_err(failed)?;
+    loop {
+        if let Some(status) = child.try_wait().map_err(failed)? {
+            return if status.success() {
+                Ok(())
+            } else {
+                Err(ProcessError::Transport)
+            };
+        }
+        if healthy
+            .as_ref()
+            .is_some_and(|flag| !flag.load(Ordering::Acquire))
+        {
+            let _ = child.kill();
+            return Err(ProcessError::Transport);
+        }
+        thread::sleep(Duration::from_millis(50));
     }
 }
 
-fn start_namespace_relay(socket: &Path) -> Result<(), ProcessError> {
+fn start_namespace_relay(socket: &Path) -> Result<Arc<AtomicBool>, ProcessError> {
     let socket = socket.to_path_buf();
     let listener = TcpListener::bind("127.0.0.1:39121").map_err(failed)?;
     let count = Arc::new(AtomicUsize::new(0));
+    let healthy = Arc::new(AtomicBool::new(true));
+    let lifetime = ListenerLifetime(Arc::clone(&healthy));
     thread::Builder::new()
         .name("aba-provider-relay".into())
         .spawn(move || {
+            let _lifetime = lifetime;
             for incoming in listener.incoming() {
                 let Ok(tcp) = incoming else {
                     break;
@@ -671,7 +698,7 @@ fn start_namespace_relay(socket: &Path) -> Result<(), ProcessError> {
             }
         })
         .map_err(failed)?;
-    Ok(())
+    Ok(healthy)
 }
 fn relay(tcp: TcpStream, socket: &Path) -> Result<(), ProcessError> {
     let unix = UnixStream::connect(socket).map_err(failed)?;

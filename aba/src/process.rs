@@ -1,5 +1,6 @@
 //! Local ACP process boundary with non-blocking bidirectional dispatch.
 //! Gateway calls submit/poll; prompt remains only for the CLI probe and legacy tests.
+pub mod probe;
 #[cfg(target_os = "linux")]
 pub mod provider;
 #[cfg(target_os = "linux")]
