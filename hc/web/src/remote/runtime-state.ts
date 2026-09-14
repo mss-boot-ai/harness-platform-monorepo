@@ -188,6 +188,7 @@ export function receiveRuntime(state: RuntimeState, payload: unknown, sessionId:
   }
   if (message.method !== 'session/update') return state;
   const update = record(params.update);
+  if (update?.sessionUpdate === 'mss_execution_diagnostic') return appendDiagnostic(state, '执行端有无法归属的迟到事件，未将其附加到当前轮次。');
   if (update?.sessionUpdate === 'config_option_update') return confirmConfiguration(state, update);
   if (update?.sessionUpdate === 'current_mode_update' && typeof update.currentModeId === 'string') {
     return { ...state, config: state.config.map((item) => item.method === 'session/set_mode' && item.options.some((value) => value.value === update.currentModeId) ? { ...item, value: update.currentModeId as string } : item), configRevision: state.configRevision + 1 };
@@ -197,16 +198,19 @@ export function receiveRuntime(state: RuntimeState, payload: unknown, sessionId:
     if (typeof used === 'number' && typeof size === 'number' && Number.isSafeInteger(used) && Number.isSafeInteger(size) && used >= 0 && size > 0) return { ...state, usage: { used, size } };
     return appendDiagnostic(state, '上下文用量数据无效，保留最后一次可信上报。');
   }
-  if (turnId === null) return state;
-  if (update?.sessionUpdate === 'plan' && Array.isArray(update.entries) && update.entries.length <= 64) {
+  if (turnId !== null && update?.sessionUpdate === 'plan' && Array.isArray(update.entries) && update.entries.length <= 64) {
     const plan: PlanEntry[] = update.entries.map((entry) => { const value = record(entry); return { content: text(value?.content), status: text(value?.status, 64), priority: text(value?.priority, 32) }; });
     return { ...state, plan, planTurnId: turnId };
   }
   if (update?.sessionUpdate === 'tool_call' || update?.sessionUpdate === 'tool_call_update') {
     const id = update.toolCallId;
     if (typeof id !== 'string' || id.length === 0 || id.length > 256) return state;
-    const existing = state.tools.find((item) => item.id === id && item.turnId === turnId);
-    const item: ToolItem = { id, turnId, title: typeof update.title === 'string' ? text(update.title, 512) : existing?.title ?? '工具调用',
+    const existing = state.tools.find((item) => item.id === id);
+    if (update.sessionUpdate === 'tool_call_update' && existing === undefined) return appendDiagnostic(state, '收到没有原始归属的工具更新，未附加到当前轮次。');
+    if (update.sessionUpdate === 'tool_call' && existing !== undefined) return appendDiagnostic(state, '重复的工具标识未覆盖原轮次。');
+    const owner = existing?.turnId ?? turnId;
+    if (owner === null) return appendDiagnostic(state, '工具事件无法关联原轮次，保留为未确认状态。');
+    const item: ToolItem = { id, turnId: owner, title: typeof update.title === 'string' ? text(update.title, 512) : existing?.title ?? '工具调用',
       kind: text(update.kind, 64) || existing?.kind || 'other', status: text(update.status, 64) || existing?.status || 'pending',
       content: update.content === undefined ? existing?.content ?? '' : contentText(update.content),
       input: update.rawInput === undefined ? existing?.input ?? '' : jsonText(update.rawInput).text };

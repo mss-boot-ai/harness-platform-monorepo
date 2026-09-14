@@ -7,6 +7,18 @@ const update = (body: Record<string, unknown>, sessionId = 'session') => ({ json
 const permission = { jsonrpc: '2.0', id: 'original', method: 'session/request_permission', params: { sessionId: 'session', toolCall: { title: 'Read fixture', toolCallId: 'tool', rawInput: { path: 'fixture.txt' } }, options: [{ optionId: 'allow', name: 'Allow', kind: 'allow_once' }, { optionId: 'deny', name: 'Deny', kind: 'reject_once' }] } };
 
 describe('runtime-backed session controls', () => {
+  it('projects a late tool update onto its original turn, including after cancellation and while B is active', () => {
+    let state = receiveRuntime(newRuntimeState(), update({ sessionUpdate: 'tool_call', toolCallId: 'tool-a', status: 'in_progress' }), 'session', 'turn-a');
+    state = closeTurnPermissions(state, 'turn-a');
+    state = receiveRuntime(state, update({ sessionUpdate: 'tool_call', toolCallId: 'tool-b', status: 'in_progress' }), 'session', 'turn-b');
+    state = receiveRuntime(state, update({ sessionUpdate: 'tool_call_update', toolCallId: 'tool-a', status: 'completed' }), 'session', 'turn-b');
+    expect(state.tools.find((item) => item.id === 'tool-a')).toMatchObject({ turnId: 'turn-a', status: 'completed' });
+    expect(state.tools.find((item) => item.id === 'tool-b')).toMatchObject({ turnId: 'turn-b', status: 'in_progress' });
+    state = receiveRuntime(state, update({ sessionUpdate: 'tool_call_update', toolCallId: 'tool-b', status: 'completed' }), 'session', null);
+    expect(state.tools.find((item) => item.id === 'tool-b')?.status).toBe('completed');
+    state = receiveRuntime(state, update({ sessionUpdate: 'tool_call_update', toolCallId: 'unowned', status: 'completed' }), 'session', 'turn-b');
+    expect(state.tools).toHaveLength(2); expect(state.diagnostics.length).toBeGreaterThan(0);
+  });
   it('discovers actual options, ignores unsupported types, and never invents a model list', () => {
     const state = readDescriptor(newRuntimeState(), descriptor, 'session');
     expect(state.status).toBe('ready'); expect(state.cancelSupported).toBe(true);

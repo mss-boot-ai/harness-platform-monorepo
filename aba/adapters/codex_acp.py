@@ -150,6 +150,7 @@ class CodexACP:
         self.stopped = False
         self.pending_permissions: dict[str, dict[str, Any]] = {}
         self.file_changes: dict[str, list[dict[str, Any]]] = {}
+        self.tool_owners: dict[str, dict[str, Any]] = {}
         self.interrupt_sent = False
         self.stream = ""
         self.stream_bytes = 0
@@ -392,6 +393,44 @@ class CodexACP:
             if request_id is not None:
                 failure(request_id, "RUNTIME_RESULT_UNKNOWN", True)
 
+    def tool_event(self, method: str, params: dict[str, Any]) -> None:
+        item = params.get("item", {})
+        if not isinstance(item, dict) or item.get("type") not in ("commandExecution", "fileChange", "mcpToolCall", "webSearch"):
+            return
+        item_id, turn_id = item.get("id"), params.get("turnId")
+        if not isinstance(item_id, str) or not 0 < len(item_id) <= 256 or not isinstance(turn_id, str):
+            raise ValueError("Tool event binding is invalid")
+        owner = self.tool_owners.get(item_id)
+        current = self.request_id is not None and turn_id == self.turn_id
+        if owner is not None and (owner["thread"] != self.thread_id or owner["turn"] != turn_id or owner["kind"] != item["type"]):
+            raise ValueError("Tool event ownership changed")
+        if owner is None and not current:
+            self.update({"sessionUpdate": "mss_execution_diagnostic", "code": "UNOWNED_TOOL_EVENT"})
+            return
+        first = owner is None
+        if first:
+            if len(self.tool_owners) >= 128:
+                retired = next((key for key, value in self.tool_owners.items() if value["terminal"]), None)
+                if retired is None:
+                    raise ValueError("Outstanding tool ownership limit")
+                del self.tool_owners[retired]
+            owner = {"thread": self.thread_id, "turn": turn_id, "kind": item["type"], "terminal": False}
+            self.tool_owners[item_id] = owner
+        elif method == "item/started":
+            return  # A replayed start cannot rebind or regress an existing item.
+        if current:
+            self.flush()
+            if item["type"] == "fileChange":
+                changes = item.get("changes", [])
+                if isinstance(changes, list) and len(changes) <= 64 and len(json.dumps(changes).encode()) <= 20 * 1024 and len(self.file_changes) < 64:
+                    self.file_changes[item_id] = changes
+        owner["terminal"] = method == "item/completed"
+        self.update({"sessionUpdate": "tool_call" if first else "tool_call_update", "toolCallId": item_id,
+            "title": str(item.get("command") or item.get("tool") or item["type"])[:512], "kind": "edit" if item["type"] == "fileChange" else "execute",
+            "status": {"inProgress": "in_progress", "completed": "completed", "failed": "failed", "declined": "failed"}.get(item.get("status"), "pending"),
+            "rawInput": {"command": str(item.get("command", ""))[:4096]},
+            "content": [{"type": "content", "content": {"type": "text", "text": str(item.get("aggregatedOutput", ""))[-8192:]}}]})
+
     def events(self) -> None:
         while True:
             if self.server.closed:
@@ -436,6 +475,9 @@ class CodexACP:
                     if pending["requestId"] == params.get("requestId"):
                         self.pending_permissions.pop(key, None)
                 return
+            if method in ("item/started", "item/completed"):
+                self.tool_event(method, params)
+                return
             if self.request_id is None:
                 return
             event_turn = params.get("turnId") or params.get("turn", {}).get("id")
@@ -450,20 +492,6 @@ class CodexACP:
                     self.stream += delta[offset:offset + 4000]
                     if len(self.stream) >= 512 or time.monotonic() - self.last_flush >= 0.25:
                         self.flush()
-            elif method in ("item/started", "item/completed"):
-                item = params.get("item", {})
-                kind = item.get("type")
-                if kind in ("commandExecution", "fileChange", "mcpToolCall", "webSearch"):
-                    self.flush()
-                    if kind == "fileChange":
-                        changes = item.get("changes", [])
-                        if isinstance(changes, list) and len(changes) <= 64 and len(json.dumps(changes).encode()) <= 20 * 1024 and len(self.file_changes) < 64:
-                            self.file_changes[str(item.get("id"))] = changes
-                    self.update({"sessionUpdate": "tool_call" if method == "item/started" else "tool_call_update", "toolCallId": str(item.get("id", "")),
-                        "title": str(item.get("command") or item.get("tool") or kind)[:512], "kind": "edit" if kind == "fileChange" else "execute",
-                        "status": {"inProgress": "in_progress", "completed": "completed", "failed": "failed", "declined": "failed"}.get(item.get("status"), "pending"),
-                        "rawInput": {"command": str(item.get("command", ""))[:4096]},
-                        "content": [{"type": "content", "content": {"type": "text", "text": str(item.get("aggregatedOutput", ""))[-8192:]}}]})
             elif method == "turn/plan/updated":
                 self.update({"sessionUpdate": "plan", "entries": [{"content": str(item.get("step", ""))[:2048], "status": str(item.get("status", "pending")), "priority": "medium"} for item in params.get("plan", [])[:64]]})
             elif method == "thread/tokenUsage/updated":

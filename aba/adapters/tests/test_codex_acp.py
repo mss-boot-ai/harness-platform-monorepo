@@ -40,6 +40,7 @@ class CodexAdapterTest(unittest.TestCase):
         runtime.materialized = True
         runtime.cancel_requested = runtime.interrupt_sent = runtime.stopped = False
         runtime.pending_permissions, runtime.file_changes = {}, {}
+        runtime.tool_owners = {}
         runtime.lock = threading.RLock()
         runtime.stream, runtime.stream_bytes = "", 0
         runtime.last_flush = time.monotonic()
@@ -57,6 +58,24 @@ class CodexAdapterTest(unittest.TestCase):
         combined = "".join(x["params"]["update"]["content"]["text"] for x in self.packets if "method" in x)
         self.assertEqual(combined, text)
         self.assertEqual(self.packets[-1]["result"]["stopReason"], "end_turn")
+
+    def test_late_tool_completion_keeps_original_runtime_owner(self):
+        self.event("item/started", item={"id": "tool-a", "type": "commandExecution", "status": "inProgress"})
+        self.event("turn/completed", turn={"id": "turn", "status": "interrupted"})
+        self.runtime.turn_id, self.runtime.request_id = "turn-b", "prompt-b"
+        self.event("item/completed", item={"id": "tool-a", "type": "commandExecution", "status": "completed", "aggregatedOutput": "late output"})
+        self.assertEqual(self.packets[-1]["params"]["update"]["sessionUpdate"], "tool_call_update")
+        self.assertEqual(self.runtime.tool_owners["tool-a"]["turn"], "turn")
+        self.assertEqual(self.runtime.request_id, "prompt-b")
+        self.runtime.request_id = None
+        self.event("item/completed", item={"id": "tool-a", "type": "commandExecution", "status": "completed"})
+        self.assertEqual(self.packets[-1]["params"]["update"]["toolCallId"], "tool-a")
+
+    def test_unowned_late_tool_does_not_become_current_turn_output(self):
+        self.runtime.turn_id, self.runtime.request_id = "turn-b", "prompt-b"
+        self.event("item/completed", item={"id": "unknown", "type": "commandExecution", "status": "completed"})
+        self.assertEqual(self.packets[-1]["params"]["update"]["code"], "UNOWNED_TOOL_EVENT")
+        self.assertEqual(self.runtime.tool_owners, {})
 
     def test_approval_contains_exact_diff_is_one_time_and_scoped(self):
         changes = [{"path": str(self.runtime.workspace / "probe.txt"), "kind": {"type": "add"}, "diff": "+approval test"}]
