@@ -1,5 +1,5 @@
 import { type IndexedDbSecureStore, type ReadyGatewayConnection } from '@harness/hc-core';
-import { useEffect, useRef, useState, useSyncExternalStore } from 'react';
+import { useCallback, useEffect, useRef, useState, useSyncExternalStore } from 'react';
 import { closeEndpointSession, createEndpointSession, getEndpointSession, getEndpointSessionStatuses, inspectSessionCreation, listABAEndpoints, listEndpointSessions, type RegistrationSession } from './api';
 import { ChatWorkspace } from './chat/ChatWorkspace';
 import { conversationTitle, MAX_MESSAGES } from './chat/model';
@@ -26,7 +26,9 @@ export function SessionSetup({ connection, access, registration, secureStore, in
 }) {
   const [manager, setManager] = useState<ConversationManager | null>(null);
   const initial = useRef(initialDraft);
-  const [error, setError] = useState<string | null>(null);
+  const [failure, setFailure] = useState<{ readonly message: string; readonly closeRunId: string | null } | null>(null);
+  const setError = useCallback((message: string | null, closeRunId: string | null = null) => setFailure(message === null ? null : { message, closeRunId }), []);
+  const error = failure === null || failure.closeRunId !== null && manager?.executionClosed(failure.closeRunId) ? null : failure.message;
   const [edits, setEdits] = useState<DraftEdits>(() => new Map());
   const editVersion = useRef(0);
   const actions = useRef(new Set<string>());
@@ -107,12 +109,12 @@ export function SessionSetup({ connection, access, registration, secureStore, in
         (!session.requestedCapabilities.includes('remote-session-v1') || value.runtime.status === 'ready'));
   const actionBusy = [...actions.current].some((key) => key.startsWith(`${selectedId ?? 'compose'}:`));
   const recoveryBusy = actions.current.has(`${selectedId ?? 'compose'}:recovery`);
-  const perform = (operation: () => Promise<unknown>, message: string, id = selectedId, kind = 'action') => {
+  const perform = (operation: () => Promise<unknown>, message: string, id = selectedId, kind = 'action', closeRunId: string | null = null) => {
     const key = `${id ?? 'compose'}:${kind}`;
     if (actions.current.has(key)) return;
     actions.current.add(key); refreshActions((count) => count + 1);
     setError(null);
-    void Promise.resolve().then(operation).catch((cause: unknown) => { if (!(cause instanceof ConversationActionCancelled) && mounted.current && (manager?.snapshot().selectedId ?? null) === id) setError(message); }).finally(() => {
+    void Promise.resolve().then(operation).catch((cause: unknown) => { if (!(cause instanceof ConversationActionCancelled) && mounted.current && (manager?.snapshot().selectedId ?? null) === id) setError(message, closeRunId); }).finally(() => {
       actions.current.delete(key); if (mounted.current) refreshActions((count) => count + 1);
     });
   };
@@ -196,7 +198,7 @@ export function SessionSetup({ connection, access, registration, secureStore, in
   return <ChatWorkspace draft={draft} onDraftChange={changeDraft} onSubmit={() => perform(submit, '本次发送尚未确认，草稿已保留。请检查会话状态后再操作。', selectedId, 'send')}
     onNewChat={newChat} newChatDisabled={view.status !== 'ready'}
     draftSaved={edit === undefined && view.pendingWrites === 0 && view.status === 'ready'} composerDisabled={view.status !== 'ready'}
-    onEndChat={selectedRunId !== null && !terminal ? () => perform(() => manager!.close(selectedId!, selectedRunId), '关闭会话未确认，请核对执行端状态。', selectedId, 'recovery') : null}
+    onEndChat={selectedRunId !== null && !terminal ? () => perform(() => manager!.close(selectedId!, selectedRunId), '关闭会话未确认，请核对执行端状态。', selectedId, 'recovery', selectedRunId) : null}
     {...(value?.runtime.cancelSupported && !readOnly && view.online ? { onCancelTurn: () => perform(() => manager!.cancel(selectedId!, value.session.sessionId), '停止请求未确认，请检查当前轮次。', selectedId, 'recovery'), cancelPending: value.cancelPending } : {})}
     renderTurnActivity={(turnId) => {
       const run = conversationRuns.find((run) => run.data.messages.some((message) => message.id === `assistant-${turnId}`));
@@ -205,11 +207,11 @@ export function SessionSetup({ connection, access, registration, secureStore, in
         onDecision={(id, option) => perform(() => manager!.decide(selectedId!, id, option, run.data.session.sessionId), '权限请求已失效或提交未确认，请核对当前会话。')} />;
     }}
     recoveryActions={<><WorkspaceOccupancy key={`occupancy-${selectedId}`} occupants={occupants} busy={recoveryBusy} onSelect={selectConversation}
-      onRelease={(occupant) => perform(() => occupant.conversationId === null ? manager!.closeUnrecoverable(occupant.runId!) : manager!.close(occupant.conversationId, occupant.runId!), '执行端尚未确认释放项目，请稍后核对。', selectedId, 'recovery')} />
+      onRelease={(occupant) => perform(() => occupant.conversationId === null ? manager!.closeUnrecoverable(occupant.runId!) : manager!.close(occupant.conversationId, occupant.runId!), '执行端尚未确认释放项目，请稍后核对。', selectedId, 'recovery', occupant.runId)} />
       <RecoveryActions key={selectedId ?? 'compose'} conversation={conversation ?? null} blocked={blocked} terminal={terminal} online={view.online} busy={recoveryBusy}
       onCheckCreation={(cancel) => perform(() => manager!.checkCreation(selectedId!, cancel), '原创建尚未确认，请保留草稿并稍后再检查。', selectedId, 'recovery')}
       onInspect={() => perform(() => manager!.inspect(selectedId!), '无法核对当前运行，请稍后重试。', selectedId, 'recovery')}
-      onClose={() => perform(() => manager!.close(selectedId!, selectedRunId ?? undefined), '旧运行尚未确认结束。', selectedId, 'recovery')}
+      onClose={() => perform(() => manager!.close(selectedId!, selectedRunId ?? undefined), '旧运行尚未确认结束。', selectedId, 'recovery', selectedRunId)}
       onContinue={() => perform(() => manager!.continueConversation(selectedId!), '旧运行尚未确认结束，暂时无法继续。', selectedId, 'recovery')}
       onReconnect={onOpenSettings} onNew={newChat} /></>}
     onRenameConversation={(id, title) => perform(() => manager!.rename(id, title), '对话名称未能保存。', id)}

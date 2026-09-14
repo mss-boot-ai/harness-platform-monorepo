@@ -87,6 +87,17 @@ describe('endpoint conversation coordination', () => {
     expect(vi.mocked(f.api.close).mock.calls[0]?.[1]).toBe(vi.mocked(f.api.close).mock.calls[1]?.[1]);
     expect(f.manager.executionClosed(id)).toBe(true);
   });
+  it('replaces a timed-out closure notice when a later exact status confirms shutdown', async () => {
+    const f = await fixture(); await f.manager.load(); await f.manager.bind(connection(f.socket));
+    const id = f.a.session.sessionId;
+    vi.mocked(f.api.close).mockResolvedValueOnce({ ...f.a.session, status: 'DRAINING' });
+    vi.mocked(f.api.status).mockRejectedValueOnce(new Error('temporary status failure'));
+    await expect(f.manager.close(id)).rejects.toThrow('temporary status failure');
+    expect(f.manager.snapshot().conversations.find((entry) => entry.id === id)?.notice).toContain('等待');
+    f.setSessions([{ ...f.a.session, status: 'CLOSED' }, f.b.session]);
+    await f.manager.refresh();
+    expect(f.manager.snapshot().conversations.find((entry) => entry.id === id)?.notice).toContain('已确认结束');
+  });
   it('creates a local conversation independently of old runs and scopes failed creation to it', async () => {
     const f = await fixture(true); await f.manager.load(); await f.manager.bind(connection(f.socket));
     const input = { abaEndpointId: f.a.value.aba.id, workspaceId: 'fixture', runtimeProfileId: 'fixture', draft: 'first draft' };

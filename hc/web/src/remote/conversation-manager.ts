@@ -255,6 +255,7 @@ export class ConversationManager {
       try {
         await controller.observe(session);
         if (!applicable()) return;
+        if (session.status === 'CLOSED') await this.confirmClosureNotice(id);
         if (!this.allowed.has(id)) restored.push(id);
         delete this.recovery[id]; this.allowed.add(id);
       } catch { if (applicable()) { this.allowed.delete(id); this.recovery[id] = '会话身份或本地保存状态不一致，已暂停操作。'; } }
@@ -388,6 +389,14 @@ export class ConversationManager {
   public decide(id: string, request: RpcId, option: string | null, expectedRunId?: string): Promise<void> { return this.actionable(id, expectedRunId).decide(request, option); }
   public describeNow(id: string): Promise<void> { return this.actionable(id).describe(); }
   public executionClosed(runId: string): boolean { return this.knownClosed.has(runId) || isTerminal(this.controllers.get(runId)?.snapshot().data.session.status ?? ''); }
+  private async confirmClosureNotice(runId: string): Promise<void> {
+    const notice = '本次运行已确认结束，历史已保留。可以继续此对话或新建对话。';
+    for (const { value } of this.entries.values()) {
+      if (value.activeRunId === runId && value.closeOperation?.runId === runId && value.notice !== notice) {
+        await this.changeEntry(value.id, (entry) => entry.activeRunId === runId ? { ...entry, notice } : entry);
+      }
+    }
+  }
   public async inspect(id: string): Promise<void> {
     const runId = this.entry(id).activeRunId;
     if (runId === null) return;
@@ -395,6 +404,7 @@ export class ConversationManager {
     if (session.sessionId !== runId || session.hcEndpointId !== this.endpointId) throw new Error('Execution status binding changed');
     if (isTerminal(session.status)) this.knownClosed.add(runId);
     await this.controllers.get(runId)?.observe(session);
+    if (session.status === 'CLOSED') await this.confirmClosureNotice(runId);
     this.emit();
   }
   public newConversation(target: ExecutionTarget | null = this.snapshot().workspace?.target ?? null, draft = ''): Promise<string> {
@@ -502,7 +512,7 @@ export class ConversationManager {
       this.unrecoverable = this.unrecoverable.filter((item) => item.sessionId !== runId);
       try { await this.controllers.get(runId)?.observe(session); }
       catch { this.entryFaults.set(id, '运行已结束，但原记录未能同步；可以保留历史并开始新的运行。'); }
-      await this.changeEntry(id, (value) => value.activeRunId === runId ? { ...value, notice: '本次运行已结束，历史已保留。可以继续此对话或新建对话。' } : value);
+      await this.confirmClosureNotice(runId);
       this.emit();
     })());
   }
