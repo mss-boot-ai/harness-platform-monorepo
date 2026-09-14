@@ -248,10 +248,29 @@ impl ProviderPolicy {
             });
         let generation_disabled =
             shape.and_then(|value| value.get("generate")) == Some(&serde_json::Value::Bool(false));
+        let input_allowed = shape
+            .and_then(|value| value.get("input"))
+            .is_none_or(|value| safe_input(value, 0));
+        let choice_allowed =
+            shape
+                .and_then(|value| value.get("tool_choice"))
+                .is_none_or(|choice| {
+                    matches!(choice.as_str(), Some("auto" | "none" | "required"))
+                        || matches!(
+                            choice.get("type").and_then(serde_json::Value::as_str),
+                            Some("function" | "custom")
+                        )
+                });
+        let unknown_control_count = shape
+            .and_then(serde_json::Value::as_object)
+            .map_or(0, |object| {
+                object.keys().filter(|key| !allowed_control(key)).count()
+            });
         if let Ok(bytes) = serde_json::to_vec(
             &serde_json::json!({"code":code,"known_controls_present":known,"null_controls":null_controls,
                 "tool_kinds":tool_kinds,"model_allowed":model_allowed,"excessive_output":excessive_output,
-                "store_disabled":store_disabled,"include_allowed":include_allowed,"generation_disabled":generation_disabled}),
+                "store_disabled":store_disabled,"include_allowed":include_allowed,"generation_disabled":generation_disabled,
+                "input_allowed":input_allowed,"choice_allowed":choice_allowed,"unknown_control_count":unknown_control_count}),
         ) && let Ok(mut file) = file.lock()
         {
             let _ = file.write_all(&bytes).and_then(|()| file.write_all(b"\n"));
@@ -262,35 +281,11 @@ impl ProviderPolicy {
             let mut value: serde_json::Value =
                 serde_json::from_slice(&request.body).map_err(failed)?;
             let object = value.as_object_mut().ok_or(ProcessError::Protocol)?;
-            if object.keys().any(|key| {
-                !matches!(
-                    key.as_str(),
-                    "model"
-                        | "input"
-                        | "instructions"
-                        | "tools"
-                        | "tool_choice"
-                        | "parallel_tool_calls"
-                        | "reasoning"
-                        | "text"
-                        | "stream"
-                        | "stream_options"
-                        | "store"
-                        | "include"
-                        | "temperature"
-                        | "top_p"
-                        | "max_output_tokens"
-                        | "metadata"
-                        | "service_tier"
-                        | "prompt_cache_key"
-                        | "prompt_cache_retention"
-                        | "safety_identifier"
-                        | "truncation"
-                )
-            }) || object
-                .get("model")
-                .and_then(serde_json::Value::as_str)
-                .is_none_or(|model| !self.models.contains(model))
+            if object.keys().any(|key| !allowed_control(key))
+                || object
+                    .get("model")
+                    .and_then(serde_json::Value::as_str)
+                    .is_none_or(|model| !self.models.contains(model))
                 || object
                     .get("store")
                     .is_some_and(|value| value != &serde_json::Value::Bool(false))
@@ -344,6 +339,32 @@ impl ProviderPolicy {
             .map_err(|_| ProcessError::Limit)?;
         Ok(())
     }
+}
+fn allowed_control(key: &str) -> bool {
+    matches!(
+        key,
+        "model"
+            | "input"
+            | "instructions"
+            | "tools"
+            | "tool_choice"
+            | "parallel_tool_calls"
+            | "reasoning"
+            | "text"
+            | "stream"
+            | "stream_options"
+            | "store"
+            | "include"
+            | "temperature"
+            | "top_p"
+            | "max_output_tokens"
+            | "metadata"
+            | "service_tier"
+            | "prompt_cache_key"
+            | "prompt_cache_retention"
+            | "safety_identifier"
+            | "truncation"
+    )
 }
 fn validate_tools(tools: &serde_json::Value, depth: usize) -> Result<(), ProcessError> {
     let tools = tools.as_array().ok_or(ProcessError::Protocol)?;
