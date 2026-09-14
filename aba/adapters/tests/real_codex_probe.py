@@ -45,7 +45,7 @@ def main() -> int:
             cancelled = False
             started = time.monotonic()
             while time.monotonic() < deadline:
-                if cancel and not cancelled and time.monotonic() - started > 2:
+                if cancel and not cancelled and tools > 0:
                     send({"method": "session/cancel", "params": {"sessionId": session_id}})
                     cancelled = True
                 try:
@@ -80,6 +80,11 @@ def main() -> int:
             send({"id": "new", "method": "session/new", "params": {"cwd": directory, "mcpServers": []}})
             created, _, _, _ = receive("new")
             session_id = created["sessionId"]
+            if args.controls:
+                effort = next(x for x in created["configOptions"] if x["id"] == "effort")
+                send({"id": "initial-config", "method": "session/set_config_option", "params": {"sessionId": session_id,
+                    "configId": "effort", "value": effort["options"][0]["value"]}})
+                receive("initial-config")
             def prompt(name, text, **options):
                 send({"id": name, "method": "session/prompt", "params": {"sessionId": session_id, "prompt": [{"type": "text", "text": text}]}})
                 return receive(name, **options)
@@ -94,12 +99,14 @@ def main() -> int:
                 send({"id": "config", "method": "session/set_config_option", "params": {"sessionId": session_id,
                     "configId": "effort", "value": effort["options"][0]["value"]}})
                 receive("config")
+                _, text, _, _ = prompt("context-after-config", "What exact test code did I give you earlier? Reply only with that code, without tools.")
+                assert "CONTEXT_MARKER_3141" in text
                 _, _, _, count = prompt("approval-reject", "Use apply_patch to create approval-probe.txt containing EXACT_APPROVAL_MARKER. Request approval for this single edit, no shell fallback. If denied, stop.")
                 assert count > 0 and not (workspace / "approval-probe.txt").exists()
                 _, _, _, count = prompt("approval-allow", "Try the same apply_patch creation of approval-probe.txt with EXACT_APPROVAL_MARKER once more. Request approval; no shell fallback.", allow=True)
                 assert count > 0 and "EXACT_APPROVAL_MARKER" in (workspace / "approval-probe.txt").read_text()
-                result, _, _, _ = prompt("cancel", "Run a shell command sleep 30 and then report completion.", cancel=True)
-                assert result["stopReason"] == "cancelled"
+                result, _, tools, _ = prompt("cancel", "Use the shell tool now to run sleep 30, then report completion.", cancel=True)
+                assert result["stopReason"] == "cancelled" and tools > 0
                 _, text, _, _ = prompt("after-cancel", "Reply only with CONTINUED_AFTER_CANCEL, without tools.")
                 assert "CONTINUED_AFTER_CANCEL" in text
             print(json.dumps({"verified": "real-provider", "context": True, "fileRead": True, "controls": args.controls}), flush=True)
