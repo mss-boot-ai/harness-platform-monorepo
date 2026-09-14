@@ -44,10 +44,12 @@ impl ControlState {
                 pending.request,
                 decision,
                 agent,
-                endpoint_id,
-                identity,
-                &pending.credential_id,
-                now_ms,
+                OpenContext {
+                    endpoint_id,
+                    identity,
+                    credential_id: &pending.credential_id,
+                    now_ms,
+                },
             )?);
         }
         let journal = self.journal.clone();

@@ -68,6 +68,13 @@ struct PendingOpen {
     cancelled: bool,
 }
 
+struct OpenContext<'a> {
+    endpoint_id: &'a [u8; 16],
+    identity: &'a EndpointIdentity,
+    credential_id: &'a [u8; 16],
+    now_ms: i64,
+}
+
 pub(super) struct ControlContext<'a> {
     pub endpoint_id: &'a [u8; 16],
     pub online_key: &'a VerifyingKey,
@@ -298,10 +305,12 @@ impl ControlState {
             request,
             decision,
             None,
-            endpoint_id,
-            identity,
-            credential_id,
-            now_ms,
+            OpenContext {
+                endpoint_id,
+                identity,
+                credential_id,
+                now_ms,
+            },
         )
     }
 
@@ -310,11 +319,14 @@ impl ControlState {
         request: OpenTunnelRequest,
         decision: PolicyDecision,
         agent: Option<AgentProcess>,
-        endpoint_id: &[u8; 16],
-        identity: &EndpointIdentity,
-        credential_id: &[u8; 16],
-        now_ms: i64,
+        context: OpenContext<'_>,
     ) -> Result<Vec<Vec<u8>>, GatewayError> {
+        let OpenContext {
+            endpoint_id,
+            identity,
+            credential_id,
+            now_ms,
+        } = context;
         let payload = OpenTunnelResult {
             session_id: request.session_id.clone(),
             status: decision.status as i32,
