@@ -92,10 +92,6 @@ func (server *Server) createSession(writer http.ResponseWriter, request *http.Re
 		writeDomainError(writer, err)
 		return
 	}
-	if !server.connections.online(abaID) {
-		writeGatewayError(writer, http.StatusServiceUnavailable, "ABA_OFFLINE", "selected ABA endpoint is offline")
-		return
-	}
 	idempotencyKey := request.Header.Get("Idempotency-Key")
 	if strings.TrimSpace(idempotencyKey) != idempotencyKey {
 		writeGatewayError(writer, http.StatusBadRequest, "INVALID_IDEMPOTENCY_KEY", "Idempotency-Key is invalid")
@@ -108,6 +104,38 @@ func (server *Server) createSession(writer http.ResponseWriter, request *http.Re
 	requestHash, err := endpointSessionRequestHash(endpoint.ID, sessionRequest)
 	if err != nil {
 		writeGatewayError(writer, http.StatusInternalServerError, "GATEWAY_INTERNAL", "session request could not be encoded")
+		return
+	}
+	previous, lookupErr := server.persistence.GetEndpointSessionCreation(request.Context(), endpoint.OwnerUserID, endpoint.TenantID, endpoint.ID, idempotencyKey)
+	if lookupErr == nil {
+		if previous.RequestHash != requestHash {
+			writeGatewayError(writer, http.StatusConflict, "IDEMPOTENCY_CONFLICT", "creation key belongs to a different target")
+			return
+		}
+		if previous.Status != domain.IdempotencyStatusCompleted {
+			writeGatewayError(writer, http.StatusConflict, "CREATION_IN_PROGRESS", "original creation is still being resolved")
+			return
+		}
+		writer.Header().Set("Idempotency-Replayed", "true")
+		writeRawJSON(writer, previous.HTTPStatus, previous.ResponseJSON)
+		return
+	}
+	if !domain.HasCode(lookupErr, domain.CodeNotFound) {
+		writeDomainError(writer, lookupErr)
+		return
+	}
+	generation, online := server.connections.generation(abaID)
+	if !online {
+		writeGatewayError(writer, http.StatusServiceUnavailable, "ABA_OFFLINE", "selected ABA endpoint is offline")
+		return
+	}
+	catalog, err := server.persistence.GetExecutionCatalog(request.Context(), endpoint.OwnerUserID, endpoint.TenantID, abaID, server.now().UTC())
+	if err != nil || catalog.ConnectionGeneration != generation {
+		writeGatewayError(writer, http.StatusConflict, "CATALOG_UNAVAILABLE", "refresh the execution host project catalog before starting")
+		return
+	}
+	if !catalog.Catalog.Allows(input.WorkspaceID, input.RuntimeProfileID) {
+		writeGatewayError(writer, http.StatusBadRequest, "EXECUTION_TARGET_NOT_ALLOWED", "selected project and Agent are not an allowed combination")
 		return
 	}
 	now := server.now().UTC()

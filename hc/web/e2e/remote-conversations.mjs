@@ -67,8 +67,8 @@ try {
   await page.getByRole('button', { name: '返回对话', exact: true }).click();
   const environment = async (workspace) => {
     await page.locator('.agent-picker > summary').click();
-    await page.getByLabel('Agent（Runtime ID）', { exact: true }).fill('fixture');
-    await page.getByLabel('工作区 ID', { exact: true }).fill(workspace);
+    await page.getByRole('combobox', { name: '项目', exact: true }).selectOption(workspace);
+    await page.getByRole('combobox', { name: 'Agent', exact: true }).selectOption('fixture');
     await page.locator('.agent-picker > summary').click();
   };
   const send = async (text) => {

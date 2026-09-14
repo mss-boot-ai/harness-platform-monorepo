@@ -3,6 +3,7 @@ import { base64UrlDecode, base64UrlEncode, deriveSessionDirectionKeys, Encrypted
 import type { ABAEndpointSummary, EndpointSessionSummary } from '../api';
 import type { ChatMessage } from '../chat/model';
 import { newRuntimeState, record, type ConfigOption, type RuntimeState } from './runtime-state';
+import { isExecutionTarget, type ExecutionTarget } from './execution-target';
 
 export const MAX_CONVERSATIONS = 32;
 export const MAX_OUTBOX = 16;
@@ -32,6 +33,7 @@ export interface CreationIntent {
 export interface ConversationWorkspace {
   readonly version: 1; readonly endpointId: string; readonly signingJkt: string; readonly kemJkt: string;
   readonly selectedId: string | null; readonly draft: string; readonly creation: CreationIntent | null;
+  readonly target: ExecutionTarget | null;
 }
 export interface StoredWorkspace { readonly revision: number | null; readonly value: ConversationWorkspace }
 const encoder = new TextEncoder();
@@ -144,6 +146,7 @@ export class ConversationStore {
       value.signingJkt !== this.identity.signing.thumbprint || value.kemJkt !== this.identity.kem.thumbprint ||
       !boundedText(value.draft, 16_000) || (value.selectedId !== null && !boundedText(value.selectedId, 32))) throw new Error('Workspace binding is invalid');
     if (value.selectedId !== null) idBytes(value.selectedId as string);
+    if (value.target !== undefined && value.target !== null && !isExecutionTarget(value.target)) throw new Error('Saved execution target is invalid');
     if (value.creation !== null) {
       const intent = record(value.creation);
       if (intent === null || typeof intent.id !== 'string' || !/^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/u.test(intent.id) ||
@@ -151,12 +154,12 @@ export class ConversationStore {
         !boundedText(intent.workspaceId, 128) || intent.workspaceId.trim() === '' || !boundedText(intent.draft, 16_000)) throw new Error('Creation intent is invalid');
       idBytes(intent.abaEndpointId);
     }
-    return value as unknown as ConversationWorkspace;
+    return { ...value, target: value.target ?? null } as unknown as ConversationWorkspace;
   }
   public async readWorkspace(): Promise<StoredWorkspace> {
     const stored = await this.vault.read(`remote-workspace-v1/${this.endpoint}`);
     if (stored === null) return { revision: null, value: { version: 1, endpointId: this.endpoint,
-      signingJkt: this.identity.signing.thumbprint, kemJkt: this.identity.kem.thumbprint, selectedId: null, draft: '', creation: null } };
+      signingJkt: this.identity.signing.thumbprint, kemJkt: this.identity.kem.thumbprint, selectedId: null, draft: '', creation: null, target: null } };
     try {
       if (stored.bytes.length > 160_000) throw new Error('Workspace metadata exceeds bound');
       return { revision: stored.revision, value: this.workspaceValue(JSON.parse(decoder.decode(stored.bytes))) };

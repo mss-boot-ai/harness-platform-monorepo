@@ -60,6 +60,7 @@ type Persistence interface {
 	UseDPoPReplay(context.Context, string, string, time.Time, time.Time, int64) error
 	PublishExecutionCatalog(context.Context, domain.PublishedCatalog) error
 	GetExecutionCatalog(context.Context, string, string, domain.ID, time.Time) (domain.PublishedCatalog, error)
+	GetEndpointSessionCreation(context.Context, string, string, domain.ID, string) (domain.IdempotencyRecord, error)
 }
 
 type persistencePinger interface {

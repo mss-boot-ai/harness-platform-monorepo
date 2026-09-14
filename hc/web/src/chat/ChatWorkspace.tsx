@@ -9,6 +9,7 @@ export interface ChatWorkspaceProps {
   readonly onOpenSettings: () => void; readonly onSelectConversation: (id: string) => void;
   readonly conversations: readonly ConversationItem[]; readonly selectedConversationId: string | null;
   readonly messages: readonly ChatMessage[]; readonly title: string; readonly agent: string;
+  readonly project?: string;
   readonly online: boolean; readonly connected: boolean; readonly busy: boolean; readonly responding: boolean;
   readonly canSubmit: boolean; readonly readOnly: boolean; readonly hasActiveSession: boolean;
   readonly notice: string | null; readonly error: string | null; readonly targetSettings: ReactNode;
@@ -105,7 +106,7 @@ export function ChatWorkspace(props: ChatWorkspaceProps) {
     </aside>
     <main className="chat-main">
       <header className="chat-header"><div className="header-left"><button type="button" className="icon-button sidebar-toggle" aria-label="展开会话导航" aria-expanded={sidebarOpen} onClick={() => { setCollapsed(false); setSidebarOpen(true); }}><Icon name="menu" /></button>
-        {props.targetSettings !== null ? <details className="agent-picker"><summary><strong>{props.agent || '选择 Agent'}</strong><Icon name="chevron" /></summary><div className="agent-popover">{props.targetSettings}</div></details>
+        {props.targetSettings !== null ? <details className="agent-picker"><summary><strong>{props.project || props.agent || '选择项目'}</strong><Icon name="chevron" /></summary><div className="agent-popover">{props.targetSettings}</div></details>
           : <button className="header-agent" type="button" onClick={props.onOpenSettings}>Harness<Icon name="chevron" /></button>}
       </div><div className="header-left">{props.onEndChat !== null && props.hasActiveSession ? <button type="button" className="secondary-button" disabled={props.busy || !props.online} onClick={() => setConfirm(true)}>结束会话</button> : null}<button className={`connection-badge ${props.online ? 'connected' : ''}`} type="button" onClick={props.onOpenSettings}><span className="connection-dot" />{props.online ? '已连接' : '连接 Agent'}</button></div></header>
       {props.notice !== null ? <div className="chat-notice" role="status">{props.notice}</div> : null}

@@ -9,7 +9,9 @@ async function fixture() {
   const peer = await createEndpointIdentity('conversation-aba', 'ABA', 'web-software');
   const session: EndpointSessionSummary = { sessionId: '01'.repeat(16), hcEndpointId: endpoint, abaEndpointId: '02'.repeat(16),
     status: 'ACTIVE', createdAt: new Date().toISOString(), requestedCapabilities: ['remote-session-v1'], runtimeProfileId: 'fixture-agent', workspaceId: 'fixture-workspace' };
-  const aba: ABAEndpointSummary = { id: session.abaEndpointId, name: 'My device', status: 'ACTIVE', type: 'ABA', signingPublicJwk: peer.signing.publicJwk, signingJkt: peer.signing.thumbprint };
+  const aba: ABAEndpointSummary = { id: session.abaEndpointId, name: 'My device', status: 'ACTIVE', type: 'ABA', signingPublicJwk: peer.signing.publicJwk, signingJkt: peer.signing.thumbprint,
+    catalog: { status: 'ready', revision: 'a'.repeat(64), runtimes: [{ id: session.runtimeProfileId, displayName: 'Fixture Agent' }],
+      workspaces: [{ id: session.workspaceId, displayName: 'Fixture project', runtimeIds: [session.runtimeProfileId] }] } };
   const material: SessionKeyMaterial = { sessionId: idBytes(session.sessionId), generation: 1n, keyId: new Uint8Array(16).fill(5),
     srk: crypto.getRandomValues(new Uint8Array(32)), sessionNonce: crypto.getRandomValues(new Uint8Array(32)),
     hcToAbaNoncePrefix: new Uint8Array(4).fill(6), abaToHcNoncePrefix: new Uint8Array(4).fill(7),
@@ -26,7 +28,7 @@ async function fixture() {
 describe('bound encrypted conversation snapshots', () => {
   it('stores selection, compose drafts and pending creation outside the conversation prefix with CAS', async () => {
     const f = await fixture(); const initial = await f.store.readWorkspace();
-    const value = { ...initial.value, draft: 'private compose', creation: { id: crypto.randomUUID(), abaEndpointId: f.aba.id,
+    const value = { ...initial.value, target: { abaEndpointId: f.aba.id, workspaceId: 'fixture-workspace', runtimeProfileId: 'fixture-agent' }, draft: 'private compose', creation: { id: crypto.randomUUID(), abaEndpointId: f.aba.id,
       workspaceId: 'fixture', runtimeProfileId: 'fixture', draft: 'private pending creation' } };
     const revision = await f.store.writeWorkspace(value, null);
     expect((await f.store.readWorkspace()).value).toEqual(value); expect(await f.store.list()).toHaveLength(0);

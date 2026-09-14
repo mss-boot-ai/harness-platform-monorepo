@@ -7,6 +7,7 @@ import {
   type P256PublicJwk,
   type VerifiedTrustManifest,
 } from '@harness/hc-core';
+import { parseExecutionCatalog, type ExecutionCatalog } from './remote/execution-target';
 
 const adminBase = '/admin/api';
 
@@ -35,6 +36,7 @@ export interface WebSocketTicket {
 }
 
 export interface ABAEndpointSummary {
+  readonly catalog: ExecutionCatalog;
   readonly id: string;
   readonly name: string;
   readonly status: 'ACTIVE' | 'PENDING' | 'SUSPENDED' | 'REVOKED';
@@ -238,7 +240,7 @@ export function createEndpointSession(
     const path = '/gateway/v1/sessions';
     const body = JSON.stringify({
       abaEndpointId: input.abaEndpointId,
-      requestedCapabilities: ['prompt', 'session', 'permission', 'cancel', 'remote-session-v1'],
+      requestedCapabilities: ['prompt', 'session', 'remote-session-v1'],
       runtimeProfileId: input.runtimeProfileId,
       workspaceId: input.workspaceId,
     });
@@ -441,6 +443,7 @@ function parseEndpointSummary(input: unknown): ABAEndpointSummary | null {
   }
   return {
     id: value.id,
+    catalog: parseExecutionCatalog(value.catalog),
     name: value.name,
     signingJkt: value.signingJkt,
     signingPublicJwk: parseP256PublicJwk(objectValue(value.signingPublicJwk, 'ABA signing JWK') as JsonWebKey),

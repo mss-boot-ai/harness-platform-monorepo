@@ -9,6 +9,8 @@ import type { EndpointAccess } from './remote/endpoint-access';
 import type { RegisterEndpointShutdown } from './remote/endpoint-owner';
 import { RuntimeActivity, RuntimeConfiguration, type PendingConfig } from './remote/RuntimeControls';
 import { editDraft, finishDraft, type DraftEdits } from './remote/draft-edits';
+import { TargetPicker } from './remote/TargetPicker';
+import { executionTargetState, firstExecutionTarget } from './remote/execution-target';
 
 const loading: ManagerView = { status: 'loading', online: false, creating: false, workspace: null, selectedId: null, conversations: [],
   endpoints: [], unrecoverable: [], recovery: {}, error: null, pendingWrites: 0 };
@@ -22,9 +24,6 @@ export function SessionSetup({ connection, access, registration, secureStore, in
 }) {
   const [manager, setManager] = useState<ConversationManager | null>(null);
   const initial = useRef(initialDraft);
-  const [selectedABA, setSelectedABA] = useState('');
-  const [runtimeProfileId, setRuntimeProfileId] = useState(import.meta.env.VITE_HARNESS_DEFAULT_RUNTIME_PROFILE_ID?.trim() || 'test-agent');
-  const [workspaceId, setWorkspaceId] = useState(import.meta.env.VITE_HARNESS_DEFAULT_WORKSPACE_ID?.trim() || 'harness-platform');
   const [error, setError] = useState<string | null>(null);
   const [creating, setCreating] = useState(false);
   const [edits, setEdits] = useState<DraftEdits>(() => new Map());
@@ -65,7 +64,17 @@ export function SessionSetup({ connection, access, registration, secureStore, in
   const selected = view.conversations.find((item) => item.data.session.sessionId === selectedId);
   const value = selected?.data;
   const session = value?.session;
-  const actualABA = view.endpoints.some((item) => item.id === selectedABA) ? selectedABA : view.endpoints[0]?.id ?? '';
+  const composeTarget = view.workspace?.target ?? null;
+  const target = session === undefined ? composeTarget : { abaEndpointId: session.abaEndpointId, workspaceId: session.workspaceId, runtimeProfileId: session.runtimeProfileId };
+  const targetState = executionTargetState(view.endpoints, target);
+  const actualABA = composeTarget?.abaEndpointId ?? '';
+  const runtimeProfileId = composeTarget?.runtimeProfileId ?? '';
+  const workspaceId = composeTarget?.workspaceId ?? '';
+  useEffect(() => {
+    if (manager === null || view.status !== 'ready' || view.workspace?.target !== null || view.pendingWrites !== 0) return;
+    const first = firstExecutionTarget(view.endpoints);
+    if (first !== null) void manager.target(first).catch(() => { if (mounted.current) setError('项目选择尚未保存，请重新选择。'); });
+  }, [manager, view.status, view.workspace?.target, view.pendingWrites, view.endpoints]);
   const edit = edits.get(selectedId);
   const draft = edit?.text ?? value?.draft ?? view.workspace?.draft ?? initialDraft;
   const terminal = session !== undefined && isTerminal(session.status);
@@ -83,8 +92,8 @@ export function SessionSetup({ connection, access, registration, secureStore, in
   const full = value !== undefined && (value.messages.length >= MAX_MESSAGES || value.messages.reduce((sum, message) => sum + message.text.length, 0) >= 1_048_576);
   const workspaceBusy = value === undefined ? manager?.workspaceConflict(actualABA, workspaceId.trim()) === true
     : manager?.workspaceConflict(value.aba.id, value.session.workspaceId, value.session.sessionId) === true;
-  const canSubmit = view.status === 'ready' && view.online && !readOnly && !responding && !full && !workspaceBusy && !creating &&
-    (value === undefined ? view.workspace?.creation === null && actualABA !== '' && workspaceId.trim() !== '' && runtimeProfileId.trim() !== ''
+  const canSubmit = view.status === 'ready' && view.pendingWrites === 0 && view.online && !readOnly && !responding && !full && !workspaceBusy && !creating &&
+    (value === undefined ? view.workspace?.creation === null && targetState.available
       : value.keys !== null && session?.status === 'ACTIVE' && value.requests.length === 0 &&
         (!session.requestedCapabilities.includes('remote-session-v1') || value.runtime.status === 'ready'));
   const actionBusy = actions.current.has(selectedId ?? 'compose');
@@ -131,13 +140,10 @@ export function SessionSetup({ connection, access, registration, secureStore, in
     title: conversationTitle(item.data.messages.find((message) => message.role === 'user')?.text ?? item.data.draft),
     detail: isTerminal(item.data.session.status) ? '已结束 · 只读' : item.fault !== null || item.data.blocked !== null || view.recovery[item.data.session.sessionId] !== undefined ? '需要检查'
       : item.data.runtime.permissions.some((permission) => permission.status === 'pending') ? '等待授权' : item.data.awaiting !== null ? '正在回复' : '已保存' }));
-  const targetSettings = <div className="target-form"><h2>执行环境</h2><p>选择此设备本地已允许的 Agent 和工作区。</p>
-    <label>执行设备<select value={value?.aba.id ?? actualABA} disabled={value !== undefined || creating} onChange={(event) => setSelectedABA(event.target.value)}>
-      {view.endpoints.length === 0 ? <option value="">暂无可用设备</option> : view.endpoints.map((item) => <option key={item.id} value={item.id}>{item.name}</option>)}</select></label>
-    <label>Agent（Runtime ID）<input value={session?.runtimeProfileId ?? runtimeProfileId} disabled={value !== undefined || creating} onChange={(event) => setRuntimeProfileId(event.target.value)} /></label>
-    <label>工作区 ID<input value={session?.workspaceId ?? workspaceId} disabled={value !== undefined || creating} onChange={(event) => setWorkspaceId(event.target.value)} /></label>
-    {value !== undefined ? <p>新建对话可以选择其他执行环境，现有会话会继续保留。</p>
-      : <button className="secondary-button" type="button" disabled={!view.online || creating} onClick={() => perform(() => manager?.refresh() ?? Promise.resolve(), '无法刷新设备和会话，请检查连接。')}>刷新设备列表</button>}
+  const targetSettings = <div className="target-form">
+    <TargetPicker endpoints={view.endpoints} target={target} disabled={value !== undefined || creating || !view.online || actionBusy}
+      onChange={(next) => perform(() => manager!.target(next), '项目选择未能保存，请重新选择。')}
+      onRefresh={() => perform(() => manager?.refresh() ?? Promise.resolve(), '无法刷新项目，请检查连接。')} />
     {view.workspace?.creation === null || view.workspace?.creation === undefined ? null : <section role="status"><p>上次创建尚未确认。可以使用原编号再次核对结果；不会自动发送草稿。</p>
       <button className="secondary-button" type="button" disabled={!view.online || view.creating} onClick={() => perform(async () => {
         const intent = manager?.snapshot().workspace?.creation;
@@ -170,7 +176,8 @@ export function SessionSetup({ connection, access, registration, secureStore, in
       onDecision={(id, option) => perform(() => manager!.decide(value.session.sessionId, id, option), '权限请求已失效或提交未确认，请核对当前会话。')} />}
     onOpenSettings={onOpenSettings} onSelectConversation={selectConversation}
     conversations={conversations} selectedConversationId={selectedId} messages={value?.messages ?? []}
-    title={conversationTitle(value?.messages.find((message) => message.role === 'user')?.text ?? '')} agent={session?.runtimeProfileId ?? runtimeProfileId}
+    title={conversationTitle(value?.messages.find((message) => message.role === 'user')?.text ?? '')}
+    agent={targetState.runtime?.displayName || value?.runtime.agentName || '选择 Agent'} project={targetState.workspace?.displayName ?? '选择项目'}
     online={view.online} connected busy={creating || actionBusy} responding={responding && !deliveryPending} deliveryPending={deliveryPending}
     canSubmit={canSubmit} readOnly={readOnly} hasActiveSession={session !== undefined && !terminal} targetSettings={targetSettings}
     error={error ?? view.error} notice={notice} />;

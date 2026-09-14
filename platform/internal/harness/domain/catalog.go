@@ -42,7 +42,7 @@ type PublishedCatalog struct {
 }
 
 func (catalog ExecutionCatalog) Validate() error {
-	if catalog.Version != 1 || len(catalog.Runtimes) > MaxCatalogEntries || len(catalog.Workspaces) > MaxCatalogEntries {
+	if catalog.Version != 1 || catalog.Runtimes == nil || catalog.Workspaces == nil || len(catalog.Runtimes) > MaxCatalogEntries || len(catalog.Workspaces) > MaxCatalogEntries {
 		return NewProblem(CodeInvalidArgument, "execution catalog version or size is invalid", nil)
 	}
 	runtimes := make(map[string]bool, len(catalog.Runtimes))

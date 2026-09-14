@@ -65,7 +65,14 @@ func TestHCSessionCreateIsIdempotentAndDeliversSignedOpenTunnel(t *testing.T) {
 		t.Fatalf("dial ABA WebSocket: %v", err)
 	}
 	defer abaConnection.Close()
-	completeClientChallenge(t, abaConnection, abaEndpoint, abaCredential, abaSigningKey)
+	abaGeneration := completeClientChallenge(t, abaConnection, abaEndpoint, abaCredential, abaSigningKey)
+	catalogDocument := domain.ExecutionCatalog{Version: 1, Runtimes: []domain.CatalogRuntime{{ID: "test-agent", DisplayName: "Test Agent"}},
+		Workspaces: []domain.CatalogWorkspace{{ID: "fixture", DisplayName: "Fixture", RuntimeIDs: []string{"test-agent"}}}}
+	catalogRevision, _ := catalogDocument.Revision()
+	if err := persistence.PublishExecutionCatalog(t.Context(), domain.PublishedCatalog{EndpointID: abaEndpoint.ID, OwnerUserID: abaEndpoint.OwnerUserID, TenantID: abaEndpoint.TenantID,
+		ConnectionGeneration: abaGeneration, Revision: catalogRevision, Catalog: catalogDocument, PublishedAt: now, ExpiresAt: now.Add(catalogTTL)}); err != nil {
+		t.Fatal(err)
+	}
 	hcEndpoint, hcCredential, err := persistence.GetEndpointCredential(
 		t.Context(), hcEndpointID, gatewayID(3), now,
 	)
@@ -507,6 +514,13 @@ func TestHCSessionCreateIsIdempotentAndDeliversSignedOpenTunnel(t *testing.T) {
 		t.Fatalf("encrypted delivery frames=%#v error=%v", delivery.Frames, err)
 	}
 
+	// A lost creation response remains reconcilable after the original target was withdrawn.
+	withdrawn := domain.ExecutionCatalog{Version: 1, Runtimes: []domain.CatalogRuntime{}, Workspaces: []domain.CatalogWorkspace{}}
+	withdrawnRevision, _ := withdrawn.Revision()
+	if err := persistence.PublishExecutionCatalog(t.Context(), domain.PublishedCatalog{EndpointID: abaEndpoint.ID, OwnerUserID: abaEndpoint.OwnerUserID, TenantID: abaEndpoint.TenantID,
+		ConnectionGeneration: abaGeneration, Revision: withdrawnRevision, Catalog: withdrawn, PublishedAt: now, ExpiresAt: now.Add(catalogTTL)}); err != nil {
+		t.Fatal(err)
+	}
 	replayed := perform("00000000-0000-4000-8000-000000000402")
 	if replayed.Code != http.StatusCreated || replayed.Header().Get("Idempotency-Replayed") != "true" ||
 		!bytes.Equal(replayed.Body.Bytes(), created.Body.Bytes()) {

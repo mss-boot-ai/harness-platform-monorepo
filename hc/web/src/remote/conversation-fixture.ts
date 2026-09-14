@@ -18,7 +18,9 @@ export async function controllerFixture(options: { readonly sessionId?: string; 
   const peer = await createEndpointIdentity('aba', 'ABA', 'web-software');
   const session: EndpointSessionSummary = { sessionId: options.sessionId ?? '01'.repeat(16), hcEndpointId: testEndpoint, abaEndpointId: options.abaId ?? '02'.repeat(16),
     status: 'ACTIVE', createdAt: new Date(testNow).toISOString(), requestedCapabilities: ['remote-session-v1'], runtimeProfileId: 'fixture', workspaceId: options.workspaceId ?? 'fixture' };
-  const aba: ABAEndpointSummary = { id: session.abaEndpointId, name: 'Test device', type: 'ABA', status: 'ACTIVE', signingPublicJwk: peer.signing.publicJwk, signingJkt: peer.signing.thumbprint };
+  const aba: ABAEndpointSummary = { id: session.abaEndpointId, name: 'Test device', type: 'ABA', status: 'ACTIVE', signingPublicJwk: peer.signing.publicJwk, signingJkt: peer.signing.thumbprint,
+    catalog: { status: 'ready', revision: 'a'.repeat(64), runtimes: [{ id: session.runtimeProfileId, displayName: 'Fixture Agent' }],
+      workspaces: [{ id: session.workspaceId, displayName: 'Fixture project', runtimeIds: [session.runtimeProfileId] }] } };
   const material: SessionKeyMaterial = { sessionId: idBytes(session.sessionId), generation: 1n, keyId: crypto.getRandomValues(new Uint8Array(16)), srk: crypto.getRandomValues(new Uint8Array(32)),
     sessionNonce: crypto.getRandomValues(new Uint8Array(32)), hcToAbaNoncePrefix: new Uint8Array(4).fill(5), abaToHcNoncePrefix: new Uint8Array(4).fill(6), notBeforeMs: BigInt(testNow - 1000), expiresAtMs: BigInt(testNow + 3_600_000) };
   const directions = await deriveSessionDirectionKeys(material, idBytes(testEndpoint));

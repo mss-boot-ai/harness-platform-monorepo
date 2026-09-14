@@ -7,6 +7,7 @@ import { ConversationController, ConversationTransportInterrupted, type Conversa
 import { ConversationStore, hex, isTerminal, MAX_CONVERSATIONS, newConversation,
   type ConversationWorkspace, type CreationIntent, type StoredConversation, type StoredWorkspace } from './conversation-store';
 import type { ConfigOption, RpcId } from './runtime-state';
+import { executionTargetState, type ExecutionTarget } from './execution-target';
 
 export interface ConversationAPI {
   abas(): Promise<readonly ABAEndpointSummary[]>;
@@ -272,6 +273,10 @@ export class ConversationManager {
     return this.metadata((value) => ({ ...value, selectedId: id })).then(() => {
       if (this.selection === intent) { this.selection = null; this.emit(); }
     });
+  }
+  public target(target: ExecutionTarget): Promise<void> {
+    if (!executionTargetState(this.endpoints, target).available) return Promise.reject(new Error('Selected project is unavailable'));
+    return this.metadata((value) => ({ ...value, target }));
   }
   public draft(id: string | null, text: string): Promise<void> {
     this.assertOpen();
