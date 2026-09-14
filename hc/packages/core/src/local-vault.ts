@@ -32,6 +32,16 @@ function validateKey(key: CryptoKey): void {
 }
 function buffer(bytes: Uint8Array): ArrayBuffer { return new Uint8Array(bytes).buffer; }
 
+/** Cursor/key commits must not use the browser's relaxed durability default. */
+function durableWrite(db: IDBDatabase, stores: string | string[]): IDBTransaction {
+  const transaction = db.transaction(stores, 'readwrite', { durability: 'strict' });
+  if (transaction.durability !== 'strict') {
+    transaction.abort();
+    throw new Error('Strict local durability is unavailable');
+  }
+  return transaction;
+}
+
 export class EncryptedLocalVault {
   public constructor(private readonly factory: IDBFactory, private readonly name: string) {}
   private open(): Promise<IDBDatabase> {
@@ -55,7 +65,7 @@ export class EncryptedLocalVault {
     const candidate = create ? await crypto.subtle.generateKey({ name: 'AES-GCM', length: 256 }, false, ['encrypt', 'decrypt']) : null;
     const db = await this.open();
     try {
-      const transaction = db.transaction(['keys', 'records'], 'readwrite');
+      const transaction = durableWrite(db, ['keys', 'records']);
       const keys = transaction.objectStore('keys');
       let key = await idbResult(keys.get('content-v1') as IDBRequest<CryptoKey | undefined>);
       if (key === undefined) {
@@ -104,7 +114,7 @@ export class EncryptedLocalVault {
     const cipher = await this.seal(`${id}/revision/${revision}`, bytes);
     const db = await this.open();
     try {
-      const tx = db.transaction('records', 'readwrite');
+      const tx = durableWrite(db, 'records');
       const records = tx.objectStore('records');
       const existing = await idbResult(records.get(id) as IDBRequest<VaultRecord | undefined>);
       if ((existing?.revision ?? null) !== expectedRevision) throw new Error('Local snapshot revision conflict');
@@ -129,7 +139,7 @@ export class EncryptedLocalVault {
     validateScope(id);
     const db = await this.open();
     try {
-      const tx = db.transaction('records', 'readwrite');
+      const tx = durableWrite(db, 'records');
       const records = tx.objectStore('records');
       const existing = await idbResult(records.get(id) as IDBRequest<VaultRecord | undefined>);
       if (existing !== undefined && existing.revision !== expectedRevision) throw new Error('Local snapshot revision conflict');

@@ -7,7 +7,7 @@ import { newRuntimeState, record, type ConfigOption, type RuntimeState } from '.
 export const MAX_CONVERSATIONS = 32;
 export const MAX_OUTBOX = 16;
 export const MAX_CONVERSATION_BYTES = 4 * 1024 * 1024;
-export interface RpcContext { readonly id: string; readonly kind: 'describe' | 'config'; readonly option?: ConfigOption }
+export interface RpcContext { readonly id: string; readonly kind: 'describe' | 'config'; readonly option?: ConfigOption; readonly requestedValue?: string }
 export interface OutboundPacket {
   readonly sequence: string; readonly messageId: string; readonly encoded: string;
   readonly createdAt: number; readonly operationId: string | null;
@@ -20,6 +20,7 @@ export interface Conversation {
   readonly inbound: string; readonly outbound: string; readonly outboundAck: string;
   readonly reservation: string | null; readonly outbox: readonly OutboundPacket[];
   readonly requests: readonly RpcContext[]; readonly cancelPending: boolean;
+  readonly sentIds: readonly { readonly sequence: string; readonly messageId: string; readonly operationId: string | null }[];
   readonly inboundHashes: readonly { readonly sequence: string; readonly hash: string }[];
   readonly closeKey: string | null; readonly updatedAt: number;
 }
@@ -73,7 +74,7 @@ function validatePublicState(raw: unknown, endpoint: string, identity: EndpointI
       !statuses.includes(String(session.status)) || !Array.isArray(session.requestedCapabilities) || session.requestedCapabilities.length > 16 ||
       !boundedText(session.runtimeProfileId, 128) || !boundedText(session.workspaceId, 128) || !boundedText(value.draft, 16_000) ||
       !Array.isArray(value.messages) || value.messages.length > 500 || !Array.isArray(value.outbox) || value.outbox.length > MAX_OUTBOX ||
-      !Array.isArray(value.requests) || value.requests.length > 32 || !Array.isArray(value.inboundHashes) || value.inboundHashes.length > 256 ||
+      !Array.isArray(value.sentIds) || value.sentIds.length > 256 || !Array.isArray(value.requests) || value.requests.length > 32 || !Array.isArray(value.inboundHashes) || value.inboundHashes.length > 256 ||
       typeof value.updatedAt !== 'number' || !Number.isSafeInteger(value.updatedAt) || typeof value.cancelPending !== 'boolean') throw new Error('Conversation snapshot binding or bounds invalid');
   idBytes(endpoint); idBytes(session.sessionId); idBytes(aba.id); if (record(aba.signingPublicJwk) === null) throw new Error('Invalid ABA key');
   parseP256PublicJwk(aba.signingPublicJwk as JsonWebKey);
@@ -91,6 +92,15 @@ function validatePublicState(raw: unknown, endpoint: string, identity: EndpointI
         !boundedText(item.messageId, 32) || !/^[A-Za-z0-9_-]+$/u.test(item.encoded) ||
         (item.operationId !== null && !boundedText(item.operationId, 256)) || typeof item.createdAt !== 'number' || !Number.isSafeInteger(item.createdAt)) throw new Error('Invalid durable outbox');
     idBytes(item.messageId); last = sequence(item.sequence);
+  }
+  let lastSent = 0n;
+  const sentMessages = new Set<string>();
+  for (const sent of value.sentIds) {
+    const item = record(sent);
+    if (item === null || sequence(item.sequence) <= lastSent || sequence(item.sequence) > sequence(value.outbound) ||
+        !boundedText(item.messageId, 32) || sentMessages.has(item.messageId) ||
+        (item.operationId !== null && !boundedText(item.operationId, 256))) throw new Error('Invalid sent message journal');
+    idBytes(item.messageId); lastSent = sequence(item.sequence); sentMessages.add(item.messageId);
   }
   for (const request of value.requests) {
     const item = record(request);
@@ -111,7 +121,7 @@ export function newConversation(session: EndpointSessionSummary, aba: ABAEndpoin
   return { version: 1, session, aba, signingJkt: identity.signing.thumbprint, kemJkt: identity.kem.thumbprint,
     draft, keys: null, messages: [], runtime: newRuntimeState(), awaiting: null, blocked: null,
     inbound: '0', outbound: '0', outboundAck: '0', reservation: null, outbox: [], requests: [],
-    inboundHashes: [], cancelPending: false, closeKey: null, updatedAt: Date.now() };
+    inboundHashes: [], sentIds: [], cancelPending: false, closeKey: null, updatedAt: Date.now() };
 }
 /** The vault encrypts the entire record, including keys, titles, prompts and operation metadata. */
 export class ConversationStore {
