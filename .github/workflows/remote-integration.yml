@@ -43,3 +43,51 @@ jobs:
           path: ${{ runner.temp }}/remote-integration.log
           if-no-files-found: warn
           retention-days: 7
+  production-hc-browser:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-go@v6
+        with:
+          go-version-file: platform/go.mod
+          cache-dependency-path: platform/go.sum
+      - uses: actions/setup-node@v6
+        with:
+          node-version: '24'
+      - name: Build actual application binaries and locked HC bundle
+        run: |
+          rustup toolchain install 1.88.0 --profile minimal
+          cargo +1.88.0 build --manifest-path aba/Cargo.toml --locked --bin aba
+          (cd platform && go build -o "${RUNNER_TEMP}/harness-admin" ./cmd/server && go build -o "${RUNNER_TEMP}/harness-gateway" ./cmd/harness-gateway)
+          corepack enable
+          corepack prepare pnpm@10.34.5 --activate
+          pnpm --dir hc install --frozen-lockfile
+          pnpm --dir hc lint
+          pnpm --dir hc typecheck
+          pnpm --dir hc test
+          pnpm --dir hc build
+          node --test hc/web/e2e/websocket-tap.test.mjs
+      - name: Install pinned browser tooling
+        run: |
+          npm install --prefix "${RUNNER_TEMP}/hc-browser-tools" --no-save --package-lock=false playwright@1.55.0
+          "${RUNNER_TEMP}/hc-browser-tools/node_modules/.bin/playwright" install --with-deps chromium
+          sudo apt-get install -y fonts-noto-cjk
+      - name: Verify production HC recovery with actual Gateway and ABA
+        env:
+          HC_BROWSER_TOOLS: ${{ runner.temp }}/hc-browser-tools
+          HC_TEST_ADMIN_BINARY: ${{ runner.temp }}/harness-admin
+          HC_TEST_GATEWAY_BINARY: ${{ runner.temp }}/harness-gateway
+          HARNESS_TEST_ABA_BINARY: ${{ github.workspace }}/aba/target/debug/aba
+          HC_BROWSER_OUTPUT: ${{ github.workspace }}/hc/web/browser-evidence/remote
+        run: node hc/web/e2e/remote-conversations.mjs
+      - name: Retain sanitized browser acceptance evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: hc-remote-browser-${{ github.sha }}
+          path: hc/web/browser-evidence/remote/
+          if-no-files-found: warn
+          retention-days: 7

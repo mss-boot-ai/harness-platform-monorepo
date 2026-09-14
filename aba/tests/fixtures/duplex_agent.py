@@ -1,6 +1,8 @@
 #!/usr/bin/env python3
 """Deterministic ACP transport fixture. Never calls a model or executes tools."""
 import json
+import hashlib
+import os
 import sys
 
 SESSION = "fixture-session"
@@ -38,6 +40,14 @@ for line in sys.stdin:
     elif method == "session/prompt":
         pending = value
         text = value["params"]["prompt"][0]["text"]
+        # Opt-in acceptance accounting in the temporary allowlisted workspace.
+        # Only an operation ID and digest are recorded, never prompt/tool plaintext.
+        if os.environ.get("HC_E2E_AUDIT") == "1":
+            audit = ".hc-e2e-executions"
+            if os.path.exists(audit) and os.path.getsize(audit) > 65536:
+                sys.exit(71)
+            with open(audit, "a", encoding="utf-8") as output:
+                output.write(json.dumps({"id": value["id"], "digest": hashlib.sha256(text.encode()).hexdigest()}) + "\n")
         emit({"jsonrpc": "2.0", "method": "session/update", "params": {"sessionId": SESSION,
               "update": {"sessionUpdate": "agent_message_chunk", "content": {"type": "text", "text": "early chunk"}}}})
         if text == "permission":
