@@ -70,8 +70,11 @@ runtime_command = str(Path('/usr/bin/python3').resolve())
 runtime_args = [str(fixture), str(canary), str(tcp.getsockname()[1]), abstract, os.readlink('/proc/self/ns/pid')]
 allowed_env = ["HOME", "PATH"]
 if args.codex:
-    runtime_roots += ["/opt/harness/bin/codex-acp", "/opt/harness/codex-venv"]
-    runtime_command = "/opt/harness/bin/codex-acp"
+    runtime_roots += ["/opt/harness/codex-venv"]
+    candidate_adapter = base / "codex-acp"
+    shutil.copyfile(Path(__file__).resolve().parents[2] / "aba/adapters/codex_acp.py", candidate_adapter)
+    candidate_adapter.chmod(0o755)
+    runtime_command = str(candidate_adapter)
     runtime_args = []
     (workspace / "scope-model-probe.txt").write_text("HARNESS_SCOPE_FILE_OK")
 if args.codex or args.provider:

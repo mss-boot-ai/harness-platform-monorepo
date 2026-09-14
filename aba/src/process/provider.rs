@@ -94,7 +94,7 @@ pub(super) fn start_host_proxy(socket: &Path) -> Result<(), ProcessError> {
 
 fn provider_base(value: &str) -> Result<String, ProcessError> {
     let url = Url::parse(value).map_err(failed)?;
-    if !matches!(url.scheme(), "https" | "http")
+    if url.scheme() != "https"
         || !url.username().is_empty()
         || url.password().is_some()
         || url.query().is_some()
@@ -103,15 +103,7 @@ fn provider_base(value: &str) -> Result<String, ProcessError> {
     {
         return Err(ProcessError::UnsafeProfile);
     }
-    // HTTPS authenticates named providers. Explicit local IP/loopback HTTP providers
-    // are supported for this development host, but no runtime can choose the destination.
-    if url.scheme() == "http"
-        && url
-            .host_str()
-            .is_none_or(|host| host != "localhost" && host.parse::<std::net::IpAddr>().is_err())
-    {
-        return Err(ProcessError::UnsafeProfile);
-    }
+    // Only the namespace-local relay uses HTTP. The fixed upstream always authenticates TLS.
     Ok(value.trim_end_matches('/').to_owned())
 }
 
@@ -417,7 +409,7 @@ mod tests {
             assert!(provider_base(base).is_err());
         }
         assert!(provider_base("https://provider.example/v1").is_ok());
-        assert!(provider_base("http://127.0.0.1:8317/v1").is_ok());
+        assert!(provider_base("http://127.0.0.1:8317/v1").is_err());
     }
     #[test]
     fn request_concurrency_is_bounded() {

@@ -50,6 +50,24 @@ class CodexAdapterTest(unittest.TestCase):
     def event(self, method, **params):
         self.runtime.event({"method": method, "params": {"threadId": "thread", "turnId": "turn", **params}})
 
+    def test_only_exact_isolated_relay_can_use_local_http(self):
+        env = {"HARNESS_CODEX_API_BASE_URL": "http://127.0.0.1:39121/v1",
+            "HARNESS_CODEX_API_KEY": "local-isolated-provider",
+            "HARNESS_CODEX_PROVIDER_TRANSPORT": "local-isolated-v1"}
+        with patch.dict(self.adapter.os.environ, env, clear=True):
+            self.assertEqual(self.adapter.provider_base(), env["HARNESS_CODEX_API_BASE_URL"])
+        for url in ["http://127.0.0.1:18082/v1", "http://localhost:39121/v1", "http://127.0.0.1:39121/admin", "http://127.0.0.1:39121/v1?x=1"]:
+            with patch.dict(self.adapter.os.environ, {**env, "HARNESS_CODEX_API_BASE_URL": url}, clear=True):
+                with self.assertRaises(ValueError):
+                    self.adapter.provider_base()
+        with patch.dict(self.adapter.os.environ, {**env, "HARNESS_CODEX_PROVIDER_TRANSPORT": ""}, clear=True):
+            with self.assertRaises(ValueError):
+                self.adapter.provider_base()
+
+    def test_direct_provider_keeps_https_requirement(self):
+        with patch.dict(self.adapter.os.environ, {"HARNESS_CODEX_API_BASE_URL": "https://provider.example/v1", "HARNESS_CODEX_API_KEY": "synthetic-test-key"}, clear=True):
+            self.assertEqual(self.adapter.provider_base(), "https://provider.example/v1")
+
     def test_stream_preserves_large_deltas_and_real_terminal(self):
         text = "中文 stream " * 2500
         self.event("item/agentMessage/delta", delta=text)

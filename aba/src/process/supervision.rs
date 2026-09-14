@@ -637,10 +637,19 @@ pub fn enter_and_exec(
     // The parent receives this before ACP initialize and never sends business work earlier.
     println!("{{\"scopeReady\":true}}");
     std::io::stdout().flush().map_err(unavailable)?;
-    let mut child = Command::new("/usr/bin/bwrap")
+    let mut command = Command::new("/usr/bin/bwrap");
+    command
         .args(args)
-        .spawn()
-        .map_err(unavailable)?;
+        .env_remove("HARNESS_CODEX_API_BASE_URL")
+        .env_remove("HARNESS_CODEX_API_KEY")
+        .env_remove("HARNESS_CODEX_PROVIDER_TRANSPORT");
+    if provider_socket.is_some() {
+        command
+            .env("HARNESS_CODEX_API_BASE_URL", "http://127.0.0.1:39121/v1")
+            .env("HARNESS_CODEX_API_KEY", "local-isolated-provider")
+            .env("HARNESS_CODEX_PROVIDER_TRANSPORT", "local-isolated-v1");
+    }
+    let mut child = command.spawn().map_err(unavailable)?;
     drop(gate); // All untrusted descendants now inherit the recorded scope.
     loop {
         if let Some(status) = child.try_wait().map_err(unavailable)? {

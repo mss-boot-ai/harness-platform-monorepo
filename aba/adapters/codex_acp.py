@@ -125,15 +125,24 @@ def within(path: str, root: Path) -> bool:
         return False
 
 
+def provider_base() -> str:
+    base = os.environ.get("HARNESS_CODEX_API_BASE_URL", "").strip().rstrip("/")
+    parsed = urlsplit(base)
+    key = os.environ.get("HARNESS_CODEX_API_KEY", "")
+    isolated = (base == "http://127.0.0.1:39121/v1"
+        and os.environ.get("HARNESS_CODEX_PROVIDER_TRANSPORT") == "local-isolated-v1"
+        and key == "local-isolated-provider")
+    if (not isolated and parsed.scheme != "https") or not parsed.hostname or parsed.username or parsed.password or parsed.query or parsed.fragment or not key:
+        raise ValueError("Model provider configuration is unavailable")
+    return base
+
+
 class CodexACP:
     def __init__(self, workspace: Path) -> None:
         from codex_cli_bin import bundled_codex_path, bundled_path_dir
 
         self.workspace = workspace
-        base = os.environ.get("HARNESS_CODEX_API_BASE_URL", "").strip().rstrip("/")
-        parsed = urlsplit(base)
-        if parsed.scheme != "https" or not parsed.hostname or parsed.username or parsed.password or parsed.query or parsed.fragment or not os.environ.get("HARNESS_CODEX_API_KEY"):
-            raise ValueError("Model provider configuration is unavailable")
+        base = provider_base()
         self.model = os.environ.get("HARNESS_CODEX_MODEL", "gpt-5.6-luna").strip()
         allowed = os.environ.get("HARNESS_CODEX_MODELS", self.model).split(",")
         self.allowed = {value.strip() for value in allowed if value.strip()}
