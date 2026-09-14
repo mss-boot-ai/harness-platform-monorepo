@@ -125,7 +125,7 @@ display_name = "Isolated fixture"
 command = {json.dumps(runtime_command)}
 args = {json.dumps(runtime_args)}
 env_allow = {json.dumps(allowed_env)}
-max_sessions = 1
+max_sessions = {2 if args.parallel else 1}
 [[workspace]]
 id = "fixture"
 display_name = "Isolated scratch workspace"
@@ -145,7 +145,7 @@ properties = ["Delegate=yes", "ProtectControlGroups=no", "NoNewPrivileges=yes",
     "ProtectSystem=strict", "ProtectHome=yes", "PrivateTmp=yes", "PrivateDevices=yes",
     "CapabilityBoundingSet=", "RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6 AF_NETLINK",
     "KillMode=control-group", "MemoryMax=4G", "TasksMax=256", "LimitCORE=0", "LimitNOFILE=8192", "UMask=0077",
-    f"ReadWritePaths={state} {workspace} /sys/fs/cgroup/system.slice/{unit}.service"]
+    f"ReadWritePaths={state} {workspace}{' ' + str(peer_workspace) if args.parallel else ''} /sys/fs/cgroup/system.slice/{unit}.service"]
 if args.codex or args.provider:
     properties += ["EnvironmentFile=/etc/harness-aba/codex.env"]
 command = ["systemd-run", "--quiet", "--wait", "--pipe", "--unit=" + unit,
@@ -229,6 +229,10 @@ try:
     if not all(facts.values()):
         raise RuntimeError("containment assertion failed")
 finally:
+    loaded = subprocess.run(["systemctl", "show", "--property=LoadState", "--value", unit + ".service"],
+        capture_output=True, text=True, timeout=10)
+    if loaded.returncode == 0 and loaded.stdout.strip() != "not-found":
+        subprocess.run(["systemctl", "stop", unit + ".service"], capture_output=True, timeout=15, check=False)
     tcp.close()
     unix.close()
     pathname.close()
