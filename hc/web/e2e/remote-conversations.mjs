@@ -106,6 +106,7 @@ try {
   await savedDraft();
   await selection('permission');
   assert.equal(await page.getByRole('textbox', { name: '消息', exact: true }).inputValue(), 'draft B retained');
+  await savedDraft();
   await page.reload({ waitUntil: 'domcontentloaded' });
   await page.getByRole('region', { name: '工具权限请求', exact: true }).waitFor({ timeout: 30_000 });
   assert.equal(await page.getByRole('textbox', { name: '消息', exact: true }).inputValue(), 'draft B retained');

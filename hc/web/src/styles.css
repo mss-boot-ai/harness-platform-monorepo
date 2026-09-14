@@ -124,3 +124,6 @@ button { touch-action: manipulation; }
 .tool-card pre,.permission-card pre,.approval-detail { white-space: pre-wrap; overflow-wrap: anywhere; overflow-y: auto; max-height: 360px; font-size: 11px; line-height: 1.7; background: var(--surface); padding: 10px; border-radius: 6px; }
 .permission-card { padding: 15px; border: 1px solid var(--accent); border-radius: 12px; background: var(--bg); display: grid; gap: 10px; font-size: 12px; }.permission-card h3 { font-size: 13px; margin: 0; }.permission-card summary { cursor: pointer; }.permission-card .status-pill { white-space: normal; text-align: right; }
 .permission-actions { display: flex; flex-wrap: wrap; gap: 8px; }.permission-actions button { min-height: 42px; }.tool-failed { border-color: var(--error); }.plan-card ol { margin: 10px 0 0; padding-left: 20px; }
+.readonly-draft { margin-top: 12px; }
+.readonly-draft label { display: block; margin-bottom: 6px; }
+.readonly-draft textarea { box-sizing: border-box; width: 100%; min-height: 80px; max-height: 200px; padding: 10px; resize: vertical; font: inherit; }

@@ -8,6 +8,7 @@ import { ConversationStore, isTerminal } from './remote/conversation-store';
 import type { EndpointAccess } from './remote/endpoint-access';
 import type { RegisterEndpointShutdown } from './remote/endpoint-owner';
 import { RuntimeActivity, RuntimeConfiguration, type PendingConfig } from './remote/RuntimeControls';
+import { editDraft, finishDraft, type DraftEdits } from './remote/draft-edits';
 
 const loading: ManagerView = { status: 'loading', online: false, creating: false, workspace: null, selectedId: null, conversations: [],
   endpoints: [], unrecoverable: [], recovery: {}, error: null, pendingWrites: 0 };
@@ -26,7 +27,7 @@ export function SessionSetup({ connection, access, registration, secureStore, in
   const [workspaceId, setWorkspaceId] = useState(import.meta.env.VITE_HARNESS_DEFAULT_WORKSPACE_ID?.trim() || 'harness-platform');
   const [error, setError] = useState<string | null>(null);
   const [creating, setCreating] = useState(false);
-  const [edit, setEdit] = useState<{ readonly id: string | null; readonly text: string; readonly version: number } | null>(null);
+  const [edits, setEdits] = useState<DraftEdits>(() => new Map());
   const editVersion = useRef(0);
   const actions = useRef(new Set<string>());
   const [, refreshActions] = useState(0);
@@ -65,7 +66,8 @@ export function SessionSetup({ connection, access, registration, secureStore, in
   const value = selected?.data;
   const session = value?.session;
   const actualABA = view.endpoints.some((item) => item.id === selectedABA) ? selectedABA : view.endpoints[0]?.id ?? '';
-  const draft = edit?.id === selectedId ? edit.text : value?.draft ?? view.workspace?.draft ?? initialDraft;
+  const edit = edits.get(selectedId);
+  const draft = edit?.text ?? value?.draft ?? view.workspace?.draft ?? initialDraft;
   const terminal = session !== undefined && isTerminal(session.status);
   const recovering = selectedId === null ? null : view.recovery[selectedId] ?? null;
   const expired = value?.keys !== null && value?.keys !== undefined && value.keys.material.expiresAtMs <= BigInt(Date.now());
@@ -97,10 +99,10 @@ export function SessionSetup({ connection, access, registration, secureStore, in
   };
   const changeDraft = (text: string) => {
     const version = ++editVersion.current; const id = selectedId;
-    setEdit({ id, text, version });
+    setEdits((current) => editDraft(current, id, text, version));
     if (manager === null) return;
-    void Promise.resolve().then(() => manager.draft(id, text)).then(() => { if (mounted.current) setEdit((current) => current?.version === version ? null : current); })
-      .catch(() => { if (mounted.current) setError('草稿尚未保存。请保留此页并检查存储空间，不要刷新。'); });
+    void Promise.resolve().then(() => manager.draft(id, text)).then(() => { if (mounted.current) setEdits((current) => finishDraft(current, id, version, true)); })
+      .catch(() => { if (mounted.current) setEdits((current) => finishDraft(current, id, version, false)); });
   };
   const selectConversation = (id: string | null) => {
     if (manager === null) return;
@@ -110,7 +112,7 @@ export function SessionSetup({ connection, access, registration, secureStore, in
   };
   const submit = async () => {
     if (manager === null || !canSubmit || responding || draft.trim() === '') return;
-    const text = draft.trim(); const version = editVersion.current; let id = selectedId;
+    const text = draft.trim(); const submittedEdit = edit; const editedId = selectedId; let id = selectedId;
     await manager.draft(id, draft);
     if (id === null) {
       setCreating(true);
@@ -123,7 +125,7 @@ export function SessionSetup({ connection, access, registration, secureStore, in
     } else {
       await manager.prompt(id, text);
     }
-    if (mounted.current && editVersion.current === version) setEdit(null);
+    if (mounted.current && submittedEdit !== undefined) setEdits((current) => finishDraft(current, editedId, submittedEdit.version, true));
   };
   const conversations = view.conversations.map((item) => ({ id: item.data.session.sessionId,
     title: conversationTitle(item.data.messages.find((message) => message.role === 'user')?.text ?? item.data.draft),
@@ -149,7 +151,8 @@ export function SessionSetup({ connection, access, registration, secureStore, in
       disabled={!view.online || readOnly || responding || actionBusy} onChange={(option, requested) => perform(() => manager!.configure(value.session.sessionId, option, requested), '配置修改未确认，请检查当前会话。')}
       onRefresh={() => perform(() => manager!.describeNow(value.session.sessionId), '无法读取执行端配置。')} />}
   </div>;
-  const notice = view.status === 'loading' ? '正在恢复本地加密记录…' : view.pendingWrites > 0 || edit !== null ? '正在保存草稿与会话选择，请勿清除浏览器数据。'
+  const notice = edit?.failed === true ? '本对话草稿尚未保存。请保留此页，不要刷新；切换会话后仍可回来复制。'
+    : view.status === 'loading' ? '正在恢复本地加密记录…' : view.pendingWrites > 0 || edit !== undefined ? '正在保存草稿与会话选择，请勿清除浏览器数据。'
     : recovering ?? selected?.fault ?? value?.blocked ?? (expired ? '会话密钥已过期，当前只读。需要新的授权密钥才能继续。'
       : missingKey ? '本地缺少此会话的恢复密钥，当前只读。请核对执行端状态。'
         : !view.online ? '连接已断开。历史和草稿在此浏览器中加密保留；重新连接后会先核对授权，再恢复原始消息。'
@@ -159,7 +162,7 @@ export function SessionSetup({ connection, access, registration, secureStore, in
               : full ? '会话达到本地显示上限，请新建对话。' : value !== undefined && value.keys === null && !terminal ? '正在准备安全会话，草稿尚未发送。' : null);
   return <ChatWorkspace draft={draft} onDraftChange={changeDraft} onSubmit={() => perform(submit, '本次发送尚未确认，草稿已保留。请检查会话状态后再操作。')}
     onNewChat={() => selectConversation(null)} newChatDisabled={creating || view.creating}
-    draftSaved={edit?.id !== selectedId && view.pendingWrites === 0 && view.status === 'ready'} composerDisabled={creating || view.creating}
+    draftSaved={edit === undefined && view.pendingWrites === 0 && view.status === 'ready'} composerDisabled={creating || view.creating}
     onEndChat={session !== undefined && !terminal ? () => perform(() => manager!.close(session.sessionId), '关闭会话未确认，请核对执行端状态。') : null}
     {...(value?.runtime.cancelSupported && !readOnly && view.online ? { onCancelTurn: () => perform(() => manager!.cancel(value.session.sessionId), '停止请求未确认，请检查当前轮次。'), cancelPending: value.cancelPending } : {})}
     renderTurnActivity={(turnId) => value === undefined ? null : <RuntimeActivity key={value.session.sessionId} state={value.runtime} turnId={turnId}

@@ -63,7 +63,9 @@ export function ChatWorkspace(props: ChatWorkspaceProps) {
     nearBottom.current = true; setAtBottom(true); props.onSubmit();
   };
   const composer = <div className="composer-wrap">
-    {props.readOnly ? <div className="readonly-note">此对话当前只读。请核对会话或端点状态；历史消息不会自动重新执行。</div> : <>
+    {props.readOnly ? <div className="readonly-note">此对话当前只读。请核对会话或端点状态；历史消息不会自动重新执行。
+      {props.draft === '' ? null : <div className="readonly-draft"><label htmlFor="retained-draft">保留的草稿</label><textarea id="retained-draft" readOnly value={props.draft} /><CopyButton text={props.draft} label="复制草稿" /></div>}
+    </div> : <>
       <form className="composer" onSubmit={(event) => { event.preventDefault(); submit(); }}>
         <label className="sr-only" htmlFor="chat-prompt">消息</label>
         <textarea id="chat-prompt" ref={textarea} rows={1} value={props.draft} maxLength={16_000} disabled={props.composerDisabled}
