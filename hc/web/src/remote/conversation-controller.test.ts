@@ -1,9 +1,23 @@
 import { decodeWireMessage as fromBinary } from '@harness/hc-core';
 import { WirePacketSchema } from '@harness/hc-core';
 import { ConversationController, ConversationTransportInterrupted } from './conversation-controller';
-import { controllerFixture, testNow } from './conversation-fixture';
+import { controllerFixture, descriptor, testNow } from './conversation-fixture';
 const chunk = (sessionId: string, text: string) => ({ jsonrpc: '2.0', method: 'session/update', params: { sessionId, update: { sessionUpdate: 'agent_message_chunk', content: { type: 'text', text } } } });
 describe('durable conversation controller', () => {
+  it('does not queue duplicate automatic discovery after the runtime became ready', async () => {
+    const f = await controllerFixture(); const value = { ...f.value, runtime: { ...f.value.runtime, status: 'pending' as const } };
+    const old = await f.store.read(f.session.sessionId); if (old === null) throw new Error('Missing fixture');
+    const revision = await f.store.write(value, old.revision);
+    const controller = new ConversationController({ value, revision }, f.store, f.identity, f.transport, () => undefined);
+    await controller.describe(); const request = controller.snapshot().data.requests[0];
+    const response = await f.incoming({ jsonrpc: '2.0', id: request?.id, result: descriptor(f.session.sessionId) }, 1n);
+    const receiving = controller.receive(response); const redundant = controller.describe();
+    await Promise.all([receiving, redundant]);
+    expect(controller.snapshot().data.requests).toHaveLength(0);
+    expect(controller.snapshot().data.outbound).toBe('1');
+    await controller.prompt('first actual prompt');
+    expect(controller.snapshot().data.outbound).toBe('2');
+  });
   it('persists uncertain configuration and a stopped runtime across refresh instead of claiming rollback', async () => {
     const f = await controllerFixture(); const option = f.value.runtime.config[0];
     if (option === undefined) throw new Error('Missing config');

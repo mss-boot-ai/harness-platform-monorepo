@@ -112,11 +112,13 @@ export class ConversationController {
         (current) => ({ ...current, recovery: null, awaiting: id, cancelPending: false, messages: startTurn(current.messages, id, text), draft: current.draft.trim() === text.trim() ? '' : current.draft }), id);
     }, text.length * 2 + 1);
   }
-  public describe(): Promise<void> {
+  public describe(force = false): Promise<void> {
     return this.enqueue(async () => {
       const value = this.stored.value;
       if (!value.session.requestedCapabilities.includes('remote-session-v1')) return;
-      if (value.requests.some((item) => item.kind === 'describe')) return;
+      // Auto-discovery may have queued before a previous response completed.
+      // Re-check at execution time, or it can block the first actual prompt.
+      if (value.requests.length > 0 || value.awaiting !== null || (!force && value.runtime.status !== 'pending')) return;
       const id = crypto.randomUUID();
       await this.dispatch({ jsonrpc: '2.0', id, method: '_mss/session/describe', params: { sessionId: value.session.sessionId } },
         (current) => ({ ...current, requests: [...current.requests, { id, kind: 'describe' }] }), id);

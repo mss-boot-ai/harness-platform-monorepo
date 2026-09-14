@@ -387,7 +387,7 @@ export class ConversationManager {
   public configure(id: string, option: ConfigOption, value: string, expectedRunId?: string): Promise<void> { return this.actionable(id, expectedRunId).configure(option, value); }
   public cancel(id: string, expectedRunId?: string): Promise<void> { return this.actionable(id, expectedRunId).cancel(); }
   public decide(id: string, request: RpcId, option: string | null, expectedRunId?: string): Promise<void> { return this.actionable(id, expectedRunId).decide(request, option); }
-  public describeNow(id: string): Promise<void> { return this.actionable(id).describe(); }
+  public describeNow(id: string): Promise<void> { return this.actionable(id).describe(true); }
   public executionClosed(runId: string): boolean { return this.knownClosed.has(runId) || isTerminal(this.controllers.get(runId)?.snapshot().data.session.status ?? ''); }
   private async confirmClosureNotice(runId: string): Promise<void> {
     const notice = '本次运行已确认结束，历史已保留。可以继续此对话或新建对话。';
