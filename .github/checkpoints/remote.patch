@@ -1,5 +1,5 @@
 diff --git a/platform/internal/harness/gateway/remote_binary_e2e_test.go b/platform/internal/harness/gateway/remote_binary_e2e_test.go
-index c2d5310..fe1d019 100644
+index c2d5310..702fe8c 100644
 --- a/platform/internal/harness/gateway/remote_binary_e2e_test.go
 +++ b/platform/internal/harness/gateway/remote_binary_e2e_test.go
 @@ -45,7 +45,16 @@ type remoteLockedBuffer struct {
@@ -85,7 +85,25 @@ index c2d5310..fe1d019 100644
  	input := base64.RawURLEncoding.EncodeToString(header) + "." + base64.RawURLEncoding.EncodeToString(claims)
  	signature, err := awpcrypto.SignP1363LowS(c.signing, []byte(input))
  	if err != nil {
-@@ -600,3 +621,58 @@ func (c *remoteBinaryClient) message() map[string]any {
+@@ -421,7 +442,8 @@ func (c *remoteBinaryClient) write(packet *awpv1.WirePacket) {
+ }
+ func (c *remoteBinaryClient) controlMessage(kind awpv1.ControlType, payload proto.Message, receiver []byte) {
+ 	c.t.Helper()
+-	raw, err := proto.MarshalOptions{Deterministic: true}.Marshal(payload)
++	now := time.Now().UnixMilli()
++	raw, err := remoteControlPayload(payload, now)
+ 	if err != nil {
+ 		c.t.Fatal(err)
+ 	}
+@@ -430,7 +452,6 @@ func (c *remoteBinaryClient) controlMessage(kind awpv1.ControlType, payload prot
+ 	if _, err := rand.Read(id); err != nil {
+ 		c.t.Fatal(err)
+ 	}
+-	now := time.Now().UnixMilli()
+ 	transcript, err := controlTranscript(id, c.hc.ID[:], receiver, c.control, now, uint32(kind), raw)
+ 	if err != nil {
+ 		c.t.Fatal(err)
+@@ -600,3 +621,83 @@ func (c *remoteBinaryClient) message() map[string]any {
  	c.t.Fatal("bounded packet search exceeded")
  	return nil
  }
@@ -142,5 +160,30 @@ index c2d5310..fe1d019 100644
 +	}
 +	if len(value.String()) != 16*1024 {
 +		t.Fatal("diagnostic output is not bounded")
++	}
++}
++
++// Timestamp equality is part of the ACK signature contract. Capture the clock once.
++func remoteControlPayload(payload proto.Message, now int64) ([]byte, error) {
++	value := proto.Clone(payload)
++	if acknowledgment, ok := value.(*awpv1.SessionKeyPackageAck); ok {
++		acknowledgment.AcknowledgedAtMs = now
++	}
++	return proto.MarshalOptions{Deterministic: true}.Marshal(value)
++}
++
++func TestRemoteKeyAcknowledgmentUsesOneClockSample(t *testing.T) {
++	original := &awpv1.SessionKeyPackageAck{AcknowledgedAtMs: 1}
++	const outerTimestamp int64 = 1790000000123
++	raw, err := remoteControlPayload(original, outerTimestamp)
++	if err != nil {
++		t.Fatal(err)
++	}
++	decoded := new(awpv1.SessionKeyPackageAck)
++	if err := proto.Unmarshal(raw, decoded); err != nil {
++		t.Fatal(err)
++	}
++	if decoded.AcknowledgedAtMs != outerTimestamp || original.AcknowledgedAtMs != 1 {
++		t.Fatal("key acknowledgment must bind the exact outer timestamp without mutating the caller")
 +	}
 +}
