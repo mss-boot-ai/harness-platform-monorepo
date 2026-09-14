@@ -42,6 +42,7 @@ def main() -> int:
         def receive(request_id, *, allow=False, cancel=False):
             deadline = time.monotonic() + 180
             chunks, tools, approvals, text = 0, 0, 0, ""
+            diagnostics = set()
             cancelled = False
             started = time.monotonic()
             while time.monotonic() < deadline:
@@ -66,9 +67,16 @@ def main() -> int:
                         text += update["content"]["text"]
                     if update["sessionUpdate"] == "tool_call":
                         tools += 1
+                    if update["sessionUpdate"] in ("tool_call", "tool_call_update"):
+                        if update.get("status") == "failed":
+                            diagnostics.add("tool-failed")
+                        output = str(update.get("content", "")).lower()
+                        for marker in ("permission denied", "operation not permitted", "read-only file system", "no such file", "sandbox", "bwrap", "userns", "address family", "socket"):
+                            if marker in output:
+                                diagnostics.add(marker)
                 elif value.get("id") == request_id:
                     result = {"request": request_id, "chunks": chunks, "tools": tools, "approvals": approvals,
-                        "status": value.get("result", {}).get("stopReason", "ok" if "result" in value else value.get("error", {}).get("message", "invalid"))}
+                        "status": value.get("result", {}).get("stopReason", "ok" if "result" in value else value.get("error", {}).get("message", "invalid")), "toolDiagnostics": sorted(diagnostics)}
                     print(json.dumps(result), flush=True)
                     if "error" in value:
                         raise RuntimeError("ACP request failed")
