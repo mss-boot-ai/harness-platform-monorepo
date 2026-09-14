@@ -178,7 +178,11 @@ func (server *Server) processOpenTunnelResult(
 			return domain.ID{}, errors.New("rejected OpenTunnelResult is invalid")
 		}
 		_, err = server.persistence.UpdateSession(ctx, session.ID, func(value *domain.Session) error {
-			return value.Fail(now)
+			if err := value.Fail(now); err != nil {
+				return err
+			}
+			value.StartupFailureCode = domain.PublicStartupFailureCode(result.GetStableErrorCode())
+			return nil
 		})
 	default:
 		return domain.ID{}, errors.New("OpenTunnelResult status is invalid")

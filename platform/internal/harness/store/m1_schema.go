@@ -148,7 +148,10 @@ func CreateAllSchema(db *gorm.DB) error {
 	if err := CreatePortableBinarySchema(db); err != nil {
 		return err
 	}
-	return CreateCatalogSchema(db)
+	if err := CreateCatalogSchema(db); err != nil {
+		return err
+	}
+	return CreateSessionStartupSchema(db)
 }
 
 func CreateM1Schema(db *gorm.DB) error {
@@ -194,7 +197,10 @@ func VerifyAllSchema(db *gorm.DB) error {
 	if err := VerifyPortableBinarySchema(db); err != nil {
 		return err
 	}
-	return VerifyCatalogSchema(db)
+	if err := VerifyCatalogSchema(db); err != nil {
+		return err
+	}
+	return VerifySessionStartupSchema(db)
 }
 
 func VerifyM1Schema(db *gorm.DB) error {

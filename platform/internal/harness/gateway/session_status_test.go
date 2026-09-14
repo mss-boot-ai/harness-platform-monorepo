@@ -59,6 +59,15 @@ func TestEndpointStatusAndCreationCancellationUseExactScopedIDs(t *testing.T) {
 	if response := call("/gateway/v1/sessions/"+session.ID.String()+"/status", key, map[string]any{}); response.Code != 200 || !strings.Contains(response.Body.String(), session.ID.String()) {
 		t.Fatalf("exact session status: %d %s", response.Code, response.Body.String())
 	}
+	if _, err := persistence.UpdateSession(t.Context(), session.ID, func(value *domain.Session) error {
+		value.StartupFailureCode = "WORKSPACE_BUSY"
+		return value.Fail(now)
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if response := call("/gateway/v1/sessions/"+session.ID.String()+"/status", key, map[string]any{}); response.Code != 200 || !strings.Contains(response.Body.String(), `"startupFailureCode":"WORKSPACE_BUSY"`) {
+		t.Fatal("safe startup reason was not persisted and projected")
+	}
 	session.ID = gatewayID(72)
 	session.HCEndpointID = gatewayID(73)
 	if err := persistence.CreateSession(t.Context(), session); err != nil {

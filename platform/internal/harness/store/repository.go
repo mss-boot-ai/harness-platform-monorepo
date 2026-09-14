@@ -118,6 +118,7 @@ type sessionRow struct {
 	WorkspaceID          string     `gorm:"column:workspace_id;size:64;not null"`
 	CapabilitiesJSON     string     `gorm:"column:capabilities_json;type:text;not null"`
 	Status               string     `gorm:"column:status;size:32;not null;index:idx_harness_session_aba_status,priority:2;index:idx_harness_session_hc_status,priority:2"`
+	StartupFailureCode   string     `gorm:"column:startup_failure_code;size:64;not null;default:''"`
 	CurrentKeyGeneration uint64     `gorm:"column:current_key_generation;not null;default:0"`
 	CreatedAt            time.Time  `gorm:"column:created_at;not null"`
 	UpdatedAt            time.Time  `gorm:"column:updated_at;not null"`
@@ -500,6 +501,7 @@ func (store *Store) UpdateSession(
 			Where("id = ? AND row_version = ?", row.ID, previous).
 			Updates(map[string]any{
 				"status":                 next.Status,
+				"startup_failure_code":   next.StartupFailureCode,
 				"current_key_generation": next.CurrentKeyGeneration,
 				"last_activity_at":       next.LastActivityAt,
 				"closed_at":              next.ClosedAt,
@@ -1152,6 +1154,7 @@ func sessionToRow(value domain.Session) (sessionRow, error) {
 		WorkspaceID:          value.WorkspaceID,
 		CapabilitiesJSON:     string(capabilities),
 		Status:               string(value.Status),
+		StartupFailureCode:   value.StartupFailureCode,
 		CurrentKeyGeneration: value.CurrentKeyGeneration,
 		CreatedAt:            value.CreatedAt,
 		UpdatedAt:            value.UpdatedAt,
@@ -1188,6 +1191,7 @@ func sessionFromRow(row sessionRow) (domain.Session, error) {
 		WorkspaceID:           row.WorkspaceID,
 		RequestedCapabilities: capabilities,
 		Status:                domain.SessionStatus(row.Status),
+		StartupFailureCode:    row.StartupFailureCode,
 		CurrentKeyGeneration:  row.CurrentKeyGeneration,
 		CreatedAt:             row.CreatedAt,
 		UpdatedAt:             row.UpdatedAt,

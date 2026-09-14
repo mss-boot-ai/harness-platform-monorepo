@@ -37,6 +37,8 @@ ABA 在同一有效连接内每 5 分钟续发目录。续发在单个独立、�
 
 关闭是明确的两阶段状态：保存幂等关闭意图进入 `DRAINING`，立即停止新消息准入；收到该 ABA 验证通过的清理回执后才成为 `CLOSED`。重复关闭、精确状态查询和 ABA 重连会补发待处理关闭，而非重放用户任务。ABA 的启动取消必须等工作线程释放进程和目录锁后才回执；本地已不存在的运行向 Platform 返回 `ALREADY_CLOSED`（控制接收方全零），Platform 再按原 Session 的 ABA/HC 绑定确认。关闭竞态中的已验证旧帧不会继续中继，也不会影响其他运行的连接。HC 在确认前保留原 Run、恢复记录和关闭操作 ID，不能把接收关闭请求描述为实际停机，更不表示撤销已有项目副作用。
 
+前向迁移 `20260915010000` 为 Session 增加有界 `startup_failure_code`，默认空值，保留原记录。精确状态接口在启动失败时返回 `startupFailureCode`，仅允许固定的本地准入错误：项目占用、Runtime/资源占用、启动失败/超时和本地策略拒绝等。未知 Agent 文本归一为 `AGENT_START_FAILED`，不进入公开元数据。生命周期目录锁包含空闲时段；这不是多空闲上下文调度器。
+
 创建与恢复使用端点范围的精确查询：`POST /gateway/v1/sessions/{id}/status` 返回该 HC 的会话状态，`POST /gateway/v1/session-operations/{key}` 查询原创建结果。查询不到不被解释为“从未执行”。`POST /gateway/v1/session-operations/{key}/cancel` 与原创建共享唯一操作键：先取消则留下终态记录，延迟创建被拒绝；已经创建则返回原 Session，由用户的关闭动作处理。重复取消不会生成另一份操作，取消有审计记录。
 
 ## 浏览器身份恢复

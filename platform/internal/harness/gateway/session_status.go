@@ -10,7 +10,7 @@ import (
 
 func endpointSessionView(session domain.Session) endpointSessionResponse {
 	return endpointSessionResponse{SessionID: session.ID.String(), ABAEndpointID: session.ABAEndpointID.String(), HCEndpointID: session.HCEndpointID.String(),
-		RuntimeProfileID: session.RuntimeProfileID, WorkspaceID: session.WorkspaceID, RequestedCapabilities: append([]string(nil), session.RequestedCapabilities...), Status: session.Status, CreatedAt: session.CreatedAt}
+		RuntimeProfileID: session.RuntimeProfileID, WorkspaceID: session.WorkspaceID, RequestedCapabilities: append([]string(nil), session.RequestedCapabilities...), Status: session.Status, StartupFailureCode: session.StartupFailureCode, CreatedAt: session.CreatedAt}
 }
 
 func writeSessionLookupError(writer http.ResponseWriter, err error) {

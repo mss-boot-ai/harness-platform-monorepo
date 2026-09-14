@@ -103,6 +103,7 @@ func TestProtectedHealthRouteUsesCurrentPrincipalAndSchema(t *testing.T) {
 		store.ReliabilityMigrationID.String(),
 		store.PortableBinaryMigrationID.String(),
 		store.CatalogMigrationID.String(),
+		store.SessionStartupMigrationID.String(),
 	}
 	if !slices.Equal(body.SchemaMigrations, wantMigrations) {
 		t.Fatalf("unexpected schema migrations: %#v", body.SchemaMigrations)

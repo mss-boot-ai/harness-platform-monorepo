@@ -27,7 +27,7 @@ func RegisterCatalogMigration(runner *migration.Migration) error {
 	if runner == nil {
 		return errors.New("catalog migration runner is required")
 	}
-	return runner.Register(CatalogMigrationID, func(db *gorm.DB, version string) error {
+	if err := runner.Register(CatalogMigrationID, func(db *gorm.DB, version string) error {
 		if version != CatalogMigrationID.String() {
 			return errors.New("catalog migration version mismatch")
 		}
@@ -35,7 +35,10 @@ func RegisterCatalogMigration(runner *migration.Migration) error {
 			return err
 		}
 		return runner.CreateVersion(db, version)
-	})
+	}); err != nil {
+		return err
+	}
+	return RegisterSessionStartupMigration(runner)
 }
 
 func CreateCatalogSchema(db *gorm.DB) error {

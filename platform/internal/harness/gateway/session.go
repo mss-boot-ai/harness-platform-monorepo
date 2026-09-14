@@ -38,6 +38,7 @@ type endpointSessionResponse struct {
 	WorkspaceID           string               `json:"workspaceId"`
 	RequestedCapabilities []string             `json:"requestedCapabilities"`
 	Status                domain.SessionStatus `json:"status"`
+	StartupFailureCode    string               `json:"startupFailureCode,omitempty"`
 	CreatedAt             time.Time            `json:"createdAt"`
 }
 

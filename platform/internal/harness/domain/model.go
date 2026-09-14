@@ -244,6 +244,7 @@ type Session struct {
 	WorkspaceID           string
 	RequestedCapabilities []string
 	Status                SessionStatus
+	StartupFailureCode    string
 	CurrentKeyGeneration  uint64
 	CreatedAt             time.Time
 	UpdatedAt             time.Time
