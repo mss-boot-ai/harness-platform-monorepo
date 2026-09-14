@@ -41,7 +41,6 @@ export class ConversationController {
     if (this.closed || this.queuedBytes + size > MAX_PENDING_BYTES || this.pending >= 128) return Promise.reject(new Error('Conversation queue is unavailable'));
     this.queuedBytes += size; this.pending += 1; this.emit();
     const operation = this.queue.then(async () => {
-      if (this.closed) throw new Error('Conversation controller disposed');
       return action();
     });
     this.queue = operation.then(() => undefined, () => undefined).finally(() => {
@@ -97,7 +96,8 @@ export class ConversationController {
     const id = crypto.randomUUID();
     return this.enqueue(async () => {
       const value = this.stored.value;
-      if (value.awaiting !== null || value.requests.length > 0 || value.runtime.status !== 'ready' || text.trim() === '' ||
+      const basic = !value.session.requestedCapabilities.includes('remote-session-v1');
+      if (value.awaiting !== null || value.requests.length > 0 || (!basic && value.runtime.status !== 'ready') || text.trim() === '' ||
           value.messages.length >= MAX_MESSAGES || text.length > 16_000 || value.messages.reduce((sum, item) => sum + item.text.length, 0) >= 1_048_576) throw new Error('Cannot begin another turn');
       await this.dispatch({ jsonrpc: '2.0', id, method: 'session/prompt', params: { sessionId: value.session.sessionId, prompt: [{ type: 'text', text }] } },
         (current) => ({ ...current, awaiting: id, cancelPending: false, messages: startTurn(current.messages, id, text), draft: current.draft.trim() === text.trim() ? '' : current.draft }), id);
@@ -106,6 +106,7 @@ export class ConversationController {
   public describe(): Promise<void> {
     return this.enqueue(async () => {
       const value = this.stored.value;
+      if (!value.session.requestedCapabilities.includes('remote-session-v1')) return;
       if (value.requests.some((item) => item.kind === 'describe')) return;
       const id = crypto.randomUUID();
       await this.dispatch({ jsonrpc: '2.0', id, method: '_mss/session/describe', params: { sessionId: value.session.sessionId } },
@@ -147,7 +148,8 @@ export class ConversationController {
       if (next === null) throw new Error('Missing session');
       if (isTerminal(next.status)) {
         await this.persist({ ...value, session: next, keys: null, awaiting: null, requests: [], outbox: [], reservation: null,
-          cancelPending: false, messages: settleTurn(value.messages, value.awaiting, 'uncertain') });
+          cancelPending: false, runtime: { ...value.runtime, permissions: value.runtime.permissions.map((item) => ({ ...item, status: 'closed' as const })) },
+          messages: settleTurn(value.messages, value.awaiting, 'uncertain') });
         zeroKeys(value.keys); return;
       }
       await this.persist({ ...value, session: next });
@@ -227,7 +229,7 @@ export class ConversationController {
       if (value.session.status !== 'ACTIVE' && value.session.status !== 'UNCERTAIN') return;
       await this.transport.control((controlSequence) => createHCResumeStatePacket(this.identity, this.binding(), controlSequence, sequence(value.inbound), value.keys?.material.generation));
       if (sequence(value.inbound) > 0n) this.transport.send(await createHCAckFramePacket(this.identity, this.binding(), Direction.ABA_TO_HC, sequence(value.inbound)));
-      if (value.reservation !== null || value.blocked !== null || this.fault !== null) return;
+      if (value.session.status !== 'ACTIVE' || value.reservation !== null || value.blocked !== null || this.fault !== null) return;
       if (value.keys.material.expiresAtMs <= BigInt(this.transport.now())) {
         await this.persist({ ...value, blocked: '会话密钥已到期；保留历史，只读显示。需要新的授权密钥才能继续。' }); return;
       }

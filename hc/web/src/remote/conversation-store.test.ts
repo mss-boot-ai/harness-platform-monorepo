@@ -24,6 +24,17 @@ async function fixture() {
   return { factory, name, vault, store, value, identity, session, aba, keys };
 }
 describe('bound encrypted conversation snapshots', () => {
+  it('stores selection, compose drafts and pending creation outside the conversation prefix with CAS', async () => {
+    const f = await fixture(); const initial = await f.store.readWorkspace();
+    const value = { ...initial.value, draft: 'private compose', creation: { id: crypto.randomUUID(), abaEndpointId: f.aba.id,
+      workspaceId: 'fixture', runtimeProfileId: 'fixture', draft: 'private pending creation' } };
+    const revision = await f.store.writeWorkspace(value, null);
+    expect((await f.store.readWorkspace()).value).toEqual(value); expect(await f.store.list()).toHaveLength(0);
+    await expect(f.store.writeWorkspace(value, null)).rejects.toThrow('conflict');
+    const other = await createEndpointIdentity('other', 'Other', 'web-software');
+    await expect(new ConversationStore(f.vault, endpoint, other).readWorkspace()).rejects.toThrow('binding');
+    expect((await f.store.readWorkspace()).revision).toBe(revision);
+  });
   it('restores keys, messages, pending turn, independent draft and sequence without executing anything', async () => {
     const { factory, name, store, value, identity } = await fixture();
     await store.write(value, null);

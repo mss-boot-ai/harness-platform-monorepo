@@ -19,9 +19,10 @@ export function applyConversationEvent(initial: Conversation, payload: unknown, 
         runtime = { ...runtime, status: request.kind === 'describe' ? 'unsupported' : runtime.status,
           configError: request.kind === 'describe' ? '执行端尚不支持此会话控制契约。' : '执行端拒绝了配置修改，原配置保持不变。' };
       } else if (request.kind === 'describe') {
-        const next = readDescriptor(runtime, message.result, value.session.sessionId);
+        let next = readDescriptor(runtime, message.result, value.session.sessionId);
         if (runtime.processEpoch !== '' && next.processEpoch !== '' && runtime.processEpoch !== next.processEpoch) {
           blocked = '执行进程已经变化。无法证明原执行结果，不会自动重发任务。';
+          next = { ...next, permissions: next.permissions.map((permission) => ({ ...permission, status: 'closed' })) };
         }
         runtime = next;
       } else if (request.option?.method === 'session/set_config_option') {

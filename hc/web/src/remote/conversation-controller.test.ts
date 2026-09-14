@@ -4,6 +4,20 @@ import { ConversationController } from './conversation-controller';
 import { controllerFixture, testNow } from './conversation-fixture';
 const chunk = (sessionId: string, text: string) => ({ jsonrpc: '2.0', method: 'session/update', params: { sessionId, update: { sessionUpdate: 'agent_message_chunk', content: { type: 'text', text } } } });
 describe('durable conversation controller', () => {
+  it('never replays outbound operations for an uncertain session', async () => {
+    const f = await controllerFixture(); await f.controller.prompt('do not repeat');
+    await f.controller.observe({ ...f.session, status: 'UNCERTAIN' });
+    const before = f.sent.length; await f.controller.resume();
+    expect(f.sent).toHaveLength(before); expect(f.controls).toHaveLength(1);
+    await expect(f.controller.prompt('again')).rejects.toThrow('not writable');
+  });
+  it('preserves basic prompting without fabricating remote capabilities for legacy sessions', async () => {
+    const f = await controllerFixture(); await f.controller.observe({ ...f.session, requestedCapabilities: ['prompt'] });
+    const saved = await f.store.read(f.session.sessionId); if (saved === null) throw new Error('Missing snapshot');
+    const legacy = new ConversationController({ ...saved, value: { ...saved.value, runtime: { ...saved.value.runtime, status: 'pending' } } }, f.store, f.identity, f.transport, () => undefined);
+    await legacy.describe(); expect(f.sent).toHaveLength(0);
+    await legacy.prompt('basic prompt'); expect(f.sent).toHaveLength(1);
+  });
   it('saves exact packets before sending and replays identical bytes after refresh', async () => {
     const f = await controllerFixture();
     await f.controller.prompt('do work'); await f.controller.idle();

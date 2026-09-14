@@ -25,6 +25,15 @@ export interface Conversation {
   readonly closeKey: string | null; readonly updatedAt: number;
 }
 export interface StoredConversation { readonly revision: number; readonly value: Conversation }
+export interface CreationIntent {
+  readonly id: string; readonly abaEndpointId: string; readonly runtimeProfileId: string;
+  readonly workspaceId: string; readonly draft: string;
+}
+export interface ConversationWorkspace {
+  readonly version: 1; readonly endpointId: string; readonly signingJkt: string; readonly kemJkt: string;
+  readonly selectedId: string | null; readonly draft: string; readonly creation: CreationIntent | null;
+}
+export interface StoredWorkspace { readonly revision: number | null; readonly value: ConversationWorkspace }
 const encoder = new TextEncoder();
 const decoder = new TextDecoder('utf-8', { fatal: true });
 const statuses = ['CREATING', 'WAITING_KEY', 'ACTIVE', 'REKEY_REQUIRED', 'DRAINING', 'UNCERTAIN', 'FAILED', 'CLOSED', 'ABA_REVOKED'];
@@ -128,6 +137,35 @@ export class ConversationStore {
   private readonly prefix: string;
   public constructor(private readonly vault: EncryptedLocalVault, private readonly endpoint: string, private readonly identity: EndpointIdentity) {
     idBytes(endpoint); this.prefix = `remote-v1/${endpoint}/`;
+  }
+  private workspaceValue(raw: unknown): ConversationWorkspace {
+    const value = record(raw);
+    if (value === null || value.version !== 1 || value.endpointId !== this.endpoint ||
+      value.signingJkt !== this.identity.signing.thumbprint || value.kemJkt !== this.identity.kem.thumbprint ||
+      !boundedText(value.draft, 16_000) || (value.selectedId !== null && !boundedText(value.selectedId, 32))) throw new Error('Workspace binding is invalid');
+    if (value.selectedId !== null) idBytes(value.selectedId as string);
+    if (value.creation !== null) {
+      const intent = record(value.creation);
+      if (intent === null || typeof intent.id !== 'string' || !/^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/u.test(intent.id) ||
+        !boundedText(intent.abaEndpointId, 32) || !boundedText(intent.runtimeProfileId, 128) || intent.runtimeProfileId.trim() === '' ||
+        !boundedText(intent.workspaceId, 128) || intent.workspaceId.trim() === '' || !boundedText(intent.draft, 16_000)) throw new Error('Creation intent is invalid');
+      idBytes(intent.abaEndpointId);
+    }
+    return value as unknown as ConversationWorkspace;
+  }
+  public async readWorkspace(): Promise<StoredWorkspace> {
+    const stored = await this.vault.read(`remote-workspace-v1/${this.endpoint}`);
+    if (stored === null) return { revision: null, value: { version: 1, endpointId: this.endpoint,
+      signingJkt: this.identity.signing.thumbprint, kemJkt: this.identity.kem.thumbprint, selectedId: null, draft: '', creation: null } };
+    try {
+      if (stored.bytes.length > 160_000) throw new Error('Workspace metadata exceeds bound');
+      return { revision: stored.revision, value: this.workspaceValue(JSON.parse(decoder.decode(stored.bytes))) };
+    } finally { stored.bytes.fill(0); }
+  }
+  public async writeWorkspace(value: ConversationWorkspace, revision: number | null): Promise<number> {
+    const bytes = encoder.encode(JSON.stringify(this.workspaceValue(value)));
+    try { return await this.vault.write(`remote-workspace-v1/${this.endpoint}`, bytes, revision); }
+    finally { bytes.fill(0); }
   }
   public async list(): Promise<readonly StoredConversation[]> {
     const records = await this.vault.list(this.prefix);

@@ -13,11 +13,11 @@ export const testNow = 1_790_000_000_000;
 export const descriptor = (sessionId: string) => ({ initialize: { protocolVersion: 1, agentInfo: { name: 'Fixture Agent' } },
   session: { sessionId, configOptions: [{ id: 'model', name: 'Model', category: 'model', type: 'select', currentValue: 'a', options: [{ value: 'a', name: 'A' }, { value: 'b', name: 'B' }] }] },
   bridge: { protocolVersion: 1, duplex: true, turnCancellation: true, processEpoch: 'fixture-process-1' } });
-export async function controllerFixture(options: { readonly sessionId?: string; readonly identity?: EndpointIdentity; readonly transport?: ConversationTransport } = {}) {
+export async function controllerFixture(options: { readonly sessionId?: string; readonly abaId?: string; readonly workspaceId?: string; readonly identity?: EndpointIdentity; readonly transport?: ConversationTransport } = {}) {
   const identity = options.identity ?? await createEndpointIdentity('browser', 'Browser', 'web-software');
   const peer = await createEndpointIdentity('aba', 'ABA', 'web-software');
-  const session: EndpointSessionSummary = { sessionId: options.sessionId ?? '01'.repeat(16), hcEndpointId: testEndpoint, abaEndpointId: '02'.repeat(16),
-    status: 'ACTIVE', createdAt: new Date(testNow).toISOString(), requestedCapabilities: ['remote-session-v1'], runtimeProfileId: 'fixture', workspaceId: 'fixture' };
+  const session: EndpointSessionSummary = { sessionId: options.sessionId ?? '01'.repeat(16), hcEndpointId: testEndpoint, abaEndpointId: options.abaId ?? '02'.repeat(16),
+    status: 'ACTIVE', createdAt: new Date(testNow).toISOString(), requestedCapabilities: ['remote-session-v1'], runtimeProfileId: 'fixture', workspaceId: options.workspaceId ?? 'fixture' };
   const aba: ABAEndpointSummary = { id: session.abaEndpointId, name: 'Test device', type: 'ABA', status: 'ACTIVE', signingPublicJwk: peer.signing.publicJwk, signingJkt: peer.signing.thumbprint };
   const material: SessionKeyMaterial = { sessionId: idBytes(session.sessionId), generation: 1n, keyId: crypto.getRandomValues(new Uint8Array(16)), srk: crypto.getRandomValues(new Uint8Array(32)),
     sessionNonce: crypto.getRandomValues(new Uint8Array(32)), hcToAbaNoncePrefix: new Uint8Array(4).fill(5), abaToHcNoncePrefix: new Uint8Array(4).fill(6), notBeforeMs: BigInt(testNow - 1000), expiresAtMs: BigInt(testNow + 3_600_000) };
