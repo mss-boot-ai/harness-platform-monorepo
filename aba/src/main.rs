@@ -169,6 +169,8 @@ enum RuntimeCommand {
         /// Keep the synthetic probe alive so the deployment verifier can inject Host death.
         #[arg(long, conflicts_with = "exercise")]
         hold_for_crash: bool,
+        #[arg(long, conflicts_with = "hold_for_crash")]
+        parallel: bool,
     },
 }
 
@@ -291,6 +293,7 @@ fn execute(cli: Cli) -> Result<(), Box<dyn std::error::Error>> {
                     insecure_loopback_development,
                     exercise,
                     hold_for_crash,
+                    parallel,
                 },
         }) => {
             let config =
@@ -315,6 +318,29 @@ fn execute(cli: Cli) -> Result<(), Box<dyn std::error::Error>> {
                 rand_core::OsRng.fill_bytes(&mut id);
                 let mut process =
                     AgentProcess::start_supervised(runtime, workspace, &supervisor, id)?;
+                let mut peer = if parallel {
+                    let peer_workspace = config
+                        .workspaces
+                        .iter()
+                        .find(|workspace| workspace.id == "peer")
+                        .ok_or("parallel probe requires the explicit peer workspace")?;
+                    if !peer_workspace.allowed_runtimes.contains(&runtime.id) {
+                        return Err("peer workspace does not allow this runtime".into());
+                    }
+                    let mut peer_id = [0; 16];
+                    rand_core::OsRng.fill_bytes(&mut peer_id);
+                    Some((
+                        AgentProcess::start_supervised(
+                            runtime,
+                            peer_workspace,
+                            &supervisor,
+                            peer_id,
+                        )?,
+                        peer_id,
+                    ))
+                } else {
+                    None
+                };
                 if hold_for_crash {
                     println!("Synthetic scope probe armed for Host-death injection.");
                     use std::io::Write as _;
@@ -378,7 +404,34 @@ fn execute(cli: Cli) -> Result<(), Box<dyn std::error::Error>> {
                     aba::process::probe::controls(&mut process, &supervisor, id, &workspace.path)?;
                 }
                 process.shutdown()?;
+                if let Some((peer, peer_id)) = &mut peer {
+                    let session: String =
+                        peer_id.iter().map(|byte| format!("{byte:02x}")).collect();
+                    let messages = peer.prompt(&serde_json::to_vec(&serde_json::json!({
+                        "jsonrpc":"2.0","id":"peer-after-close","method":"session/prompt",
+                        "params":{"sessionId":session,"prompt":[{"type":"text","text":"Reply with exactly SCOPED_PEER_ALIVE."}]}
+                    }))?, &session)?;
+                    let values: Vec<serde_json::Value> = messages
+                        .iter()
+                        .map(|message| serde_json::from_slice(message))
+                        .collect::<Result<_, _>>()?;
+                    if !values.iter().any(|value| {
+                        value
+                            .pointer("/params/update/content/text")
+                            .and_then(serde_json::Value::as_str)
+                            .is_some_and(|text| text.contains("SCOPED_PEER_ALIVE"))
+                    }) {
+                        return Err("closing one scope affected the independent peer".into());
+                    }
+                    peer.shutdown()?;
+                    println!(
+                        "Independent peer runtime and relay remained usable after the first scope closed."
+                    );
+                }
             } else {
+                if parallel {
+                    return Err("parallel probe requires configured isolation".into());
+                }
                 if hold_for_crash {
                     return Err("Host-death probe requires configured isolation".into());
                 }

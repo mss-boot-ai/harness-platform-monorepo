@@ -55,6 +55,17 @@ def connected_pair_stays_private(kind, address):
         right.close()
 
 
+def check_local_relay():
+    expected = os.environ.get("HARNESS_CODEX_PROVIDER_TRANSPORT") == "local-isolated-v1"
+    try:
+        with socket.create_connection(("127.0.0.1", 39121), timeout=2) as connection:
+            connection.sendall(b"GET /not-approved HTTP/1.1\r\nHost: ignored\r\n\r\n")
+            response = connection.recv(512)
+        return expected and response.startswith(b"HTTP/1.1 400")
+    except OSError:
+        return not expected
+
+
 def probe():
     canary, port, abstract, host_pid_ns, expected_uid = sys.argv[1:]
     facts = {
@@ -74,6 +85,7 @@ def probe():
         "stream_pairs_stay_private": connected_pair_stays_private(socket.SOCK_STREAM, str(Path.cwd() / "host-control-sentinel.sock")),
         "seqpacket_pairs_stay_private": connected_pair_stays_private(socket.SOCK_SEQPACKET, str(Path.cwd() / "host-seqpacket-sentinel.sock")),
         "isolated_home": os.environ.get("HOME") == "/home/runtime",
+        "local_relay_policy_matches_mode": check_local_relay(),
     }
     pairs = []
     try:
@@ -123,6 +135,13 @@ for line in sys.stdin:
     elif method == "session/new":
         probe()
         result = {"sessionId": "isolated-fixture-session"}
+    elif method == "session/prompt":
+        if not check_local_relay():
+            raise RuntimeError("peer relay became unavailable")
+        print(json.dumps({"jsonrpc":"2.0","method":"session/update","params":{
+            "sessionId":"isolated-fixture-session","update":{"sessionUpdate":"agent_message_chunk",
+            "content":{"type":"text","text":"SCOPED_PEER_ALIVE"}}}}), flush=True)
+        result = {"stopReason":"end_turn"}
     else:
         result = {}
     print(json.dumps({"jsonrpc": "2.0", "id": request.get("id"), "result": result}), flush=True)

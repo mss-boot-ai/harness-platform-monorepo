@@ -24,17 +24,21 @@ parser.add_argument("--source-sha", required=True)
 parser.add_argument("--provider", action="store_true", help="Also establish the fixed provider path while running hostile fixtures")
 parser.add_argument("--codex", action="store_true", help="Exercise the existing real Codex adapter and provider")
 parser.add_argument("--crash", action="store_true", help="Kill and restart only this synthetic Host unit, then reconcile recorded scopes")
+parser.add_argument("--parallel", action="store_true", help="Verify two independent runtime/provider scopes")
 args = parser.parse_args()
 if os.geteuid() != 0 or not re.fullmatch(r"[0-9a-f]{40}", args.source_sha):
     raise SystemExit("requires authorized deployment identity and full source SHA")
 if args.crash and args.codex:
     raise SystemExit("crash injection uses the deterministic fixture, never an unbounded live model task")
+if args.crash and args.parallel:
+    raise SystemExit("crash and peer-survival probes are separate cases")
 user = pwd.getpwnam("harness-aba")  # Lookup only: never creates an account.
 accounts = [(entry.pw_name, entry.pw_uid, entry.pw_gid) for entry in pwd.getpwall()]
 live_identity = subprocess.check_output(["systemctl", "show", "harness-aba.service", "-p", "MainPID", "-p", "InvocationID"], text=True)
 suffix = args.source_sha[:12]
 suffix += "-codex" if args.codex else "-egress" if args.provider else ""
 suffix += "-crash" if args.crash else ""
+suffix += "-p" if args.parallel else ""
 unit = "harness-isolation-probe-" + suffix
 base = Path("/opt/harness/isolation-probes") / suffix
 state = Path("/var/lib") / unit
@@ -46,6 +50,10 @@ base.mkdir(parents=True, mode=0o755)
 for path in [state, workspace]:
     path.mkdir(mode=0o700)
     os.chown(path, user.pw_uid, user.pw_gid)
+peer_workspace = Path(str(workspace) + "-peer")
+if args.parallel:
+    peer_workspace.mkdir(mode=0o700)
+    os.chown(peer_workspace, user.pw_uid, user.pw_gid)
 binary = base / "aba"
 shutil.copyfile(args.aba, binary)
 binary.chmod(0o755)
@@ -125,6 +133,14 @@ path = {json.dumps(str(workspace))}
 allowed_runtimes = ["fixture"]
 ''')
 config.chmod(0o644)
+if args.parallel:
+    with config.open("a") as config_file:
+        config_file.write(f'''\n[[workspace]]
+id = "peer"
+display_name = "Independent peer workspace"
+path = {json.dumps(str(peer_workspace))}
+allowed_runtimes = ["fixture"]
+''')
 properties = ["Delegate=yes", "ProtectControlGroups=no", "NoNewPrivileges=yes",
     "ProtectSystem=strict", "ProtectHome=yes", "PrivateTmp=yes", "PrivateDevices=yes",
     "CapabilityBoundingSet=", "RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6 AF_NETLINK",
@@ -141,6 +157,8 @@ if args.codex:
     command += ["--exercise"]
 if args.crash:
     command += ["--hold-for-crash"]
+if args.parallel:
+    command += ["--parallel"]
 try:
     crash_confirmed = False
     if args.crash:
@@ -184,11 +202,12 @@ try:
         "no_system_bus", "no_cgroup_control", "private_pid_namespace", "host_loopback_denied",
         "host_private_network_denied", "host_abstract_socket_denied", "workspace_control_socket_denied",
         "provider_socket_hidden_from_runtime", "upstream_credential_not_in_runtime_env",
-        "isolated_home", "datagram_pair_cannot_reach_host", "stream_pairs_stay_private", "seqpacket_pairs_stay_private", "no_host_state_descriptors"}
+        "isolated_home", "datagram_pair_cannot_reach_host", "stream_pairs_stay_private", "seqpacket_pairs_stay_private",
+        "local_relay_policy_matches_mode", "no_host_state_descriptors"}
     if set(facts) != expected or any(type(value) is not bool for value in facts.values()):
         raise RuntimeError("fixture omitted or changed a required assertion")
     registry = json.loads((state / "registry.json").read_text())
-    facts["whole_scope_cleanup_recorded"] = len(registry["records"]) == 1 and all(
+    facts["whole_scope_cleanup_recorded"] = len(registry["records"]) == (2 if args.parallel else 1) and all(
         item["closed"] for item in registry["records"].values())
     if not args.codex:
         before = (workspace / "isolation-heartbeat").read_text()
@@ -200,6 +219,8 @@ try:
     facts["probe_succeeded"] = crash_confirmed if args.crash else "ACP runtime probe succeeded." in result.stdout
     if args.crash:
         facts["actual_host_crash_reconciled_without_runtime_restart"] = crash_confirmed
+    if args.parallel:
+        facts["peer_survived_first_scope_cleanup"] = "Independent peer runtime and relay remained usable after the first scope closed." in result.stdout
     report = {"source_sha": args.source_sha, "binary_sha256": hashlib.sha256(binary.read_bytes()).hexdigest(),
         "unit": unit, "facts": facts, "scope": "isolated real Codex reply and read-only tool" if args.codex else "deterministic kernel containment; fixed provider path enabled" if args.provider else "deterministic kernel containment, no network",
         "completion": "partial H1 evidence; approval/cancellation/restart matrix and complete Host remain open"}
