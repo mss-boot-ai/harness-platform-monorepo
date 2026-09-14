@@ -9,6 +9,7 @@ import { ConversationStore, hex, isTerminal, MAX_CONVERSATIONS, newConversation,
 import type { ConfigOption, RpcId } from './runtime-state';
 import { executionTargetState, type ExecutionTarget } from './execution-target';
 import { ConversationIndex, type ConversationEntry, type StoredConversationEntry, type LocalRecordIssue } from './conversation-index';
+import { conversationTitle } from '../chat/model';
 
 export interface ConversationAPI {
   abas(): Promise<readonly ABAEndpointSummary[]>;
@@ -366,8 +367,8 @@ export class ConversationManager {
     const add = (session: EndpointSessionSummary) => {
       if (session.sessionId === exceptRun || this.knownClosed.has(session.sessionId) || isTerminal(session.status) || session.abaEndpointId !== abaId || session.workspaceId !== workspaceId) return;
       const entry = [...this.entries.values()].find(({ value }) => value.activeRunId === session.sessionId)?.value;
-      const first = this.controllers.get(session.sessionId)?.snapshot().data.messages.find((message) => message.role === 'user')?.text;
-      result.push({ conversationId: entry?.id ?? null, runId: session.sessionId, title: entry?.title ?? first?.slice(0, 60) ?? '已有运行', status: session.status });
+      const first = entry?.runIds.flatMap((id) => this.controllers.get(id)?.snapshot().data.messages ?? []).find((message) => message.role === 'user')?.text;
+      result.push({ conversationId: entry?.id ?? null, runId: session.sessionId, title: entry === undefined ? '已有运行' : entry.title ?? conversationTitle(first ?? entry.draft), status: session.status });
     };
     for (const controller of this.controllers.values()) add(controller.snapshot().data.session);
     for (const session of this.unrecoverable) if (!this.controllers.has(session.sessionId)) add(session);
