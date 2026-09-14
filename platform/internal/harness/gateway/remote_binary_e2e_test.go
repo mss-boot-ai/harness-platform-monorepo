@@ -45,7 +45,16 @@ type remoteLockedBuffer struct {
 func (b *remoteLockedBuffer) Write(value []byte) (int, error) {
 	b.mu.Lock()
 	defer b.mu.Unlock()
-	return b.data.Write(value)
+	// Keep connection diagnostics bounded and free of headers/payloads.
+	const limit = 16 * 1024
+	size := len(value)
+	if remaining := limit - b.data.Len(); remaining > 0 {
+		if len(value) > remaining {
+			value = value[:remaining]
+		}
+		_, _ = b.data.Write(value)
+	}
+	return size, nil
 }
 
 func (b *remoteLockedBuffer) String() string {
@@ -99,7 +108,13 @@ func TestRemoteActualABAGatewayDuplex(t *testing.T) {
 		listener.Close()
 		t.Fatal(err)
 	}
-	server := httptest.NewUnstartedServer(handler)
+	var requestPaths remoteLockedBuffer
+	observedHandler := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		// Only method/path diagnostics: never log request headers, bodies or tickets.
+		_, _ = requestPaths.Write([]byte(r.Method + " " + r.URL.Path + "\n"))
+		handler.ServeHTTP(w, r)
+	})
+	server := httptest.NewUnstartedServer(observedHandler)
 	_ = server.Listener.Close()
 	server.Listener = listener
 	server.Start()
@@ -107,7 +122,13 @@ func TestRemoteActualABAGatewayDuplex(t *testing.T) {
 	client := &remoteBinaryClient{t: t, server: server, store: persistence, aba: aba, hc: hc, credential: hcCredential,
 		public: hcPublic, signing: hcKey, abaSigning: abaKey, token: base64.RawURLEncoding.EncodeToString(bytes.Repeat([]byte{9}, 32))}
 
-	directory := t.TempDir()
+	directory, err := filepath.EvalSymlinks(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Chmod(directory, 0o700); err != nil {
+		t.Fatal(err)
+	}
 	identityPath := filepath.Join(directory, "identity.json")
 	scalar := func(value byte) string {
 		raw := make([]byte, 32)
@@ -151,7 +172,10 @@ func TestRemoteActualABAGatewayDuplex(t *testing.T) {
 	deadline := time.Now().Add(15 * time.Second)
 	for {
 		result := client.request("/gateway/v1/endpoints/abas", nil, "")
-		if result.Code == http.StatusOK && bytes.Contains(result.Body.Bytes(), []byte(aba.ID.String())) {
+		if result.Code != http.StatusOK {
+			t.Fatalf("ABA discovery failed before readiness polling: HTTP %d", result.Code)
+		}
+		if bytes.Contains(result.Body.Bytes(), []byte(aba.ID.String())) {
 			break
 		}
 		select {
@@ -161,7 +185,7 @@ func TestRemoteActualABAGatewayDuplex(t *testing.T) {
 		default:
 		}
 		if time.Now().After(deadline) {
-			t.Fatal("ABA did not connect before deadline")
+			t.Fatalf("ABA did not connect before deadline; safe stderr=%s; request paths=%s; last discovery status=%d", strings.TrimSpace(stderr.String()), requestPaths.String(), result.Code)
 		}
 		time.Sleep(30 * time.Millisecond)
 	}
@@ -359,11 +383,8 @@ func (c *remoteBinaryClient) request(path string, body any, idempotency string) 
 		c.t.Fatalf("DPoP challenge status=%d", challenge.Code)
 	}
 	header, _ := json.Marshal(map[string]any{"alg": "ES256", "typ": "dpop+jwt", "jwk": c.public})
-	id := make([]byte, 16)
-	if _, err := rand.Read(id); err != nil {
-		c.t.Fatal(err)
-	}
-	claims, _ := json.Marshal(map[string]any{"ath": awpcrypto.AccessTokenHash(c.token), "htm": "POST", "htu": c.server.URL + path, "iat": time.Now().Unix(), "jti": fmt.Sprintf("%x", id), "nonce": nonce})
+	jti := remoteProofJTI(c.t)
+	claims, _ := json.Marshal(map[string]any{"ath": awpcrypto.AccessTokenHash(c.token), "htm": "POST", "htu": c.server.URL + path, "iat": time.Now().Unix(), "jti": jti, "nonce": nonce})
 	input := base64.RawURLEncoding.EncodeToString(header) + "." + base64.RawURLEncoding.EncodeToString(claims)
 	signature, err := awpcrypto.SignP1363LowS(c.signing, []byte(input))
 	if err != nil {
@@ -421,7 +442,8 @@ func (c *remoteBinaryClient) write(packet *awpv1.WirePacket) {
 }
 func (c *remoteBinaryClient) controlMessage(kind awpv1.ControlType, payload proto.Message, receiver []byte) {
 	c.t.Helper()
-	raw, err := proto.MarshalOptions{Deterministic: true}.Marshal(payload)
+	now := time.Now().UnixMilli()
+	raw, err := remoteControlPayload(payload, now)
 	if err != nil {
 		c.t.Fatal(err)
 	}
@@ -430,7 +452,6 @@ func (c *remoteBinaryClient) controlMessage(kind awpv1.ControlType, payload prot
 	if _, err := rand.Read(id); err != nil {
 		c.t.Fatal(err)
 	}
-	now := time.Now().UnixMilli()
 	transcript, err := controlTranscript(id, c.hc.ID[:], receiver, c.control, now, uint32(kind), raw)
 	if err != nil {
 		c.t.Fatal(err)
@@ -599,4 +620,84 @@ func (c *remoteBinaryClient) message() map[string]any {
 	}
 	c.t.Fatal("bounded packet search exceeded")
 	return nil
+}
+
+// DPoP request IDs are canonical UUID v4, not the hexadecimal IDs used by AWP.
+func remoteProofJTI(t *testing.T) string {
+	t.Helper()
+	var id [16]byte
+	if _, err := rand.Read(id[:]); err != nil {
+		t.Fatal(err)
+	}
+	id[6] = (id[6] & 0x0f) | 0x40
+	id[8] = (id[8] & 0x3f) | 0x80
+	return fmt.Sprintf("%x-%x-%x-%x-%x", id[:4], id[4:6], id[6:8], id[8:10], id[10:])
+}
+
+func TestRemoteProofJTI(t *testing.T) {
+	seen := make(map[string]bool)
+	for index := 0; index < 100; index++ {
+		id := remoteProofJTI(t)
+		if len(id) != 36 || id[8] != '-' || id[13] != '-' || id[18] != '-' || id[23] != '-' ||
+			id[14] != '4' || !strings.ContainsRune("89ab", rune(id[19])) || seen[id] {
+			t.Fatal("DPoP helper produced a noncanonical or repeated UUID v4")
+		}
+		seen[id] = true
+	}
+}
+
+func TestRemoteBinaryHCProofAuthenticates(t *testing.T) {
+	now := time.Now().UTC()
+	persistence, hc, credential, token, _, key, public := gatewayFixture(t, now)
+	handler, err := NewHandler(Config{AllowedOrigin: "http://127.0.0.1:8001", ExternalOrigin: "http://127.0.0.1:8082"}, persistence, rand.Reader, time.Now)
+	if err != nil {
+		t.Fatal(err)
+	}
+	// The in-process request signs the configured public origin; no network port is needed.
+	server := &httptest.Server{URL: "http://127.0.0.1:8082", Config: &http.Server{Handler: handler}}
+	client := &remoteBinaryClient{t: t, server: server, store: persistence, hc: hc,
+		credential: credential, token: token, signing: key, public: public}
+	result := client.request("/gateway/v1/endpoints/abas", nil, "")
+	if result.Code != http.StatusOK {
+		t.Fatalf("authenticated discovery HTTP %d", result.Code)
+	}
+}
+
+func TestRemoteDiagnosticsBounded(t *testing.T) {
+	var value remoteLockedBuffer
+	input := bytes.Repeat([]byte("x"), 32*1024)
+	if n, err := value.Write(input); n != len(input) || err != nil {
+		t.Fatal("diagnostic write failed")
+	}
+	if _, err := value.Write(input); err != nil {
+		t.Fatal(err)
+	}
+	if len(value.String()) != 16*1024 {
+		t.Fatal("diagnostic output is not bounded")
+	}
+}
+
+// Timestamp equality is part of the ACK signature contract. Capture the clock once.
+func remoteControlPayload(payload proto.Message, now int64) ([]byte, error) {
+	value := proto.Clone(payload)
+	if acknowledgment, ok := value.(*awpv1.SessionKeyPackageAck); ok {
+		acknowledgment.AcknowledgedAtMs = now
+	}
+	return proto.MarshalOptions{Deterministic: true}.Marshal(value)
+}
+
+func TestRemoteKeyAcknowledgmentUsesOneClockSample(t *testing.T) {
+	original := &awpv1.SessionKeyPackageAck{AcknowledgedAtMs: 1}
+	const outerTimestamp int64 = 1790000000123
+	raw, err := remoteControlPayload(original, outerTimestamp)
+	if err != nil {
+		t.Fatal(err)
+	}
+	decoded := new(awpv1.SessionKeyPackageAck)
+	if err := proto.Unmarshal(raw, decoded); err != nil {
+		t.Fatal(err)
+	}
+	if decoded.AcknowledgedAtMs != outerTimestamp || original.AcknowledgedAtMs != 1 {
+		t.Fatal("key acknowledgment must bind the exact outer timestamp without mutating the caller")
+	}
 }
