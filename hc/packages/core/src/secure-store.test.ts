@@ -3,6 +3,27 @@ Object.defineProperty(globalThis, 'IDBKeyRange', { value: IDBKeyRange, configura
 import { IndexedDbSecureStore } from './secure-store';
 
 describe('IndexedDbSecureStore', () => {
+  it('switches the active identity atomically while retaining old keys and records', async () => {
+    const store = new IndexedDbSecureStore(new IDBFactory(), `hc-active-${crypto.randomUUID()}`);
+    const old = await store.create('primary-browser-installation', 'Previous browser');
+    expect((await store.loadActiveIdentity())?.signing.thumbprint).toBe(old.signing.thumbprint);
+    await store.localVault().write('preserved-record', new TextEncoder().encode('retained encrypted history'), null);
+    const next = await store.createActiveIdentity('New browser', old.installationId);
+    expect(next.signing.thumbprint).not.toBe(old.signing.thumbprint);
+    expect((await store.loadActiveIdentity())?.installationId).toBe(next.installationId);
+    expect((await store.load(old.installationId))?.signing.thumbprint).toBe(old.signing.thumbprint);
+    expect(await store.localVault().read('preserved-record')).not.toBeNull();
+    await expect(store.createActiveIdentity('Stale replacement', old.installationId)).rejects.toThrow('concurrently');
+    expect((await store.loadActiveIdentity())?.installationId).toBe(next.installationId);
+    await expect(crypto.subtle.exportKey('jwk', next.signing.privateKey)).rejects.toThrow();
+  });
+
+  it('does not overwrite an existing installation through first-time registration', async () => {
+    const store = new IndexedDbSecureStore(new IDBFactory(), `hc-initial-${crypto.randomUUID()}`);
+    const first = await store.createActiveIdentity('Browser', null);
+    await expect(store.createActiveIdentity('Duplicate', null)).rejects.toThrow('concurrently');
+    expect((await store.loadActiveIdentity())?.installationId).toBe(first.installationId);
+  });
   it('persists CryptoKey handles without exporting private key material', async () => {
     const store = new IndexedDbSecureStore(new IDBFactory(), `hc-test-${crypto.randomUUID()}`);
     const identity = await store.create('primary', 'Test browser');

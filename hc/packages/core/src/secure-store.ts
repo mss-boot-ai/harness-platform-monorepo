@@ -5,8 +5,10 @@ import {
   type EndpointIdentity,
 } from './identity';
 
-const DATABASE_VERSION = 3;
+const DATABASE_VERSION = 4;
 const IDENTITY_STORE = 'endpoint-identities';
+const INSTALLATION_SETTINGS_STORE = 'installation-settings';
+const PRE_REMOTE_INSTALLATION_ID = 'primary-browser-installation';
 const TRUST_PIN_STORE = 'trust-pins';
 const SESSION_INBOX_STORE = 'session-inbox';
 const GATEWAY_ROOT_PIN = 'gateway-root';
@@ -73,6 +75,9 @@ export class IndexedDbSecureStore {
       request.addEventListener(
         'upgradeneeded',
         () => {
+          if (!request.result.objectStoreNames.contains(INSTALLATION_SETTINGS_STORE)) {
+            request.result.createObjectStore(INSTALLATION_SETTINGS_STORE, { keyPath: 'id' });
+          }
           if (!request.result.objectStoreNames.contains(IDENTITY_STORE)) {
             request.result.createObjectStore(IDENTITY_STORE, { keyPath: 'installationId' });
           }
@@ -124,6 +129,44 @@ export class IndexedDbSecureStore {
       throw new Error('persisted identity could not be loaded');
     }
     return stored;
+  }
+
+  public async loadActiveIdentity(): Promise<EndpointIdentity | null> {
+    const database = await this.open();
+    let installationId: string;
+    try {
+      const transaction = database.transaction(INSTALLATION_SETTINGS_STORE, 'readonly');
+      const value = await requestResult(transaction.objectStore(INSTALLATION_SETTINGS_STORE).get('active') as IDBRequest<{ installationId: string } | undefined>);
+      await transactionComplete(transaction);
+      installationId = value?.installationId ?? PRE_REMOTE_INSTALLATION_ID;
+    } finally { database.close(); }
+    return this.load(installationId);
+  }
+
+  /** Explicit initial registration/replacement. Old identities and encrypted records remain intact. */
+  public async createActiveIdentity(label: string, expectedInstallationId: string | null): Promise<EndpointIdentity> {
+    const identity = await createEndpointIdentity(`browser-${crypto.randomUUID()}`, label, 'web-software');
+    const database = await this.open();
+    const transaction = database.transaction([IDENTITY_STORE, INSTALLATION_SETTINGS_STORE], 'readwrite');
+    const completed = transactionComplete(transaction);
+    // Observe rejection immediately even when an early validation below aborts the transaction.
+    void completed.catch(() => undefined);
+    try {
+      const settings = transaction.objectStore(INSTALLATION_SETTINGS_STORE);
+      const pointer = await requestResult(settings.get('active') as IDBRequest<{ installationId: string } | undefined>);
+      const currentId = pointer?.installationId ?? PRE_REMOTE_INSTALLATION_ID;
+      const existing = await requestResult(transaction.objectStore(IDENTITY_STORE).get(currentId) as IDBRequest<EndpointIdentity | undefined>);
+      if ((existing?.installationId ?? null) !== expectedInstallationId) throw new Error('Active browser identity changed concurrently');
+      transaction.objectStore(IDENTITY_STORE).add(identity);
+      settings.put({ id: 'active', installationId: identity.installationId });
+      await completed;
+    } catch (cause) {
+      try { transaction.abort(); } catch { /* A completed transaction needs no abort. */ }
+      throw cause;
+    } finally { database.close(); }
+    const restored = await this.load(identity.installationId);
+    if (restored === null) throw new Error('New browser identity could not be restored');
+    return restored;
   }
 
   public async delete(installationId: string): Promise<void> {

@@ -9,7 +9,6 @@ import { Dialog } from './chat/Dialog';
 import { EndpointAccess } from './remote/endpoint-access';
 import { ownEndpoint, type EndpointOwnerState, type RegisterEndpointShutdown } from './remote/endpoint-owner';
 
-const PRIMARY_INSTALLATION_ID = 'primary-browser-installation';
 function Welcome({ draft, onDraftChange, onSettings, notice = null, enabled = true }: {
   readonly draft: string; readonly onDraftChange: (value: string) => void; readonly onSettings: () => void;
   readonly notice?: string | null; readonly enabled?: boolean;
@@ -77,7 +76,7 @@ function OwnedApp({ isOwned, registerShutdown, initialDraft }: {
       if (globalThis.crypto?.subtle === undefined || store === null) {
         setProbe({ assurance: 'unsupported', detail: '此浏览器缺少安全存储能力。请使用支持 WebCrypto 和 IndexedDB 的浏览器。', supported: false }); return;
       }
-      const existing = await store.load(PRIMARY_INSTALLATION_ID);
+      const existing = await store.loadActiveIdentity();
       if (!current || !isOwned()) return;
       const result = await store.probe();
       if (!current || !isOwned()) return;
@@ -96,12 +95,32 @@ function OwnedApp({ isOwned, registerShutdown, initialDraft }: {
   const createIdentity = async () => {
     if (!isOwned() || store === null || probe?.supported !== true || busy) return;
     setBusy(true); setError(null);
-    const creating = store.create(PRIMARY_INSTALLATION_ID, 'This browser'); startupWork.current.add(creating);
+    const creating = store.createActiveIdentity('This browser', null); startupWork.current.add(creating);
     try {
       const value = await creating;
       if (active.current && isOwned()) activate(value);
     } catch { if (active.current) setError('无法创建安全浏览器身份。请检查本地存储空间。'); }
     finally { startupWork.current.delete(creating); if (active.current) setBusy(false); }
+  };
+  const reauthenticate = async () => {
+    if (!isOwned() || identity === null || busy) return;
+    setBusy(true); setError(null); connection?.socket.close(1000, 'HC reauthentication'); setConnection(null); setRegistration(null);
+    try { await accessRef.current?.dispose(); unregister.current?.(); activate(identity); }
+    catch { setError('暂时无法重新登录，请刷新页面后重试。'); }
+    finally { if (active.current) setBusy(false); }
+  };
+  const replaceIdentity = async () => {
+    if (!isOwned() || store === null || identity === null || registration !== null || busy) return;
+    setBusy(true); setError(null);
+    const replacing = (async () => {
+      await accessRef.current?.dispose(); unregister.current?.();
+      const next = await store.createActiveIdentity('This browser', identity.installationId);
+      if (active.current && isOwned()) activate(next);
+    })();
+    startupWork.current.add(replacing);
+    try { await replacing; }
+    catch { if (active.current) setError('新的浏览器身份未能保存，原有记录仍然保留。请检查存储后刷新。'); }
+    finally { startupWork.current.delete(replacing); if (active.current) setBusy(false); }
   };
   const online = connection?.socket.readyState === 1;
   return <>
@@ -117,7 +136,7 @@ function OwnedApp({ isOwned, registerShutdown, initialDraft }: {
         <p className="fine-print">私钥仅在此浏览器生成，不以明文保存。</p>
       </section> : <>
         <section className="identity-card"><div className="section-heading"><h3>浏览器身份</h3><span className="status-pill success">已就绪</span></div><details className="technical-details"><summary>查看安全详情</summary><dl><dt>保护等级</dt><dd>{identity.assurance}</dd><dt>签名指纹</dt><dd>{identity.signing.thumbprint}</dd><dt>加密指纹</dt><dd>{identity.kem.thumbprint}</dd></dl></details></section>
-        {access === null ? null : <PlatformSetup access={access} registration={registration} />}
+        {access === null ? null : <PlatformSetup key={identity.installationId} access={access} registration={registration} onReauthenticate={reauthenticate} onReplaceIdentity={replaceIdentity} />}
         {access !== null && store !== null && registration !== null ? <GatewaySetup access={access} store={store} onReady={setConnection} /> : null}
       </>}
       {error === null ? null : <p className="error-banner" role="alert">{error}</p>}
