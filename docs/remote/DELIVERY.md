@@ -17,6 +17,8 @@ PR #3 已合并为 main `1227b392e664959c987865e14c55758a1c620952`，并协调�
 
 ## 1. 功能和证据跟踪
 
+下一阶段为 [HOST-DURABILITY](HOST-DURABILITY.md)：进程范围、事务加密存储、业务去重与离线服务、快照/同端点恢复及故障验收。H0 当前仅设计；不借已接受的部署修复把 R05 或独立设备门槛标为完成。
+
 状态只允许planned/implemented/verified/blocked；verified必须列出测试SHA、命令/CI和证据范围，模拟与真实Agent分开。一个控件或未集成模块不能算完整功能。
 
 | ID | 交付项 | 首次状态 | 完成门槛 |

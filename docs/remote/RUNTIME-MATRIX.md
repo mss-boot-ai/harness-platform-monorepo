@@ -2,6 +2,8 @@
 
 日期：2026-09-15。此表严格区分运行时 API、当前适配器实现与实际验收。
 
+持久 Host 阶段按 [HOST-DURABILITY](HOST-DURABILITY.md)推进。Codex 的 in-process 配置恢复和本轮部署验收不等于 fresh-process idle recovery；该能力须独立证明后启用。Turn 中断也不等于全部后台工具终止，迟到工具事件与异常进程树清理是 H1 的明确工作。
+
 | 运行时 | 已核对版本 | 当前状态 | 后续门槛 |
 | --- | --- | --- | --- |
 | DeepSeek Harness SDK/runtime-bin | 两者均为 `0.1.1rc1` | 实机 ACP 初始化/新会话通过；一次真实轮次出现 provider HTTP 504；旧 adapter 将非 completed 结果升级为进程退出 | 结构化失败、真流式事件、继续多轮、真实工具及支持的控制动作 |

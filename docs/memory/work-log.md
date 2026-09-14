@@ -6,6 +6,12 @@
 
 ---
 
+## 2026-09-15 05:23 +08:00 — 开始同端点持久 Host H0
+
+Codex with ChatGPT 已将 iteration 0 标为 `ACCEPTED_FOR_REPORTED_FLOW`，完整产品仍为 in progress。工作分支 `codex/remote-project-workspace-recovery`，开始前核对 HEAD/远端均为 `2d641265d6012800987820ab35aa38c8b389e952`，工作区干净，本分支尚无 PR。
+
+新阶段先记录 H0 契约，再实现 H1–H5。只读核对目标主机为 cgroup2fs/systemd 249，现 ABA `Delegate=no`、KillMode=control-group；这只证明服务整体的包含，不能当成每 Run 后代已清理的证据。当前运行版本仍为 b482117a406545e9e6a20a6d641d827b1688244d，未为本阶段修改部署权限或进程布局。
+
 ## 2026-09-15 05:10 +08:00 — Remote 恢复检查点部署与真实 HC 验收
 
 分支 `codex/remote-project-workspace-recovery`。dev-242 当前应用与 ABA 代码源 `b482117a406545e9e6a20a6d641d827b1688244d`；固定 Codex runtime `0.147.0` 与已配置模型 `gpt-5.6-luna`。原 main、数据库、私有身份及镜像有备份；Gateway 两把签名密钥与 ABA 两把身份密钥比较未变，PVC UID 未变，Redis 与现场应用配置保留。迁移完成，最终 UI CI `34892937928` 和 Remote Integration `34892932995` 全部通过。

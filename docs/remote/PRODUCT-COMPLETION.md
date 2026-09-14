@@ -13,6 +13,8 @@
 5. 独立设备授权、Attachment 密钥和控制租约。
 6. 资源、成果、移动/PWA 和完整 Remote 实际验收。
 
+2026-09-15：报告故障的部署检查点已通过 Codex with ChatGPT 独立复核，按其已记录范围接受，不代表完整产品完成。当前开始[同端点持久 Host 契约](HOST-DURABILITY.md)的 H0–H5；部署保持已验收的 `b482117a406545e9e6a20a6d641d827b1688244d`，新 Host 候选尚未上线。
+
 ## 执行目录 v1
 
 `POST /gateway/v1/catalog` 仅接受无浏览器 Origin 的 ABA DPoP 身份。请求包含字符串形式的 `connectionGeneration` 和 `catalog`，后者仅有 `version:1`、`runtimes:[{id,displayName}]`、`workspaces:[{id,displayName,runtimeIds}]`。每类最多 64 项；字段、标识、显示名称和关联均验证，拒绝未知字段。
