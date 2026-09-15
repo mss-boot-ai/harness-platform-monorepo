@@ -227,7 +227,8 @@ impl Supervisor {
         }
         if registry.state.records.values().any(|record| {
             !record.closed
-                && (record.workspace == workspace_path
+                && (record.workspace.starts_with(&workspace_path)
+                    || workspace_path.starts_with(&record.workspace)
                     || (record.workspace_device == metadata.dev()
                         && record.workspace_inode == metadata.ino()))
         }) {
