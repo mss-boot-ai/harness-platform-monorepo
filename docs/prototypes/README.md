@@ -1,7 +1,7 @@
 # Harness Platform 原型图与说明
 
 - 状态：Draft（目录与规范本身待评审）
-- 文档版本：v0.3
+- 文档版本：v0.4
 - 建立日期：2026-09-15
 - 分支：`design/prototype-gallery`
 - 用途：用可离线打开的结构化原型表达 Platform 与 HC 的完整页面与关键交互，并为每个原型配一份可追溯的说明文档。
@@ -40,9 +40,12 @@
 | --- | --- | --- |
 | `F1` | 线框 | 讨论单个结构或流程争议 |
 | `F2` | 局部稿 | 单个页面或组件的设计确认 |
-| `F3` | **结构稿** | 完整页面清单交付（默认级别） |
+| `F3` | 结构稿 | 完整页面清单交付 |
+| `F4` | **还原稿** | 照现有实现复刻，用于对照、验收与回归 |
 
-完整页面清单必须用 F3。F3 要求：应用外壳、页面头、真实字段与示例值、操作按钮、状态变体、空/错/无权限态。规则见 [`CONVENTIONS.md`](CONVENTIONS.md) §2。
+完整页面清单必须用 F3。F3 要求：应用外壳、页面头、真实字段与示例值、操作按钮、状态变体、空/错/无权限态。F4 在 F3 之上要求样式与结构取自真实源码或构建产物，并**必须**在 README 中列出还原来源与还原偏差。规则见 [`CONVENTIONS.md`](CONVENTIONS.md) §2。
+
+**取不到实包时不得笼统声称"一模一样"**：例如 Platform 的外壳来自 `@mss-boot-io/admin-web` 而本地无该包源码，`platform-replica/` 已明确标注「外壳为重建，非逐像素」。
 
 ### 2.3 版本号
 
@@ -56,12 +59,23 @@
 
 | 目录 | 界面 | 页面数 | 版本 | 保真度 | 状态 | 关联文档 |
 | --- | --- | --- | --- | --- | --- | --- |
-| [`hc-pages/`](hc-pages/) | **HC 端完整页面** | 16 | v0.1 | F3 | Partial impl | [`../architecture/HC.md`](../architecture/HC.md) §20、[`../remote/README.md`](../remote/README.md) |
-| [`platform-pages/`](platform-pages/) | **Platform 端完整页面** | 18 | v0.1 | F3 | Visual baseline | [`../roadmap/verification/2026-09-04-platform-m1.md`](../roadmap/verification/2026-09-04-platform-m1.md)、[`../architecture/PLATFORM.md`](../architecture/PLATFORM.md) |
+| [`hc-replica/`](hc-replica/) | **HC Web 还原稿**（生产界面复刻） | 11 屏 | v0.1 | F4 | Partial impl | [`../architecture/HC.md`](../architecture/HC.md)、[`../remote/README.md`](../remote/README.md) |
+| [`platform-replica/`](platform-replica/) | **Platform 后台还原稿**（页面主体复刻，外壳为重建） | 9 屏 | v0.1 | F4 | Visual baseline | [`../roadmap/verification/2026-09-04-platform-m1.md`](../roadmap/verification/2026-09-04-platform-m1.md) |
+| [`hc-pages/`](hc-pages/) | HC 端完整页面（设计稿） | 16 | v0.1 | F3 | Partial impl | [`../architecture/HC.md`](../architecture/HC.md) §20、[`../remote/README.md`](../remote/README.md) |
+| [`platform-pages/`](platform-pages/) | Platform 端完整页面（设计稿，含未实现页） | 18 | v0.1 | F3 | Visual baseline | [`../roadmap/verification/2026-09-04-platform-m1.md`](../roadmap/verification/2026-09-04-platform-m1.md)、[`../architecture/PLATFORM.md`](../architecture/PLATFORM.md) |
 | [`aba-enrollment/`](aba-enrollment/) | ABA 设备授权流程（终端 + 流程 + 状态机） | — | v0.1 | F3 | Partial impl | [`../architecture/ARCHITECTURE.md`](../architecture/ARCHITECTURE.md) §6.1、ADR-0005 |
 | [`TEMPLATE/`](TEMPLATE/) | 新增原型骨架与样式源 | — | v0.1 | F3 | 模板 | [`CONVENTIONS.md`](CONVENTIONS.md) |
-| [`hc-remote-console-v1/`](hc-remote-console-v1/) | ~~HC 远程会话主界面~~ | — | v0.1 | F2 | Superseded | 已被 `hc-pages/` 取代 |
-| [`platform-admin-v1/`](platform-admin-v1/) | ~~Platform 管理后台五页面~~ | — | v0.1 | F2 | Superseded | 已被 `platform-pages/` 取代 |
+| [`hc-remote-console-v1/`](hc-remote-console-v1/) | ~~HC 远程会话主界面~~ | — | v0.1 | F2 | Superseded | 已被 `hc-replica/` 与 `hc-pages/` 取代 |
+| [`platform-admin-v1/`](platform-admin-v1/) | ~~Platform 管理后台五页面~~ | — | v0.1 | F2 | Superseded | 已被 `platform-replica/` 与 `platform-pages/` 取代 |
+
+### 3.1 F3 设计稿 vs F4 还原稿，用哪个
+
+| 你想做的判断 | 用 |
+| --- | --- |
+| 界面现在**长什么样**、字段是否对、和别人演示当前系统 | **F4 还原稿**（`hc-replica/`、`platform-replica/`） |
+| 界面**应该长什么样**、下一步要加哪些页面和状态 | **F3 设计稿**（`hc-pages/`、`platform-pages/`） |
+
+两者不互相替代。F4 只覆盖已实现的界面，F3 才包含尚未实现的页面（Platform 的证书与轮换、HC 的成果栏等）。
 
 ## 4. 建议阅读顺序
 
@@ -99,3 +113,4 @@
 | v0.1 | 2026-09-15 | 首次建立：目录、规范、模板与三个首批原型 |
 | v0.2 | 2026-09-15 | 新增原型版本编号要求（`vMAJOR.MINOR`），清单增加「版本」列 |
 | v0.3 | 2026-09-15 | 新增 `hc-pages/`（16 页）与 `platform-pages/`（18 页）完整页面稿；引入保真度分级（F1/F2/F3）；`hc-remote-console-v1/`、`platform-admin-v1/` 标为 Superseded |
+| v0.4 | 2026-09-15 | 新增 F4 还原稿级别与 `hc-replica/`（11 屏）、`platform-replica/`（9 屏）；补充 F3/F4 选用指引；明确取不到实包时不得声称「一模一样」 |

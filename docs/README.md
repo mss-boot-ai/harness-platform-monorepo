@@ -37,10 +37,14 @@
 
 - [`prototypes/README.md`](prototypes/README.md)：目录入口、状态 / 保真度 / 版本规则、原型清单。
 - [`prototypes/CONVENTIONS.md`](prototypes/CONVENTIONS.md)：制作规范、保真度分级（F1/F2/F3）、版本编号与禁止事项。
-- [`prototypes/hc-pages/`](prototypes/hc-pages/README.md)：**HC 端完整页面稿（16 页）**，覆盖 `architecture/HC.md` §20 页面清单。
-- [`prototypes/platform-pages/`](prototypes/platform-pages/README.md)：**Platform 端完整页面稿（18 页）**，含 Harness 业务与 Foundation 模块，并逐页标注实现状态。
+- [`prototypes/hc-replica/`](prototypes/hc-replica/README.md)：**HC Web 还原稿（F4，11 屏）**，样式取自 `hc/web/src/styles.css` 原文，结构与文案取自 HC 组件源码。
+- [`prototypes/platform-replica/`](prototypes/platform-replica/README.md)：**Platform 后台还原稿（F4，9 屏）**，页面主体取自 `platform/web/src/business` 源码；应用外壳因 `@mss-boot-io/admin-web` 本地无源码而标注为「重建，非逐像素」。
+- [`prototypes/hc-pages/`](prototypes/hc-pages/README.md)：HC 端完整页面稿（F3，16 页），覆盖 `architecture/HC.md` §20 页面清单。
+- [`prototypes/platform-pages/`](prototypes/platform-pages/README.md)：Platform 端完整页面稿（F3，18 页），含 Harness 业务与 Foundation 模块，并逐页标注实现状态。
 - [`prototypes/aba-enrollment/`](prototypes/aba-enrollment/README.md)：ABA 设备授权流程、终端侧输出与状态机。
 - `hc-remote-console-v1/`、`platform-admin-v1/`：已被上述页面稿取代，标为 `Superseded`，保留历史。
+
+F3 设计稿回答「界面应该长什么样」，F4 还原稿回答「界面现在长什么样」，两者不互相替代。
 
 原型是结构化表达手段，**不是验收证据**，也不修改任何已接受契约；「已实现/已验证」结论仍只能来自代码、提交、CI 与验证报告。页面稿中的「实现状态」列不改变 `roadmap/DELIVERY.md` 与验证报告的结论。
 

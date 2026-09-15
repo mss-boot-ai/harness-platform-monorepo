@@ -1,0 +1,721 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>HC Web 还原稿 — 原型 v0.1</title>
+<!--
+  本文件是 HC Web 生产界面的还原稿（F4）。
+  样式块 = hc/web/src/styles.css 原文，未做修改（逐行照抄）。
+  DOM 结构与文案取自 hc/web/src/{App.tsx,SessionSetup.tsx,chat/*,remote/RuntimeControls.tsx,remote/endpoint-access.ts}。
+  仅有的差异见页面内「还原偏差」说明：为在同一个文件里并排展示多屏，
+  额外加了 .gal / .screen 画廊外壳，并把 height:100dvh 覆盖为 100%。
+-->
+<style>
+:root {
+  font-family: Inter, ui-sans-serif, -apple-system, BlinkMacSystemFont, 'Segoe UI', 'PingFang SC', 'Microsoft YaHei', sans-serif;
+  color: #202321; background: #ffffff; font-synthesis: none; text-rendering: optimizeLegibility;
+  -webkit-font-smoothing: antialiased;
+  --bg: #ffffff; --sidebar: #f6f7f5; --surface: #f3f4f2; --hover: #e9ece8;
+  --text: #202321; --muted: #757b75; --line: #e5e8e2; --accent: #34594a;
+  --error: #9f3636; --error-bg: #fff2f1; --shadow: 0 8px 32px #19251e0d;
+}
+* { box-sizing: border-box; }
+body { margin: 0; min-width: 320px; }
+button, input, textarea, select { font: inherit; }
+button { cursor: pointer; color: inherit; }
+button:disabled { cursor: not-allowed; opacity: .45; }
+button, input, textarea, summary, a { -webkit-tap-highlight-color: transparent; }
+button:focus-visible, a:focus-visible, summary:focus-visible { outline: 2px solid var(--accent); outline-offset: 4px; }
+input:focus-visible, textarea:focus-visible, select:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+button svg { flex-shrink: 0; }
+button { touch-action: manipulation; }
+.sr-only { position: absolute; width: 1px; height: 1px; padding: 0; margin: -1px; overflow: hidden; clip: rect(0,0,0,0); white-space: nowrap; border: 0; }
+.skip-link { position: fixed; top: -100px; left: 20px; z-index: 100; background: var(--bg); padding: 12px; }
+.skip-link:focus { top: 12px; }
+.chat-shell { display: grid; grid-template-columns: 256px minmax(0, 1fr); height: 100vh; height: 100dvh; overflow: hidden; }
+.chat-sidebar { display: flex; flex-direction: column; min-height: 0; padding: 24px 16px 14px; background: var(--sidebar); border-right: 1px solid var(--line); }
+.sidebar-brand { display: flex; gap: 10px; align-items: center; padding: 0 6px 25px; }
+.brand-mark { display: grid; place-items: center; width: 29px; height: 29px; border-radius: 9px; background: var(--text); color: var(--bg); font-size: 18px; font-weight: 650; letter-spacing: -1px; }
+.sidebar-brand strong { font-size: 19px; font-weight: 650; letter-spacing: -.6px; }
+.sidebar-brand .icon-button { margin-left: auto; }
+.icon-button { border: 0; background: transparent; display: inline-flex; align-items: center; justify-content: center; min-width: 36px; min-height: 36px; border-radius: 9px; color: var(--muted); }
+.icon-button:hover { color: var(--text); background: var(--hover); }
+.new-chat-button { display: flex; align-items: center; gap: 10px; width: 100%; border: 1px solid var(--line); background: var(--bg); border-radius: 11px; padding: 11px 12px; font-size: 14px; box-shadow: 0 2px 3px #101a1003; }
+.new-chat-button:hover { border-color: #b7c1b6; }
+.sidebar-action { border: 0; background: none; padding: 13px 12px; text-align: left; display: flex; align-items: center; gap: 10px; font-size: 13px; color: var(--muted); border-radius: 9px; margin-top: 4px; }
+.sidebar-action:hover { background: var(--hover); color: var(--text); }
+.conversation-search { width: 100%; min-width: 0; background: var(--bg); border: 1px solid var(--line); border-radius: 9px; padding: 9px 10px; color: var(--text); margin-top: 8px; }
+.sidebar-section-label { font-size: 11px; color: var(--muted); padding: 22px 12px 9px; letter-spacing: .06em; }
+.conversation-list { flex: 1; min-height: 0; overflow: auto; }
+.conversation-item { width: 100%; border: 0; background: none; border-radius: 9px; display: flex; flex-direction: column; align-items: flex-start; gap: 5px; padding: 11px 12px; text-align: left; margin-bottom: 3px; }
+.conversation-item span { font-size: 13px; max-width: 100%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.conversation-item small { color: var(--muted); font-size: 10px; }
+.conversation-item:hover, .conversation-item.selected { background: var(--hover); }
+.sidebar-empty { padding: 4px 12px; font-size: 12px; color: var(--muted); line-height: 1.8; }
+.sidebar-footer { margin-top: auto; padding-top: 16px; }
+.sidebar-footer > p { font-size: 10px; color: var(--muted); padding: 0 12px 10px; line-height: 1.7; }
+.account-button { border: 0; border-top: 1px solid var(--line); background: none; padding: 15px 6px 4px; display: flex; width: 100%; gap: 10px; align-items: center; text-align: left; }
+.account-avatar { height: 33px; width: 33px; border: 1px solid var(--line); border-radius: 10px; display: grid; place-items: center; background: var(--bg); }
+.account-button > span:nth-child(2) { flex: 1; display: flex; flex-direction: column; gap: 4px; }
+.account-button strong { font-size: 12px; font-weight: 550; }.account-button small { font-size: 10px; color: var(--muted); }
+.account-button > svg { width: 15px; color: var(--muted); }
+.chat-main { display: flex; flex-direction: column; min-width: 0; min-height: 0; position: relative; background: var(--bg); }
+.chat-header { display: flex; justify-content: space-between; align-items: center; height: 76px; padding: 0 32px; flex-shrink: 0; gap: 12px; }
+.header-left { display: flex; align-items: center; gap: 10px; min-width: 0; }
+.header-agent, .agent-picker > summary { display: flex; gap: 8px; align-items: center; background: none; border: 0; padding: 8px 0; font-size: 17px; cursor: pointer; list-style: none; min-width: 0; }
+.header-agent svg, .agent-picker > summary svg { width: 15px; color: var(--muted); }
+.agent-picker { position: relative; min-width: 0; }.agent-picker > summary::-webkit-details-marker { display: none; }
+.agent-picker strong { font-weight: 550; max-width: 240px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.agent-popover { position: absolute; top: 45px; left: 0; width: 330px; max-width: calc(100vw - 40px); max-height: min(75dvh, 640px); overflow-y: auto; padding: 20px; z-index: 15; background: var(--bg); border: 1px solid var(--line); box-shadow: var(--shadow); border-radius: 14px; }
+.connection-badge { display: flex; align-items: center; gap: 7px; border: 1px solid var(--line); border-radius: 20px; background: var(--bg); padding: 8px 12px; font-size: 11px; color: var(--muted); white-space: nowrap; }
+.connection-dot { width: 6px; height: 6px; border-radius: 50%; background: #b0b5ae; }
+.connection-badge.connected .connection-dot { background: #438968; }.connection-badge:hover { background: var(--surface); }
+.chat-scroll { flex: 1; min-height: 0; overflow-y: auto; overflow-x: hidden; overscroll-behavior: contain; scrollbar-gutter: stable; }
+.chat-scroll.is-empty { display: flex; flex-direction: column; }
+.welcome { width: min(760px, calc(100% - 64px)); margin: auto; padding: 48px 0 100px; }
+.welcome-emblem { display: flex; justify-content: center; margin-bottom: 21px; color: var(--accent); }.welcome-emblem svg { width: 36px; height: 36px; stroke-width: 1.1; }
+.welcome-kicker { text-align: center; color: var(--muted); letter-spacing: .12em; font-size: 11px; margin: 0 0 10px; }
+.welcome h1 { font-size: clamp(26px, 3vw, 34px); letter-spacing: -.06em; font-weight: 560; text-align: center; margin: 0; line-height: 1.45; }
+.welcome-description { text-align: center; font-size: 13px; color: var(--muted); line-height: 1.8; margin: 14px 0 32px; }
+.composer-wrap { width: 100%; margin: 0 auto; }
+.composer { background: var(--surface); border: 1px solid transparent; border-radius: 23px; padding: 16px 17px 12px; box-shadow: 0 2px 8px #26332304; transition: border-color .15s, box-shadow .15s; }
+.composer:focus-within { border-color: #b9c6bb; box-shadow: 0 0 0 3px #647e6309; }
+.composer textarea { display: block; resize: none; width: 100%; min-height: 52px; max-height: 200px; overflow-y: auto; border: 0; background: none; padding: 1px 4px 10px; color: var(--text); font-size: 15px; line-height: 1.7; outline: none; }
+.composer textarea:focus-visible { outline: none; }.composer textarea::placeholder { color: #8b908b; }
+.composer-actions { display: flex; justify-content: space-between; align-items: center; min-height: 36px; }
+.composer-context { color: var(--muted); display: flex; align-items: center; gap: 6px; font-size: 11px; padding-left: 4px; }.composer-context svg { width: 13px; height: 13px; }
+.send-button { width: 35px; height: 35px; border: 0; border-radius: 50%; display: grid; place-items: center; background: var(--text); color: var(--bg); }.send-button svg { width: 20px; height: 20px; }.send-button:disabled { opacity: .28; }.send-button:not(:disabled):hover { transform: translateY(-1px); }
+.composer-hint { display: flex; gap: 12px; justify-content: space-between; font-size: 10px; color: var(--muted); margin: 11px 4px 0; line-height: 1.5; }
+.suggestion-grid { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 12px; margin-top: 30px; }
+.suggestion { border: 1px solid var(--line); border-radius: 13px; padding: 16px; background: var(--bg); text-align: left; display: flex; flex-direction: column; gap: 7px; }.suggestion svg { color: var(--accent); width: 18px; height: 18px; margin-bottom: 7px; }.suggestion strong { font-size: 12px; font-weight: 550; }.suggestion span { font-size: 11px; line-height: 1.5; color: var(--muted); }.suggestion:hover { background: var(--sidebar); border-color: #c5cdc4; }
+.transcript { width: min(760px, calc(100% - 64px)); margin: 0 auto; padding: 22px 0 40px; }
+.message { display: flex; gap: 14px; margin-bottom: 32px; min-width: 0; }.message-body { flex: 1; min-width: 0; font-size: 15px; line-height: 1.9; overflow-wrap: anywhere; }
+.message-user { justify-content: flex-end; margin-bottom: 36px; }.message-user .message-body { flex: 0 1 auto; max-width: 86%; padding: 12px 19px; border-radius: 22px 22px 6px 22px; background: var(--surface); }.plain-message { margin: 0; white-space: pre-wrap; }
+.assistant-avatar { width: 27px; height: 27px; border: 1px solid var(--line); border-radius: 9px; display: grid; place-items: center; font-weight: 650; font-size: 14px; flex: 0 0 auto; margin-top: 1px; color: var(--accent); }
+.message-author { font-size: 12px; font-weight: 600; line-height: 27px; margin-bottom: 8px; }.message-muted { color: var(--muted); font-size: 12px; }.message-system { color: var(--muted); font-size: 12px; padding: 10px 14px; border-left: 2px solid var(--line); }
+.markdown-content p { margin: 0 0 16px; }.markdown-content p:last-child { margin-bottom: 0; }.markdown-content h3 { font-size: 17px; margin: 21px 0 10px; }.markdown-content h3:first-child { margin-top: 0; }
+.markdown-content ul, .markdown-content ol { padding-left: 24px; margin: 12px 0 18px; }.markdown-content li { margin-bottom: 5px; }.markdown-content a { color: var(--accent); text-underline-offset: 3px; }
+.markdown-content code { font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; background: var(--surface); border-radius: 4px; padding: 2px 5px; font-size: .88em; }
+.markdown-content blockquote { margin: 12px 0; padding: 4px 16px; border-left: 3px solid var(--line); color: var(--muted); }
+.code-block { overflow: hidden; border: 1px solid var(--line); border-radius: 12px; margin: 16px 0; background: var(--sidebar); }.code-toolbar { display: flex; align-items: center; justify-content: space-between; padding: 8px 13px; border-bottom: 1px solid var(--line); color: var(--muted); font-size: 11px; }
+.code-block pre { overflow-x: auto; margin: 0; padding: 15px 17px; line-height: 1.7; font-size: 13px; max-height: 560px; tab-size: 2; }.code-block pre code { padding: 0; background: transparent; font-size: inherit; border-radius: 0; white-space: pre; }
+.copy-button { display: inline-flex; align-items: center; gap: 6px; padding: 5px 6px; border: 0; background: none; color: var(--muted); border-radius: 5px; font-size: 11px; margin-top: 12px; }.copy-button svg { width: 14px; height: 14px; }.copy-button:hover { background: var(--hover); color: var(--text); }.code-toolbar .copy-button { margin-top: 0; }
+.thinking { display: flex; gap: 5px; padding: 13px 0; }.thinking > span:not(.sr-only) { height: 6px; width: 6px; border-radius: 50%; background: var(--muted); animation: blink 1.5s infinite; }.thinking > span:nth-child(2) { animation-delay: .15s; }.thinking > span:nth-child(3) { animation-delay: .3s; }@keyframes blink { 0%, 80%, 100% { opacity: .25; } 40% { opacity: 1; } }
+.uncertain-label { font-size: 11px; color: var(--error); padding: 4px 0; }
+.composer-dock { position: relative; padding: 4px 32px max(17px, env(safe-area-inset-bottom)); flex-shrink: 0; background: var(--bg); }.composer-dock .composer-wrap { max-width: 760px; }.latest-button { position: absolute; bottom: calc(100% + 8px); left: 50%; transform: translateX(-50%); display: flex; gap: 6px; align-items: center; border: 1px solid var(--line); border-radius: 25px; background: var(--bg); box-shadow: var(--shadow); padding: 8px 12px; font-size: 11px; }.latest-button svg { width: 14px; }
+.chat-notice, .chat-error { font-size: 12px; line-height: 1.7; padding: 10px 16px; margin: 0 24px 10px; border-radius: 9px; flex-shrink: 0; }.chat-notice { background: var(--sidebar); color: var(--muted); }.chat-error, .error-banner { background: var(--error-bg); color: var(--error); }.readonly-note { padding: 16px 0; font-size: 12px; text-align: center; line-height: 1.8; color: var(--muted); }
+.hc-dialog { color: var(--text); background: var(--bg); border: 1px solid var(--line); border-radius: 20px; padding: 0; width: min(480px, calc(100vw - 32px)); max-height: calc(100dvh - 48px); box-shadow: 0 24px 80px #00000020; }
+.hc-dialog::backdrop { background: #10181350; backdrop-filter: blur(3px); }.dialog-surface { display: flex; flex-direction: column; }.dialog-header { display: flex; align-items: center; justify-content: space-between; padding: 19px 24px; border-bottom: 1px solid var(--line); position: sticky; top: 0; background: var(--bg); z-index: 1; }.dialog-header h2 { margin: 0; font-size: 17px; font-weight: 600; }.dialog-body { padding: 20px 24px 24px; font-size: 13px; line-height: 1.8; }.dialog-body p { color: var(--muted); }.settings-intro { margin-top: 0; }
+.setup-card, .identity-card, .platform-card, .gateway-card { padding: 18px 0; border-bottom: 1px solid var(--line); }.section-heading { display: flex; gap: 12px; justify-content: space-between; align-items: center; }.section-heading h3, .platform-card > h3 { margin: 0; font-size: 14px; font-weight: 600; }.status-pill { font-size: 10px; background: var(--surface); color: var(--muted); padding: 3px 9px; border-radius: 16px; white-space: nowrap; }.status-pill.success { color: var(--accent); background: #edf4ee; }
+.login-form, .target-form { display: flex; flex-direction: column; gap: 12px; }.target-form h2 { font-size: 15px; margin: 0; }.target-form p { font-size: 11px; line-height: 1.7; color: var(--muted); margin: 0; }.login-form label, .target-form label { display: flex; flex-direction: column; gap: 6px; font-size: 12px; }
+.login-form input, .target-form input, .target-form select { border: 1px solid var(--line); border-radius: 9px; padding: 10px 11px; background: var(--bg); color: var(--text); width: 100%; min-width: 0; }
+.primary-button, .secondary-button { padding: 10px 14px; min-height: 40px; border-radius: 9px; font-size: 12px; line-height: 1.4; }.primary-button { background: var(--text); color: var(--bg); border: 1px solid var(--text); }.secondary-button { background: var(--bg); color: var(--text); border: 1px solid var(--line); }.primary-button:not(:disabled):hover { opacity: .85; }.secondary-button:not(:disabled):hover { background: var(--surface); }.gateway-card > button { margin: 6px 8px 4px 0; }
+.fine-print { font-size: 10px; line-height: 1.7; color: var(--muted); }.error-banner { padding: 10px 12px; border-radius: 8px; font-size: 12px; }.technical-details { margin-top: 12px; font-size: 11px; color: var(--muted); overflow-wrap: anywhere; }.technical-details summary { cursor: pointer; padding: 5px 0; }.technical-details dd { margin: 3px 0 12px; word-break: break-all; }.technical-details dt { font-weight: 600; }.settings-privacy { padding: 20px 0 0; font-size: 11px; line-height: 1.8; }.settings-privacy strong { color: var(--text); }.settings-done { width: 100%; margin-top: 15px; }.dialog-actions { display: flex; justify-content: flex-end; gap: 10px; margin-top: 24px; }.old-session { display: flex; flex-direction: column; gap: 8px; margin-top: 12px; }
+.sidebar-toggle, .sidebar-backdrop, .mobile-only { display: none; }.sidebar-collapsed { grid-template-columns: 0 minmax(0, 1fr); }.sidebar-collapsed .chat-sidebar { visibility: hidden; overflow: hidden; padding: 0; }.sidebar-collapsed .sidebar-toggle { display: inline-flex; }
+@media (prefers-color-scheme: dark) {
+  :root { color-scheme: dark; --bg: #202320; --sidebar: #191c19; --surface: #2c302c; --hover: #343b34; --text: #e5e9e3; --muted: #a0a99e; --line: #383e36; --accent: #a6cdb4; --error: #efb2aa; --error-bg: #482c29; --shadow: 0 8px 32px #0003; }
+  .status-pill.success { background: #2a3c2f; }.composer textarea::placeholder { color: #98a294; }
+}
+@media (max-width: 900px) { .chat-shell { grid-template-columns: 225px minmax(0, 1fr); }.chat-header { padding: 0 24px; }.welcome, .transcript { width: calc(100% - 48px); }.welcome { padding-bottom: 64px; }.sidebar-collapsed { grid-template-columns: 0 minmax(0, 1fr); } }
+@media (max-width: 700px) {
+  .chat-shell, .sidebar-collapsed { display: block; }.chat-main { height: 100%; }.chat-sidebar, .sidebar-collapsed .chat-sidebar { position: fixed; inset: 0 auto 0 0; width: min(285px, 85vw); z-index: 30; padding: 22px 16px max(16px, env(safe-area-inset-bottom)); transform: translateX(-100%); visibility: hidden; transition: transform .2s ease, visibility .2s; }.sidebar-open .chat-sidebar { transform: translateX(0); visibility: visible; }.sidebar-backdrop { display: block; position: fixed; inset: 0; z-index: 25; border: 0; background: #0005; width: 100%; height: 100%; }.desktop-only { display: none; }.mobile-only, .sidebar-toggle { display: inline-flex; }
+  .chat-header { height: 62px; padding: 0 16px; }.header-left { gap: 9px; }.connection-badge { font-size: 10px; padding: 8px 10px; }.agent-picker strong { max-width: 160px; font-size: 14px; }.agent-popover { left: -40px; }.header-agent { font-size: 16px; }
+  .welcome { width: calc(100% - 36px); padding: 30px 0 55px; }.welcome-emblem { margin-bottom: 14px; }.welcome-emblem svg { width: 31px; height: 31px; }.welcome h1 { font-size: 28px; }.welcome-description { font-size: 12px; margin-bottom: 25px; }.welcome-kicker { font-size: 10px; }.suggestion-grid { gap: 8px; margin-top: 25px; }.suggestion { padding: 13px 9px; gap: 6px; }.suggestion strong { font-size: 11px; }.suggestion span { font-size: 10px; }.suggestion svg { width: 17px; margin-bottom: 5px; }
+  .composer { padding: 13px 12px 10px; border-radius: 20px; }.composer textarea { font-size: 16px; }.composer-hint { font-size: 9px; gap: 8px; }.composer-hint span { white-space: nowrap; }
+  .transcript { width: calc(100% - 30px); padding-top: 15px; }.message { gap: 9px; margin-bottom: 26px; }.message-body { font-size: 14px; }.assistant-avatar { width: 25px; height: 25px; font-size: 12px; }.message-user .message-body { max-width: 90%; padding: 11px 16px; }.message-author { font-size: 11px; }.code-block pre { font-size: 12px; padding: 12px; }.composer-dock { padding: 5px 15px max(14px, env(safe-area-inset-bottom)); }.chat-notice, .chat-error { margin: 0 15px 8px; font-size: 11px; padding: 9px 12px; }
+  .hc-dialog { max-height: calc(100dvh - 28px); border-radius: 17px; }.dialog-header { padding: 16px 18px; }.dialog-body { padding: 16px 18px 20px; }.dialog-actions { flex-wrap: wrap; }
+}
+@media (max-width: 360px) { .suggestion span { display: none; }.agent-picker strong { max-width: 125px; } }
+@media (prefers-reduced-motion: reduce) { *, *::before, *::after { animation: none !important; transition: none !important; scroll-behavior: auto !important; } }
+
+/* Runtime-originated controls are not global preferences. */
+.runtime-configuration { border-top: 1px solid var(--line); margin-top: 10px; padding-top: 16px; display: grid; gap: 12px; }
+.runtime-configuration h3 { font-size: 13px; margin: 0; }.runtime-configuration small { font-size: 10px; color: var(--muted); line-height: 1.6; }
+.context-usage { display: grid; gap: 7px; color: var(--muted); font-size: 11px; }.context-usage progress { width: 100%; height: 7px; accent-color: var(--accent); }
+.runtime-activity { margin: 8px 0 16px; display: grid; gap: 10px; }.tool-card,.plan-card { border: 1px solid var(--line); border-radius: 10px; padding: 10px 12px; background: var(--sidebar); font-size: 12px; }
+.tool-card summary { display: flex; gap: 12px; justify-content: space-between; cursor: pointer; }.tool-card summary > span:first-child { overflow-wrap: anywhere; }.tool-card h4 { font-size: 11px; color: var(--muted); margin: 12px 0 4px; }
+.tool-card pre,.permission-card pre,.approval-detail { white-space: pre-wrap; overflow-wrap: anywhere; overflow-y: auto; max-height: 360px; font-size: 11px; line-height: 1.7; background: var(--surface); padding: 10px; border-radius: 6px; }
+.permission-card { padding: 15px; border: 1px solid var(--accent); border-radius: 12px; background: var(--bg); display: grid; gap: 10px; font-size: 12px; }.permission-card h3 { font-size: 13px; margin: 0; }.permission-card summary { cursor: pointer; }.permission-card .status-pill { white-space: normal; text-align: right; }
+.permission-actions { display: flex; flex-wrap: wrap; gap: 8px; }.permission-actions button { min-height: 42px; }.tool-failed { border-color: var(--error); }.plan-card ol { margin: 10px 0 0; padding-left: 20px; }
+.readonly-draft { margin-top: 12px; }
+.readonly-draft label { display: block; margin-bottom: 6px; }
+.readonly-draft textarea { box-sizing: border-box; width: 100%; min-height: 80px; max-height: 200px; padding: 10px; resize: vertical; font: inherit; }
+</style>
+<!-- 以下为「画廊外壳」：仅为在同一文件中并排展示多屏而添加，不属于生产界面 -->
+<style>
+body { background: #e9ebe6; }
+.gal { max-width: 1180px; margin: 0 auto; padding: 26px 20px 80px; }
+.gal h1 { font-size: 21px; font-weight: 600; letter-spacing: -.01em; margin: 0 0 6px; }
+.gal h2 { font-size: 14px; font-weight: 600; margin: 32px 0 12px; padding-bottom: 8px; border-bottom: 1px solid #cfd4cb; }
+.gal p.lead { color: #52584f; font-size: 13px; line-height: 1.75; max-width: 84ch; margin: 0 0 10px; }
+.gal .meta { display: flex; flex-wrap: wrap; gap: 7px; margin: 0 0 8px; }
+.gal .tag { display: inline-flex; align-items: center; gap: 5px; padding: 2px 9px; border-radius: 999px; font-size: 11.5px; border: 1px solid #bcc2b8; background: #fff; color: #4c5249; }
+.gal .tag--ver { font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; border-color: #6e7568; color: #202321; background: #f1f3ef; }
+.gal .tag--f4 { border-color: #34594a; background: #eaf1ec; color: #2a4a3d; font-weight: 600; }
+.gal .tag--dev { border-color: #8a5309; background: #fdf1dc; color: #8a5309; }
+.gal .tbl { border: 1px solid #cbd1c6; border-radius: 10px; overflow: hidden; background: #fff; margin: 12px 0 0; }
+.gal table { width: 100%; border-collapse: collapse; font-size: 12px; }
+.gal th, .gal td { text-align: left; padding: 8px 11px; border-bottom: 1px solid #e2e5de; vertical-align: top; }
+.gal th { background: #f4f6f2; color: #52584f; font-weight: 600; font-size: 11.5px; }
+.gal tbody tr:last-child td { border-bottom: 0; }
+.gal code { font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; font-size: 11.5px; background: #f1f3ef; border-radius: 4px; padding: 1px 5px; }
+.gal .shot { margin: 0 0 30px; }
+.gal .shot > figcaption { font-size: 12px; color: #52584f; margin: 8px 2px 0; line-height: 1.7; }
+.gal .shot > figcaption b { color: #202321; }
+.screen { height: 700px; border: 1px solid #bcc2b8; border-radius: 12px; overflow: hidden; background: #fff; position: relative; box-shadow: 0 1px 2px rgba(16,24,40,.06); }
+.screen .chat-shell { height: 100%; }
+.screen--phone { width: 390px; height: 700px; }
+.screen--phone .chat-shell { display: block; }
+.screen--phone .chat-main { height: 100%; }
+.screen--phone .chat-sidebar { position: fixed; inset: 0 auto 0 0; width: min(285px, 85vw); z-index: 30; transform: translateX(-100%); visibility: hidden; }
+.screen--phone.sidebar-shown .chat-sidebar { transform: translateX(0); visibility: visible; }
+.screen--phone .sidebar-backdrop { display: block; position: absolute; inset: 0; z-index: 25; border: 0; background: #0005; width: 100%; height: 100%; }
+.screen--phone .desktop-only { display: none; }
+.screen--phone .mobile-only, .screen--phone .sidebar-toggle { display: inline-flex; }
+.screen--phone .chat-header { height: 62px; padding: 0 16px; }
+.screen--phone .welcome, .screen--phone .transcript { width: calc(100% - 30px); }
+.screen--phone .composer-dock { padding: 5px 15px 14px; }
+dialog.hc-dialog[open] { position: relative; margin: 0; display: block; }
+.dialog-stage { position: absolute; inset: 0; z-index: 40; background: #10181350; backdrop-filter: blur(3px); display: flex; align-items: center; justify-content: center; padding: 16px; }
+.dialog-stage dialog.hc-dialog[open] { max-height: 100%; overflow: auto; }
+.row2 { display: grid; grid-template-columns: 1fr 1fr; gap: 26px; }
+@media (max-width: 900px) { .row2 { grid-template-columns: 1fr; } }
+.popover-stage { position: absolute; inset: 0; z-index: 40; pointer-events: none; }
+.popover-stage .agent-popover { position: absolute; top: 62px; left: 32px; pointer-events: auto; }
+.gal .note { font-size: 11.5px; color: #5d635a; border-left: 2px solid #bcc2b8; padding-left: 10px; margin: 12px 0 0; line-height: 1.75; }
+</style>
+</head>
+<body>
+<div class="gal">
+
+  <h1>HC Web 还原稿</h1>
+  <p class="lead">HC Web 生产界面的静态还原。样式块是 <code>hc/web/src/styles.css</code> 的原文（逐行照抄，未改一个字符），DOM 结构与全部文案取自 <code>App.tsx</code>、<code>SessionSetup.tsx</code>、<code>chat/ChatWorkspace.tsx</code>、<code>chat/Markdown.tsx</code>、<code>remote/RuntimeControls.tsx</code>、<code>PlatformSetup.tsx</code>、<code>GatewaySetup.tsx</code>。</p>
+  <div class="meta">
+    <span class="tag tag--ver badge--ver">v0.1</span>
+    <span class="tag tag--f4">F4 还原稿</span>
+    <span class="tag tag--dev">Partial impl</span>
+    <span class="tag">使用者：最终用户</span>
+    <span class="tag">10 屏</span>
+    <span class="tag">源码依据 <code>hc/web/src</code></span>
+  </div>
+  <p class="note">还原基准是仓库当前源码（本分支 <code>design/prototype-gallery</code>，<code>hc/web/src</code> 未修改）。生产构建的产物哈希、真实字体渲染差异不在还原范围；Inter 字体在生产 CSS 中声明但未外链加载，因此实际渲染依赖系统是否安装 Inter，本稿同样如此。</p>
+
+  <h2>1. 屏清单</h2>
+  <div class="tbl">
+    <table>
+      <thead><tr><th>#</th><th>屏</th><th>触发条件</th><th>源码位置</th></tr></thead>
+      <tbody>
+        <tr><td>R1</td><td>欢迎页（空态）</td><td>无消息且非只读；未连接时 <code>connected=false</code></td><td><code>ChatWorkspace</code> 空态分支</td></tr>
+        <tr><td>R2</td><td>会话页（含计划/工具/权限/用量）</td><td>有消息；已连接；执行端上报了 runtime 事件</td><td><code>ChatWorkspace</code> + <code>RuntimeActivity</code></td></tr>
+        <tr><td>R3</td><td>侧栏 · 会话列表与搜索</td><td>点击「搜索本地会话」</td><td><code>ChatWorkspace</code> aside</td></tr>
+        <tr><td>R4</td><td>执行环境 popover</td><td>点击标题栏 Runtime ID</td><td><code>SessionSetup</code> <code>targetSettings</code></td></tr>
+        <tr><td>R5</td><td>连接与设置 · 第 1 步</td><td>未创建浏览器身份</td><td><code>App.tsx</code> settings dialog</td></tr>
+        <tr><td>R6</td><td>连接与设置 · 已就绪</td><td>身份 + 账户 + 网关均就绪</td><td><code>App.tsx</code> / <code>PlatformSetup</code> / <code>GatewaySetup</code></td></tr>
+        <tr><td>R7</td><td>结束当前会话确认</td><td>点击「结束会话」</td><td><code>ChatWorkspace</code> confirm dialog</td></tr>
+        <tr><td>R8</td><td>确认工具授权</td><td>点击 allow 类权限选项</td><td><code>RuntimeControls</code> confirmation dialog</td></tr>
+        <tr><td>R9</td><td>端点非独占 / 不支持</td><td>另一标签页持有 Web Locks，或浏览器不支持</td><td><code>App.tsx</code> <code>ownership!=='owned'</code></td></tr>
+        <tr><td>R10</td><td>移动端（390px）</td><td>视口 ≤ 700px</td><td><code>styles.css</code> 媒体查询</td></tr>
+      </tbody>
+    </table>
+  </div>
+
+  <h2>2. 画面</h2>
+
+  <figure class="shot">
+    <div class="screen">
+      <div class="chat-shell">
+        <a class="skip-link" href="#">跳到输入框</a>
+        <aside class="chat-sidebar" aria-label="会话导航">
+          <div class="sidebar-brand"><span class="brand-mark">H</span><strong>Harness</strong>
+            <button type="button" class="icon-button desktop-only" aria-label="收起侧边栏"><svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="4" width="18" height="16" rx="3"/><path d="M9 4v16"/></svg></button>
+            <button type="button" class="icon-button mobile-only" aria-label="关闭侧边栏"><svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="m6 6 12 12M6 18 18 6"/></svg></button>
+          </div>
+          <button type="button" class="new-chat-button"><svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M12 5v14M5 12h14"/></svg><span>新建对话</span></button>
+          <button type="button" class="sidebar-action"><svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><circle cx="10.5" cy="10.5" r="6.5"/><path d="m16 16 4.5 4.5"/></svg>搜索本地会话</button>
+          <div class="sidebar-section-label">本地会话</div>
+          <nav class="conversation-list" aria-label="对话列表">
+            <p class="sidebar-empty">开始一段对话，它会出现在这里。</p>
+          </nav>
+          <div class="sidebar-footer">
+            <p>连接后可加密保存会话历史与草稿。<br />恢复需要原端点密钥和有效授权。</p>
+            <button type="button" class="account-button"><span class="account-avatar"><svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M4 7h16M4 17h16"/><circle cx="9" cy="7" r="2"/><circle cx="15" cy="17" r="2"/></svg></span><span><strong>连接与设置</strong><small>连接你的工作环境</small></span><svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="m7 10 5 5 5-5"/></svg></button>
+          </div>
+        </aside>
+        <main class="chat-main">
+          <header class="chat-header">
+            <div class="header-left">
+              <button type="button" class="icon-button sidebar-toggle" aria-label="展开会话导航"><svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="4" width="18" height="16" rx="3"/><path d="M9 4v16"/></svg></button>
+              <button class="header-agent" type="button">Harness<svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="m7 10 5 5 5-5"/></svg></button>
+            </div>
+            <div class="header-left">
+              <button class="connection-badge" type="button"><span class="connection-dot"></span>连接 Agent</button>
+            </div>
+          </header>
+          <div class="chat-scroll is-empty">
+            <section class="welcome">
+              <div class="welcome-emblem"><svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="m12 3 2.7 6.3L21 12l-6.3 2.7L12 21l-2.7-6.3L3 12l6.3-2.7L12 3Z"/></svg></div>
+              <p class="welcome-kicker">你的想法，你的 Agent</p>
+              <h1>今天想完成什么？</h1>
+              <p class="welcome-description">从一个问题开始，把接下来的工作交给 Harness。</p>
+              <div class="composer-wrap">
+                <form class="composer">
+                  <label class="sr-only" for="p1">消息</label>
+                  <textarea id="p1" rows="1" placeholder="有什么想交给 Agent 的？"></textarea>
+                  <div class="composer-actions">
+                    <span class="composer-context"><svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><rect x="5" y="10" width="14" height="11" rx="3"/><path d="M8 10V7a4 4 0 0 1 8 0v3m-4 5v2"/></svg>连接自己的 Agent</span>
+                    <button class="send-button" type="submit" aria-label="连接 Agent" title="先连接 Agent，草稿会保留"><svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M12 19V5m-6 6 6-6 6 6"/></svg></button>
+                  </div>
+                </form>
+                <p class="composer-hint">Enter 发送 · Shift + Enter 换行<span role="status">请核对重要内容</span></p>
+              </div>
+              <div class="suggestion-grid">
+                <button type="button" class="suggestion"><svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="m8 6-6 6 6 6m8-12 6 6-6 6m-3-14-2 16"/></svg><strong>审查代码</strong><span>找到问题，给出改进建议</span></button>
+                <button type="button" class="suggestion"><svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="4" width="18" height="16" rx="3"/><path d="m7 9 3 3-3 3m6 0h4"/></svg><strong>排查问题</strong><span>从现象一步步定位原因</span></button>
+                <button type="button" class="suggestion"><svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="m12 3 2.7 6.3L21 12l-6.3 2.7L12 21l-2.7-6.3L3 12l6.3-2.7L12 3Z"/></svg><strong>设计方案</strong><span>把想法变成可执行的计划</span></button>
+              </div>
+            </section>
+          </div>
+        </main>
+      </div>
+    </div>
+    <figcaption><b>R1 · 欢迎页（空态）</b>　未连接时输入框占位文案是「有什么想交给 Agent 的？」，连接后变为「给你的 Agent 发送消息…」；发送按钮此时 aria-label 为「连接 Agent」，点击走的是打开设置而不是发送。三个建议卡点击后把 prompt 填进草稿并聚焦输入框。</figcaption>
+  </figure>
+
+  <figure class="shot">
+    <div class="screen">
+      <div class="chat-shell">
+        <aside class="chat-sidebar" aria-label="会话导航">
+          <div class="sidebar-brand"><span class="brand-mark">H</span><strong>Harness</strong>
+            <button type="button" class="icon-button desktop-only" aria-label="收起侧边栏"><svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="4" width="18" height="16" rx="3"/><path d="M9 4v16"/></svg></button>
+          </div>
+          <button type="button" class="new-chat-button"><svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M12 5v14M5 12h14"/></svg><span>新建对话</span></button>
+          <button type="button" class="sidebar-action"><svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><circle cx="10.5" cy="10.5" r="6.5"/><path d="m16 16 4.5 4.5"/></svg>搜索本地会话</button>
+          <div class="sidebar-section-label">本地会话</div>
+          <nav class="conversation-list" aria-label="对话列表">
+            <button type="button" class="conversation-item selected"><span>修复构建错误的类型不匹配</span><small>正在回复</small></button>
+            <button type="button" class="conversation-item"><span>整理数据库迁移脚本</span><small>已保存</small></button>
+            <button type="button" class="conversation-item"><span>排查网关重连失败</span><small>等待授权</small></button>
+            <button type="button" class="conversation-item"><span>审查投递重放逻辑</span><small>已结束 · 只读</small></button>
+          </nav>
+          <div class="sidebar-footer">
+            <p>历史与草稿在此浏览器中加密保存。<br />恢复需要原端点密钥和有效授权。</p>
+            <button type="button" class="account-button"><span class="account-avatar"><svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M4 7h16M4 17h16"/><circle cx="9" cy="7" r="2"/><circle cx="15" cy="17" r="2"/></svg></span><span><strong>连接与设置</strong><small>安全连接已就绪</small></span><svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="m7 10 5 5 5-5"/></svg></button>
+          </div>
+        </aside>
+        <main class="chat-main">
+          <header class="chat-header">
+            <div class="header-left">
+              <button type="button" class="icon-button sidebar-toggle" aria-label="展开会话导航"><svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="4" width="18" height="16" rx="3"/><path d="M9 4v16"/></svg></button>
+              <details class="agent-picker"><summary><strong>rt-codex-a</strong><svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="m7 10 5 5 5-5"/></svg></summary></details>
+            </div>
+            <div class="header-left">
+              <button type="button" class="secondary-button">结束会话</button>
+              <button class="connection-badge connected" type="button"><span class="connection-dot"></span>已连接</button>
+            </div>
+          </header>
+          <div class="chat-notice" role="status">正在保存草稿与会话选择，请勿清除浏览器数据。</div>
+          <div class="chat-scroll">
+            <section class="transcript" role="log" aria-label="修复构建错误的类型不匹配">
+              <article class="message message-user" aria-label="你">
+                <div class="message-body"><p class="plain-message">按最小改动修掉这三个类型不匹配，不要动公开接口。</p></div>
+              </article>
+              <article class="message message-assistant" aria-label="Agent">
+                <div class="assistant-avatar" aria-hidden="true">H</div>
+                <div class="message-body">
+                  <div class="message-author">rt-codex-a</div>
+                  <div class="runtime-activity">
+                    <details class="plan-card"><summary>执行计划 · 1/3</summary><ol>
+                      <li><span class="status-pill">completed</span> 定位三处类型不匹配</li>
+                      <li><span class="status-pill">in_progress</span> 修改 crate::retry 的类型标注</li>
+                      <li><span class="status-pill">pending</span> 运行 --locked 校验</li>
+                    </ol></details>
+                    <details class="tool-card tool-completed"><summary><span>read_file · src/retry.rs</span><span class="status-pill">已完成</span></summary>
+                      <h4>工具输入</h4><pre>{"path":"src/retry.rs","limit":200}</pre>
+                      <h4>工具结果 / 变更</h4><pre>14  fn backoff(attempt: u8) -&gt; Duration
+15  fn schedule(retries: u32) -&gt; Vec&lt;Duration&gt;
+21  // 调用点使用了 u32，而函数签名是 u8</pre>
+                    </details>
+                    <details class="tool-card tool-failed"><summary><span>run_command · cargo check --locked</span><span class="status-pill">失败</span></summary>
+                      <h4>工具结果 / 变更</h4><pre>error[E0308]: mismatched types
+ expected `u8`, found `u32`
+  --&gt; src/retry.rs:31:24</pre>
+                    </details>
+                    <section class="permission-card" aria-label="工具权限请求">
+                      <div class="section-heading"><h3>工具权限请求</h3><span class="status-pill">等待你的决定</span></div>
+                      <strong>写入 src/retry.rs 并运行 cargo check</strong>
+                      <details><summary>查看原始动作与完整范围</summary><pre>apply_patch: src/retry.rs (+2 -2)
+run_command: cargo check --locked</pre></details>
+                      <div class="permission-actions">
+                        <button type="button" class="primary-button">允许此次 · 仅本次</button>
+                        <button type="button" class="primary-button">持续允许 · Agent 请求的持续许可</button>
+                        <button type="button" class="secondary-button">拒绝此次 · 仅本次</button>
+                        <button type="button" class="secondary-button">持续拒绝 · Agent 请求的持续拒绝</button>
+                        <button class="secondary-button" type="button">不授予权限</button>
+                      </div>
+                    </section>
+                  </div>
+                  <div class="markdown-content">
+                    <h3>三处不匹配的原因</h3>
+                    <p>签名用的是 <code>u8</code>，但三处调用点传的是 <code>u32</code>。最小改动是把调用点显式收敛，而不是放开签名类型。</p>
+                    <ul>
+                      <li><code>schedule()</code> 的循环变量需要转为 <code>u8</code></li>
+                      <li>配置项解析处需要做一次范围检查</li>
+                      <li>测试断言里的字面量需要加后缀</li>
+                    </ul>
+                    <div class="code-block">
+                      <div class="code-toolbar"><span>rust</span><button type="button" class="copy-button"><svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><rect x="8" y="8" width="12" height="13" rx="2"/><path d="M16 8V5a2 2 0 0 0-2-2H5a2 2 0 0 0-2 2v9a2 2 0 0 0 2 2h3"/></svg><span>复制代码</span></button></div>
+                      <pre><code>- let attempt: u32 = loop_index;
++ let attempt: u8 = u8::try_from(loop_index)?;</code></pre>
+                    </div>
+                    <p>审批通过后我会先跑 <code>cargo check --locked</code>，再报告结果。</p>
+                  </div>
+                  <button type="button" class="copy-button"><svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><rect x="8" y="8" width="12" height="13" rx="2"/><path d="M16 8V5a2 2 0 0 0-2-2H5a2 2 0 0 0-2 2v9a2 2 0 0 0 2 2h3"/></svg><span>复制回复</span></button>
+                </div>
+              </article>
+            </section>
+          </div>
+          <div class="composer-dock">
+            <div class="composer-wrap">
+              <form class="composer">
+                <label class="sr-only" for="p2">消息</label>
+                <textarea id="p2" rows="1" placeholder="给你的 Agent 发送消息…"></textarea>
+                <div class="composer-actions">
+                  <span class="composer-context"><svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><rect x="5" y="10" width="14" height="11" rx="3"/><path d="M8 10V7a4 4 0 0 1 8 0v3m-4 5v2"/></svg>加密对话</span>
+                  <button class="send-button stop-button" type="button" aria-label="停止本轮" title="停止当前轮次，保留会话；已执行的动作不会撤销"><svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><rect x="6" y="6" width="12" height="12" rx="2"/></svg></button>
+                </div>
+              </form>
+              <p class="composer-hint">Agent 正在回复；方形按钮停止本轮。<span role="status">草稿已加密保存</span></p>
+            </div>
+          </div>
+        </main>
+      </div>
+    </div>
+    <figcaption><b>R2 · 会话页</b>　顺序固定：计划卡 → 工具卡（失败卡用 <code>tool-failed</code> 变红边）→ 权限卡 → 正文。权限按钮文案由执行端返回的 kind 决定（<code>allow_once / allow_always / reject_once / reject_always</code>），页面上不会出现「永久允许所有命令」。回复超过 262144 字符时会追加截断提示。</figcaption>
+  </figure>
+
+  <div class="row2">
+    <figure class="shot">
+      <div class="screen">
+        <div class="chat-shell">
+          <aside class="chat-sidebar" aria-label="会话导航">
+            <div class="sidebar-brand"><span class="brand-mark">H</span><strong>Harness</strong></div>
+            <button type="button" class="new-chat-button"><svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M12 5v14M5 12h14"/></svg><span>新建对话</span></button>
+            <button type="button" class="sidebar-action"><svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><circle cx="10.5" cy="10.5" r="6.5"/><path d="m16 16 4.5 4.5"/></svg>搜索本地会话</button>
+            <input class="conversation-search" type="search" value="网关" placeholder="搜索对话…" aria-label="搜索本地会话" />
+            <div class="sidebar-section-label">本地会话</div>
+            <nav class="conversation-list" aria-label="对话列表">
+              <button type="button" class="conversation-item"><span>排查网关重连失败</span><small>等待授权</small></button>
+            </nav>
+            <div class="sidebar-footer">
+              <p>历史与草稿在此浏览器中加密保存。<br />恢复需要原端点密钥和有效授权。</p>
+              <button type="button" class="account-button"><span class="account-avatar"><svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M4 7h16M4 17h16"/><circle cx="9" cy="7" r="2"/><circle cx="15" cy="17" r="2"/></svg></span><span><strong>连接与设置</strong><small>安全连接已就绪</small></span><svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="m7 10 5 5 5-5"/></svg></button>
+            </div>
+          </aside>
+          <main class="chat-main">
+            <header class="chat-header"><div class="header-left"><button type="button" class="icon-button sidebar-toggle" aria-label="展开会话导航"><svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="4" width="18" height="16" rx="3"/><path d="M9 4v16"/></svg></button><details class="agent-picker"><summary><strong>rt-codex-a</strong><svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="m7 10 5 5 5-5"/></svg></summary></details></div><div class="header-left"><button class="connection-badge connected" type="button"><span class="connection-dot"></span>已连接</button></div></header>
+            <div class="chat-scroll is-empty">
+              <section class="welcome" style="padding:34px 0">
+                <p class="welcome-kicker">本地会话</p>
+                <h1 style="font-size:22px">搜索过滤</h1>
+                <p class="welcome-description">搜索只匹配本机已保存的会话标题。历史与草稿从未离开此浏览器。</p>
+              </section>
+            </div>
+          </main>
+        </div>
+      </div>
+      <figcaption><b>R3 · 侧栏搜索态</b>　点「搜索本地会话」后展开输入框，过滤仅作用于标题；无匹配时显示「没有匹配的对话」。会话条目的副标题取值：<code>已结束 · 只读</code> / <code>需要检查</code> / <code>等待授权</code> / <code>正在回复</code> / <code>已保存</code>。</figcaption>
+    </figure>
+
+    <figure class="shot">
+      <div class="screen">
+        <div class="chat-shell">
+          <aside class="chat-sidebar" aria-label="会话导航">
+            <div class="sidebar-brand"><span class="brand-mark">H</span><strong>Harness</strong></div>
+            <button type="button" class="new-chat-button"><svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M12 5v14M5 12h14"/></svg><span>新建对话</span></button>
+            <button type="button" class="sidebar-action"><svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><circle cx="10.5" cy="10.5" r="6.5"/><path d="m16 16 4.5 4.5"/></svg>搜索本地会话</button>
+            <div class="sidebar-section-label">本地会话</div>
+            <nav class="conversation-list" aria-label="对话列表">
+              <button type="button" class="conversation-item selected"><span>审查投递重放逻辑</span><small>已结束 · 只读</small></button>
+            </nav>
+            <div class="sidebar-footer">
+              <p>历史与草稿在此浏览器中加密保存。<br />恢复需要原端点密钥和有效授权。</p>
+              <button type="button" class="account-button"><span class="account-avatar"><svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M4 7h16M4 17h16"/><circle cx="9" cy="7" r="2"/><circle cx="15" cy="17" r="2"/></svg></span><span><strong>连接与设置</strong><small>安全连接已就绪</small></span><svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="m7 10 5 5 5-5"/></svg></button>
+            </div>
+          </aside>
+          <main class="chat-main">
+            <header class="chat-header"><div class="header-left"><button type="button" class="icon-button sidebar-toggle" aria-label="展开会话导航"><svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="4" width="18" height="16" rx="3"/><path d="M9 4v16"/></svg></button><details class="agent-picker"><summary><strong>rt-codex-a</strong><svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="m7 10 5 5 5-5"/></svg></summary></details></div><div class="header-left"><button class="connection-badge connected" type="button"><span class="connection-dot"></span>已连接</button></div></header>
+            <div class="chat-scroll">
+              <section class="transcript" role="log" aria-label="审查投递重放逻辑">
+                <article class="message message-user" aria-label="你"><div class="message-body"><p class="plain-message">重连时为什么必须重放原始帧而不是重新加密？</p></div></article>
+                <article class="message message-assistant" aria-label="Agent">
+                  <div class="assistant-avatar" aria-hidden="true">H</div>
+                  <div class="message-body">
+                    <div class="message-author">rt-codex-a</div>
+                    <div class="markdown-content"><p>因为接收端的幂等去重键是 <code>(session, generation, direction, sequence)</code>，重新加密会产生不同密文，破坏签名与幂等语义。</p></div>
+                    <p class="uncertain-label">执行结果待确认</p>
+                    <p class="message-muted">回复中断，请检查执行状态，不要直接重发。</p>
+                  </div>
+                </article>
+                <article class="message message-system" aria-label="系统通知"><div class="message-body"><p class="message-system">会话密钥已过期，当前只读。需要新的授权密钥才能继续。</p></div></article>
+              </section>
+            </div>
+            <div class="composer-dock">
+              <div class="composer-wrap">
+                <div class="readonly-note">此对话当前只读。请核对会话或端点状态；历史消息不会自动重新执行。
+                  <div class="readonly-draft"><label for="rd">保留的草稿</label><textarea id="rd" readonly>顺便看一下 REKEY_REQUIRED 的处理路径</textarea><button type="button" class="copy-button"><svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><rect x="8" y="8" width="12" height="13" rx="2"/><path d="M16 8V5a2 2 0 0 0-2-2H5a2 2 0 0 0-2 2v9a2 2 0 0 0 2 2h3"/></svg><span>复制草稿</span></button></div>
+                </div>
+              </div>
+            </div>
+          </main>
+        </div>
+      </div>
+      <figcaption><b>R3b · 只读态与保留草稿</b>　只读时整个输入区被替换为说明文案；草稿不为空则显示可复制但不可编辑的 textarea。这与「执行结果待确认」是两个独立信号，必须同时可见。</figcaption>
+    </figure>
+  </div>
+
+  <figure class="shot">
+    <div class="screen">
+      <div class="chat-shell">
+        <aside class="chat-sidebar" aria-label="会话导航"><div class="sidebar-brand"><span class="brand-mark">H</span><strong>Harness</strong></div>
+          <button type="button" class="new-chat-button"><svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M12 5v14M5 12h14"/></svg><span>新建对话</span></button>
+          <button type="button" class="sidebar-action"><svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><circle cx="10.5" cy="10.5" r="6.5"/><path d="m16 16 4.5 4.5"/></svg>搜索本地会话</button>
+          <div class="sidebar-section-label">本地会话</div><nav class="conversation-list"><p class="sidebar-empty">开始一段对话，它会出现在这里。</p></nav>
+          <div class="sidebar-footer"><p>历史与草稿在此浏览器中加密保存。<br />恢复需要原端点密钥和有效授权。</p>
+            <button type="button" class="account-button"><span class="account-avatar"><svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M4 7h16M4 17h16"/><circle cx="9" cy="7" r="2"/><circle cx="15" cy="17" r="2"/></svg></span><span><strong>连接与设置</strong><small>安全连接已就绪</small></span><svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="m7 10 5 5 5-5"/></svg></button></div>
+        </aside>
+        <main class="chat-main">
+          <header class="chat-header"><div class="header-left"><button type="button" class="icon-button sidebar-toggle" aria-label="展开会话导航"><svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="4" width="18" height="16" rx="3"/><path d="M9 4v16"/></svg></button>
+            <details class="agent-picker" open><summary><strong>rt-codex-a</strong><svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="m7 10 5 5 5-5"/></svg></summary></details></div>
+            <div class="header-left"><button type="button" class="secondary-button">结束会话</button><button class="connection-badge connected" type="button"><span class="connection-dot"></span>已连接</button></div></header>
+          <div class="chat-scroll"></div>
+          <div class="composer-dock"><div class="composer-wrap"><form class="composer"><textarea rows="1" placeholder="给你的 Agent 发送消息…"></textarea><div class="composer-actions"><span class="composer-context"><svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><rect x="5" y="10" width="14" height="11" rx="3"/><path d="M8 10V7a4 4 0 0 1 8 0v3m-4 5v2"/></svg>加密对话</span><button class="send-button" type="button"><svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M12 19V5m-6 6 6-6 6 6"/></svg></button></div></form><p class="composer-hint">Enter 发送 · Shift + Enter 换行<span role="status">草稿已加密保存</span></p></div></div>
+        </main>
+      </div>
+      <div class="popover-stage">
+        <div class="agent-popover">
+          <div class="target-form">
+            <h2>执行环境</h2>
+            <p>选择此设备本地已允许的 Agent 和工作区。</p>
+            <label>执行设备<select><option>aba-lab-01</option><option>aba-lab-02</option></select></label>
+            <label>Agent（Runtime ID）<input value="rt-codex-a" readonly /></label>
+            <label>工作区 ID<input value="ws-demo-project" readonly /></label>
+            <p>新建对话可以选择其他执行环境，现有会话会继续保留。</p>
+          </div>
+        </div>
+      </div>
+    </div>
+    <figcaption><b>R4 · 执行环境 popover</b>　标题栏显示的是 Runtime ID（<code>runtimeProfileId</code>），不是模型名。已有会话中三个输入都被锁定；只有新建对话前才能改。下方还有「刷新设备列表」按钮，以及创建未确认时的「确认原创建请求」区。</figcaption>
+  </figure>
+
+  <div class="row2">
+    <figure class="shot">
+      <div class="screen">
+        <div class="chat-shell"><aside class="chat-sidebar"><div class="sidebar-brand"><span class="brand-mark">H</span><strong>Harness</strong></div></aside><main class="chat-main"></main></div>
+        <div class="dialog-stage">
+          <dialog class="hc-dialog" open>
+            <div class="dialog-surface">
+              <div class="dialog-header"><h2>连接与设置</h2><button type="button" class="icon-button" aria-label="关闭"><svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="m6 6 12 12M6 18 18 6"/></svg></button></div>
+              <div class="dialog-body">
+                <p class="settings-intro">连接一次，就可以在这里与自己的 Agent 对话。</p>
+                <section class="setup-card">
+                  <div class="section-heading"><h3>1. 准备当前浏览器</h3><span class="status-pill">可使用</span></div>
+                  <p>已支持 WebCrypto 不可导出密钥与 IndexedDB 结构化克隆。</p>
+                  <button class="primary-button" type="button">启用安全浏览器身份</button>
+                  <p class="fine-print">私钥仅在此浏览器生成，不以明文保存。</p>
+                </section>
+                <div class="settings-privacy"><strong>关于对话隐私</strong><p>历史、草稿和恢复密钥在当前浏览器中加密保存。刷新后需验证同一端点的授权才能继续；清除浏览器数据或更换设备可能无法恢复。</p></div>
+                <div class="dialog-actions"><button class="secondary-button" type="button">关闭</button></div>
+              </div>
+            </div>
+          </dialog>
+        </div>
+      </div>
+      <figcaption><b>R5 · 连接与设置（第 1 步）</b>　此时还没有浏览器身份，只出现第 1 步。安全存储不可用时状态胶囊显示「不支持」，主按钮保持禁用，绝不降级明文保存。</figcaption>
+    </figure>
+
+    <figure class="shot">
+      <div class="screen">
+        <div class="chat-shell"><aside class="chat-sidebar"><div class="sidebar-brand"><span class="brand-mark">H</span><strong>Harness</strong></div></aside><main class="chat-main"></main></div>
+        <div class="dialog-stage">
+          <dialog class="hc-dialog" open>
+            <div class="dialog-surface">
+              <div class="dialog-header"><h2>连接与设置</h2><button type="button" class="icon-button" aria-label="关闭"><svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="m6 6 12 12M6 18 18 6"/></svg></button></div>
+              <div class="dialog-body">
+                <section class="identity-card">
+                  <div class="section-heading"><h3>浏览器身份</h3><span class="status-pill success">已就绪</span></div>
+                  <details class="technical-details" open><summary>查看安全详情</summary>
+                    <dl><dt>保护等级</dt><dd>web-software</dd><dt>签名指纹</dt><dd>9f2c…4a71</dd><dt>加密指纹</dt><dd>1b77…c208</dd></dl>
+                  </details>
+                </section>
+                <section class="platform-card">
+                  <div class="section-heading"><h3>账户</h3><span class="status-pill success">已连接</span></div>
+                  <p>当前浏览器已绑定账户，凭据仅在内存和安全 Cookie 中使用。</p>
+                  <details class="technical-details"><summary>注册详情</summary><p>Endpoint ep-8f21c4</p></details>
+                </section>
+                <section class="gateway-card">
+                  <div class="section-heading"><h3>安全连接</h3><span class="status-pill success">已连接</span></div>
+                  <p>已完成安全验证，可以返回对话。</p>
+                  <button class="primary-button" type="button">重新建立连接</button>
+                  <button class="secondary-button" type="button">断开连接（保留会话）</button>
+                  <details class="technical-details"><summary>连接诊断</summary><p>Generation 3<br />Root rjkt-4a71</p></details>
+                </section>
+                <div class="settings-privacy"><strong>关于对话隐私</strong><p>历史、草稿和恢复密钥在当前浏览器中加密保存。刷新后需验证同一端点的授权才能继续；清除浏览器数据或更换设备可能无法恢复。</p></div>
+                <button type="button" class="primary-button settings-done">返回对话</button>
+              </div>
+            </div>
+          </dialog>
+        </div>
+      </div>
+      <figcaption><b>R6 · 连接与设置（已就绪）</b>　三段顺序固定：浏览器身份 → 账户 → 安全连接。指纹只在 <code>&lt;details&gt;</code> 里展开；「返回对话」仅在网关在线时出现。</figcaption>
+    </figure>
+  </div>
+
+  <div class="row2">
+    <figure class="shot">
+      <div class="screen">
+        <div class="chat-shell"><aside class="chat-sidebar"><div class="sidebar-brand"><span class="brand-mark">H</span><strong>Harness</strong></div></aside><main class="chat-main"></main></div>
+        <div class="dialog-stage">
+          <dialog class="hc-dialog" open>
+            <div class="dialog-surface">
+              <div class="dialog-header"><h2>结束当前会话？</h2><button type="button" class="icon-button" aria-label="关闭"><svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="m6 6 12 12M6 18 18 6"/></svg></button></div>
+              <div class="dialog-body">
+                <p>将向执行端发送关闭当前会话的请求。其他会话继续保留，已经执行的操作不会撤销。</p>
+                <div class="dialog-actions"><button class="secondary-button" type="button">继续当前会话</button><button class="primary-button" type="button">确认结束</button></div>
+              </div>
+            </div>
+          </dialog>
+        </div>
+      </div>
+      <figcaption><b>R7 · 结束当前会话</b>　按钮文案不是「停止生成」，也明确写了「已经执行的操作不会撤销」——关闭会话不等于回滚。</figcaption>
+    </figure>
+
+    <figure class="shot">
+      <div class="screen">
+        <div class="chat-shell"><aside class="chat-sidebar"><div class="sidebar-brand"><span class="brand-mark">H</span><strong>Harness</strong></div></aside><main class="chat-main"></main></div>
+        <div class="dialog-stage">
+          <dialog class="hc-dialog" open>
+            <div class="dialog-surface">
+              <div class="dialog-header"><h2>确认工具授权</h2><button type="button" class="icon-button" aria-label="关闭"><svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="m6 6 12 12M6 18 18 6"/></svg></button></div>
+              <div class="dialog-body">
+                <p>授权只发回这一个仍待处理的原始请求。它不代表工具已经执行成功。</p>
+                <strong>写入 src/retry.rs 并运行 cargo check</strong>
+                <pre class="approval-detail">apply_patch: src/retry.rs (+2 -2)
+run_command: cargo check --locked</pre>
+                <p>仅批准本次请求。</p>
+                <div class="dialog-actions"><button type="button" class="secondary-button">返回检查</button><button type="button" class="primary-button">确认授权</button></div>
+              </div>
+            </div>
+          </dialog>
+        </div>
+      </div>
+      <figcaption><b>R8 · 确认工具授权</b>　只有 <code>allow_*</code> 类选项才二次确认；选择持续许可时文案会改成提醒「不限于本次动作」。权限请求有 5 分钟有效期，过期后按钮禁用并显示「已过期，请检查执行端」。</figcaption>
+    </figure>
+  </div>
+
+  <figure class="shot">
+    <div class="screen">
+      <div class="chat-shell">
+        <aside class="chat-sidebar" aria-label="会话导航">
+          <div class="sidebar-brand"><span class="brand-mark">H</span><strong>Harness</strong></div>
+          <button type="button" class="new-chat-button" disabled><svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M12 5v14M5 12h14"/></svg><span>新建对话</span></button>
+          <button type="button" class="sidebar-action"><svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><circle cx="10.5" cy="10.5" r="6.5"/><path d="m16 16 4.5 4.5"/></svg>搜索本地会话</button>
+          <div class="sidebar-section-label">本地会话</div><nav class="conversation-list"><p class="sidebar-empty">开始一段对话，它会出现在这里。</p></nav>
+          <div class="sidebar-footer"><p>连接后可加密保存会话历史与草稿。<br />恢复需要原端点密钥和有效授权。</p>
+            <button type="button" class="account-button"><span class="account-avatar"><svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M4 7h16M4 17h16"/><circle cx="9" cy="7" r="2"/><circle cx="15" cy="17" r="2"/></svg></span><span><strong>连接与设置</strong><small>连接你的工作环境</small></span><svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="m7 10 5 5 5-5"/></svg></button></div>
+        </aside>
+        <main class="chat-main">
+          <header class="chat-header"><div class="header-left"><button type="button" class="icon-button sidebar-toggle" aria-label="展开会话导航"><svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="4" width="18" height="16" rx="3"/><path d="M9 4v16"/></svg></button><button class="header-agent" type="button">Harness<svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="m7 10 5 5 5-5"/></svg></button></div>
+            <div class="header-left"><button class="connection-badge" type="button"><span class="connection-dot"></span>连接 Agent</button></div></header>
+          <div class="chat-notice" role="status">另一个标签页正在使用此浏览器的安全连接。关闭该标签页后，这里会先恢复已保存的记录，再接管连接。</div>
+          <div class="chat-scroll is-empty">
+            <section class="welcome">
+              <div class="welcome-emblem"><svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="m12 3 2.7 6.3L21 12l-6.3 2.7L12 21l-2.7-6.3L3 12l6.3-2.7L12 3Z"/></svg></div>
+              <p class="welcome-kicker">你的想法，你的 Agent</p>
+              <h1>今天想完成什么？</h1>
+              <p class="welcome-description">从一个问题开始，把接下来的工作交给 Harness。</p>
+              <div class="composer-wrap">
+                <form class="composer">
+                  <textarea rows="1" placeholder="有什么想交给 Agent 的？"></textarea>
+                  <div class="composer-actions"><span class="composer-context"><svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><rect x="5" y="10" width="14" height="11" rx="3"/><path d="M8 10V7a4 4 0 0 1 8 0v3m-4 5v2"/></svg>连接自己的 Agent</span>
+                    <button class="send-button" type="button" disabled><svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M12 19V5m-6 6 6-6 6 6"/></svg></button></div>
+                </form>
+                <p class="composer-hint">Enter 发送 · Shift + Enter 换行<span role="status">请核对重要内容</span></p>
+              </div>
+              <div class="suggestion-grid">
+                <button type="button" class="suggestion" disabled><svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="m8 6-6 6 6 6m8-12 6 6-6 6m-3-14-2 16"/></svg><strong>审查代码</strong><span>找到问题，给出改进建议</span></button>
+                <button type="button" class="suggestion" disabled><svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="4" width="18" height="16" rx="3"/><path d="m7 9 3 3-3 3m6 0h4"/></svg><strong>排查问题</strong><span>从现象一步步定位原因</span></button>
+                <button type="button" class="suggestion" disabled><svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="m12 3 2.7 6.3L21 12l-6.3 2.7L12 21l-2.7-6.3L3 12l6.3-2.7L12 3Z"/></svg><strong>设计方案</strong><span>把想法变成可执行的计划</span></button>
+              </div>
+            </section>
+          </div>
+        </main>
+      </div>
+    </div>
+    <figcaption><b>R9 · 端点非独占</b>　这是 Web Locks 保护下的降级界面：<code>canSubmit=false</code>，新建对话与发送全部禁用，只保留一条状态提示。若浏览器不支持 Web Locks，文案换成「此浏览器无法独占安全端点，已暂停登录与发送。请使用支持 Web Locks 的浏览器。」</figcaption>
+  </figure>
+
+  <figure class="shot">
+    <div class="screen screen--phone">
+      <div class="chat-shell">
+        <main class="chat-main">
+          <header class="chat-header">
+            <div class="header-left">
+              <button type="button" class="icon-button sidebar-toggle" aria-label="展开会话导航"><svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="4" width="18" height="16" rx="3"/><path d="M9 4v16"/></svg></button>
+              <details class="agent-picker"><summary><strong>rt-codex-a</strong><svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="m7 10 5 5 5-5"/></svg></summary></details>
+            </div>
+            <div class="header-left"><button class="connection-badge connected" type="button"><span class="connection-dot"></span>已连接</button></div>
+          </header>
+          <div class="chat-scroll">
+            <section class="transcript" role="log">
+              <article class="message message-user" aria-label="你"><div class="message-body"><p class="plain-message">按最小改动修掉这三个类型不匹配。</p></div></article>
+              <article class="message message-assistant" aria-label="Agent">
+                <div class="assistant-avatar" aria-hidden="true">H</div>
+                <div class="message-body">
+                  <div class="message-author">rt-codex-a</div>
+                  <div class="runtime-activity">
+                    <details class="tool-card tool-completed"><summary><span>read_file · src/retry.rs</span><span class="status-pill">已完成</span></summary></details>
+                    <section class="permission-card" aria-label="工具权限请求">
+                      <div class="section-heading"><h3>工具权限请求</h3><span class="status-pill">等待你的决定</span></div>
+                      <strong>写入 src/retry.rs</strong>
+                      <details><summary>查看原始动作与完整范围</summary><pre>apply_patch: src/retry.rs (+2 -2)</pre></details>
+                      <div class="permission-actions">
+                        <button type="button" class="primary-button">允许此次 · 仅本次</button>
+                        <button type="button" class="secondary-button">拒绝此次 · 仅本次</button>
+                        <button class="secondary-button" type="button">不授予权限</button>
+                      </div>
+                    </section>
+                  </div>
+                  <div class="markdown-content"><p>签名是 <code>u8</code>，三处调用点传的是 <code>u32</code>。最小改动是收敛调用点。</p></div>
+                </div>
+              </article>
+            </section>
+          </div>
+          <div class="composer-dock">
+            <div class="composer-wrap">
+              <form class="composer">
+                <textarea rows="1" placeholder="给你的 Agent 发送消息…"></textarea>
+                <div class="composer-actions"><span class="composer-context"><svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><rect x="5" y="10" width="14" height="11" rx="3"/><path d="M8 10V7a4 4 0 0 1 8 0v3m-4 5v2"/></svg>加密对话</span>
+                  <button class="send-button stop-button" type="button" aria-label="停止本轮"><svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><rect x="6" y="6" width="12" height="12" rx="2"/></svg></button></div>
+              </form>
+              <p class="composer-hint">Agent 正在回复；方形按钮停止本轮。<span role="status">草稿已加密保存</span></p>
+            </div>
+          </div>
+        </main>
+      </div>
+    </div>
+    <figcaption><b>R10 · 移动端（390px）</b>　≤700px 时侧栏改为抽屉（<code>transform: translateX(-100%)</code>），标题栏降到 62px，输入框字号提到 16px 以避免 iOS 自动缩放，权限按钮改成换行排列。上面这屏是抽屉关闭的默认态。</figcaption>
+  </figure>
+
+  <h2>3. 还原偏差（必须知道）</h2>
+  <p class="note">
+    <b>1. 画廊外壳。</b>为在同一文件里并排展示 10 屏，额外加了 <code>.gal</code> / <code>.screen</code> 两组样式，并把 <code>.chat-shell</code> 的 <code>height:100dvh</code> 覆盖为 <code>100%</code>。生产界面里没有这两组样式。<br />
+    <b>2. 弹窗背景。</b>生产代码用 <code>&lt;dialog&gt;</code> 的 <code>::backdrop</code>；静态文件无法调用 <code>showModal()</code>，因此用一层 <code>.dialog-stage</code> 复现同一视觉（<code>#10181350</code> + <code>blur(3px)</code>）。<code>&lt;dialog open&gt;</code> 本身不是模态。<br />
+    <b>3. 示例数据。</b>会话标题、Runtime ID、指纹、时间、工具输入输出全部为占位值，取自源码里的字段名与格式规则，不是任何真实运行数据。<br />
+    <b>4. 交互。</b>静态页面里的按钮不绑定行为；<code>&lt;details&gt;</code> 折叠可以展开，输入框可输入但不发送。<br />
+    <b>5. 未覆盖。</b>PWA 安装提示、<code>manifest.webmanifest</code>、跳过链接的实际焦点跳转、中文输入法 composition 保护、WebSocket 真实连接过程、IndexedDB 实际读写。
+  </p>
+
+</div>
+</body>
+</html>

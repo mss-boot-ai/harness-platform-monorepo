@@ -1,0 +1,530 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Platform 管理后台还原稿 — 原型 v0.1</title>
+<!--
+  本文件是 Platform Harness 业务页面的还原稿（F4）。
+  页面标题、描述、表格列、操作按钮、状态标签色、弹窗文案均取自：
+    platform/web/src/business/locales/zh-CN.ts
+    platform/web/src/business/pages/{Overview,Enrollments,Endpoints,Sessions,Delivery}/index.tsx
+    platform/web/src/business/harness/{HarnessPage,HarnessAsyncContent,format}.tsx
+    platform/web/src/business/routes.config.ts
+    platform/web/src/generated/routes.ts
+  说明：应用外壳（左侧导航、顶栏、布局与主题 token）由 @mss-boot-io/admin-web 1.3.7
+  提供，该包不在本仓库且本地未安装，无法逐字读取。外壳部分按下述 antd 6.6.1 默认
+  设计变量与 ProLayout 常见形态重建，并非取自实包的逐像素结果，页面内已标注。
+-->
+<style>
+:root {
+  font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, 'Helvetica Neue', Arial, 'Noto Sans', 'PingFang SC', 'Hiragino Sans GB', 'Microsoft YaHei', sans-serif;
+  font-size: 14px; line-height: 1.5714; color: rgba(0,0,0,0.88); background: #f5f5f5;
+  -webkit-font-smoothing: antialiased;
+  --primary: #1677ff; --primary-hover: #4096ff; --primary-active: #0958d9;
+  --primary-bg: #e6f4ff; --primary-border: #91caff;
+  --error: #ff4d4f; --error-bg: #fff2f0; --error-border: #ffccc7;
+  --warn: #faad14; --warn-bg: #fffbe6; --warn-border: #ffe58f;
+  --orange: #fa8c16; --orange-bg: #fff7e6; --orange-border: #ffd591;
+  --volcano: #fa541c; --volcano-bg: #fff2e8; --volcano-border: #ffbb96;
+  --success: #52c41a; --success-bg: #f6ffed; --success-border: #b7eb8f;
+  --t1: rgba(0,0,0,0.88); --t2: rgba(0,0,0,0.65); --t3: rgba(0,0,0,0.45); --t4: rgba(0,0,0,0.25);
+  --border: #d9d9d9; --split: #f0f0f0; --fill: rgba(0,0,0,0.04); --fill-2: rgba(0,0,0,0.06);
+  --container: #ffffff; --layout: #f5f5f5; --table-head: #fafafa;
+  --radius: 6px; --radius-lg: 8px;
+  --shadow: 0 6px 16px 0 rgba(0,0,0,.08), 0 3px 6px -4px rgba(0,0,0,.12), 0 9px 28px 8px rgba(0,0,0,.05);
+}
+* { box-sizing: border-box; }
+body { margin: 0; background: var(--layout); }
+button { font: inherit; cursor: default; }
+/* ---------- 画廊外壳（仅用于并排展示，非生产界面） ---------- */
+.gal { max-width: 1280px; margin: 0 auto; padding: 26px 20px 80px; }
+.gal h1 { font-size: 21px; font-weight: 600; margin: 0 0 6px; }
+.gal h2 { font-size: 14px; font-weight: 600; margin: 32px 0 12px; padding-bottom: 8px; border-bottom: 1px solid #d9d9d9; }
+.gal p.lead { color: var(--t2); max-width: 88ch; margin: 0 0 10px; }
+.gal .meta { display: flex; flex-wrap: wrap; gap: 7px; margin: 0 0 8px; }
+.gal .tagx { display: inline-flex; align-items: center; gap: 5px; padding: 2px 9px; border-radius: 999px; font-size: 12px; border: 1px solid #d9d9d9; background: #fff; color: var(--t2); }
+.gal .tagx--ver { font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; border-color: #8c8c8c; color: var(--t1); background: #fafafa; }
+.gal .tagx--f4 { border-color: #1677ff; background: var(--primary-bg); color: #0958d9; font-weight: 600; }
+.gal .tagx--warn { border-color: var(--warn); background: var(--warn-bg); color: #ad6800; }
+.gal .tblx { border: 1px solid var(--border); border-radius: var(--radius-lg); overflow: hidden; background: #fff; margin: 12px 0 0; }
+.gal table { width: 100%; border-collapse: collapse; font-size: 13px; }
+.gal th, .gal td { text-align: left; padding: 8px 11px; border-bottom: 1px solid var(--split); vertical-align: top; }
+.gal th { background: #fafafa; color: var(--t2); font-weight: 600; font-size: 12px; }
+.gal tbody tr:last-child td { border-bottom: 0; }
+.gal code { font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; font-size: 12px; background: var(--fill); border-radius: 4px; padding: 1px 5px; }
+.gal .shot { margin: 0 0 30px; }
+.gal .shot > figcaption { color: var(--t2); margin: 8px 2px 0; line-height: 1.75; }
+.gal .shot > figcaption b { color: var(--t1); }
+.gal .note { font-size: 13px; color: var(--t2); border-left: 3px solid var(--warn-border); background: var(--warn-bg); padding: 10px 13px; border-radius: var(--radius); margin: 14px 0 0; line-height: 1.8; }
+.gal .note b { color: var(--t1); }
+.shotbox { border: 1px solid var(--border); border-radius: var(--radius-lg); overflow: hidden; background: var(--container); box-shadow: 0 1px 2px rgba(0,0,0,.03); }
+/* ---------- 应用外壳（重建，非逐像素取自 admin-web） ---------- */
+.app { display: grid; grid-template-columns: 208px minmax(0,1fr); min-height: 560px; }
+.sider { background: var(--container); border-right: 1px solid var(--split); display: flex; flex-direction: column; }
+.sider__brand { height: 56px; display: flex; align-items: center; gap: 9px; padding: 0 16px; border-bottom: 1px solid var(--split); }
+.sider__logo { width: 24px; height: 24px; border-radius: var(--radius); background: var(--primary); color: #fff; display: grid; place-items: center; font-weight: 600; font-size: 13px; }
+.sider__name { font-weight: 600; font-size: 15px; }
+.sider__menu { padding: 8px; flex: 1; }
+.sider__group { font-size: 12px; color: var(--t3); padding: 10px 8px 6px; }
+.sider__item { display: flex; align-items: center; gap: 9px; height: 40px; padding: 0 12px; border-radius: var(--radius); color: var(--t1); margin-bottom: 2px; }
+.sider__item svg { flex: none; color: var(--t2); }
+.sider__item--on { background: var(--primary-bg); color: var(--primary); font-weight: 500; }
+.sider__item--on svg { color: var(--primary); }
+.sider__unverified { margin: 12px 10px; border: 1px dashed var(--warn-border); background: var(--warn-bg); border-radius: var(--radius); padding: 9px 11px; font-size: 11.5px; line-height: 1.7; color: #ad6800; }
+.main { display: flex; flex-direction: column; min-width: 0; background: var(--layout); }
+.header { height: 56px; background: var(--container); border-bottom: 1px solid var(--split); display: flex; align-items: center; gap: 14px; padding: 0 20px; }
+.crumb { font-size: 14px; color: var(--t2); flex: 1; }
+.crumb i { font-style: normal; color: var(--t4); margin: 0 8px; }
+.avatar { width: 28px; height: 28px; border-radius: 50%; background: var(--primary-bg); color: #0958d9; display: grid; place-items: center; font-size: 13px; }
+.page { padding: 20px 24px 26px; }
+.page__head { display: flex; align-items: flex-start; justify-content: space-between; gap: 16px; flex-wrap: wrap; margin-bottom: 14px; }
+.page__title { font-size: 20px; font-weight: 600; line-height: 1.4; margin: 0 0 6px; }
+.page__desc { color: var(--t2); margin: 0; max-width: 76ch; }
+.tabs { display: flex; gap: 32px; border-bottom: 1px solid var(--split); margin-bottom: 16px; }
+.tabs a { padding: 12px 0; color: var(--t1); text-decoration: none; position: relative; }
+.tabs a.on { color: var(--primary); }
+.tabs a.on::after { content: ""; position: absolute; left: 0; right: 0; bottom: -1px; height: 2px; background: var(--primary); }
+/* antd 组件外观 */
+.abtn { display: inline-flex; align-items: center; justify-content: center; gap: 6px; height: 32px; padding: 0 15px; border-radius: var(--radius); border: 1px solid var(--border); background: var(--container); color: var(--t1); font-size: 14px; white-space: nowrap; }
+.abtn--primary { background: var(--primary); border-color: var(--primary); color: #fff; }
+.abtn--danger { border-color: var(--error); color: var(--error); background: var(--container); }
+.abtn--sm { height: 24px; padding: 0 7px; font-size: 14px; }
+.abtn--text { border-color: transparent; background: transparent; padding: 0 8px; }
+.abtn--link { border-color: transparent; background: transparent; color: var(--primary); padding: 0; height: auto; }
+.ainput { height: 32px; display: flex; align-items: center; padding: 0 11px; border: 1px solid var(--border); border-radius: var(--radius); background: var(--container); color: var(--t3); min-width: 0; }
+.ainput--compact { border-radius: var(--radius) 0 0 var(--radius); }
+.aspace { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+.atag { display: inline-flex; align-items: center; height: 22px; padding: 0 7px; border-radius: 4px; font-size: 12px; line-height: 1; border: 1px solid var(--border); background: #fafafa; color: var(--t1); white-space: nowrap; }
+.atag--green { border-color: var(--success-border); background: var(--success-bg); color: #389e0d; }
+.atag--blue { border-color: var(--primary-border); background: var(--primary-bg); color: #0958d9; }
+.atag--gold { border-color: var(--warn-border); background: var(--warn-bg); color: #ad6800; }
+.atag--orange { border-color: var(--orange-border); background: var(--orange-bg); color: #d46b08; }
+.atag--red { border-color: var(--error-border); background: var(--error-bg); color: #cf1322; }
+.atag--volcano { border-color: var(--volcano-border); background: var(--volcano-bg); color: #d4380d; }
+.acard { background: var(--container); border: 1px solid var(--split); border-radius: var(--radius-lg); }
+.acard__body { padding: 24px; }
+.acard__head { padding: 0 24px; height: 56px; display: flex; align-items: center; border-bottom: 1px solid var(--split); font-size: 16px; font-weight: 600; }
+.astat__title { color: var(--t2); margin-bottom: 4px; }
+.astat__value { font-size: 24px; font-weight: 400; color: var(--t1); font-variant-numeric: tabular-nums; }
+.arow { display: grid; grid-template-columns: repeat(3, minmax(0,1fr)); gap: 16px; }
+.arow--3 { grid-template-columns: repeat(3, minmax(0,1fr)); }
+.atable { width: 100%; border-collapse: separate; border-spacing: 0; font-size: 14px; }
+.atable th { background: var(--table-head); color: var(--t1); font-weight: 600; text-align: left; padding: 16px; border-bottom: 1px solid var(--split); white-space: nowrap; }
+.atable td { padding: 16px; border-bottom: 1px solid var(--split); color: var(--t1); vertical-align: top; }
+.atable tbody tr:last-child td { border-bottom: 0; }
+.acell-id { display: inline-flex; align-items: center; gap: 6px; max-width: 180px; }
+.acell-id span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; font-size: 13px; }
+.aempty { padding: 56px 16px; text-align: center; color: var(--t3); }
+.aempty__art { width: 64px; height: 44px; margin: 0 auto 14px; border: 1px solid var(--border); border-radius: var(--radius); background: linear-gradient(#fff, #fafafa); position: relative; }
+.aempty__art::after { content: ""; position: absolute; inset: 12px 10px auto 10px; height: 1px; background: var(--split); box-shadow: 0 8px 0 var(--split); }
+.aforbid { padding: 60px 16px; text-align: center; }
+.aforbid h3 { font-size: 20px; margin: 0 0 8px; font-weight: 600; }
+.aforbid p { color: var(--t2); margin: 0; }
+.adesc { display: grid; grid-template-columns: repeat(3, minmax(0,1fr)); gap: 12px 24px; font-size: 14px; }
+.adesc__item { display: flex; gap: 8px; min-width: 0; }
+.adesc__label { color: var(--t2); white-space: nowrap; }
+.adesc__label::after { content: "："; }
+.adesc__value { color: var(--t1); min-width: 0; }
+.amodal-stage { position: absolute; inset: 0; background: rgba(0,0,0,0.45); display: flex; align-items: flex-start; justify-content: center; padding: 80px 16px; z-index: 20; }
+.amodal { width: 100%; max-width: 520px; background: var(--container); border-radius: var(--radius-lg); box-shadow: var(--shadow); overflow: hidden; }
+.amodal__head { padding: 16px 24px; border-bottom: 1px solid var(--split); }
+.amodal__title { font-size: 16px; font-weight: 600; display: flex; align-items: center; justify-content: space-between; }
+.amodal__body { padding: 20px 24px; color: var(--t1); }
+.amodal__foot { padding: 0 24px 16px; display: flex; justify-content: flex-end; gap: 8px; }
+.apop { width: 260px; background: var(--container); border-radius: var(--radius-lg); box-shadow: var(--shadow); padding: 12px 16px; font-size: 14px; }
+.apop__title { display: flex; gap: 8px; align-items: flex-start; margin-bottom: 10px; }
+.apop__desc { color: var(--t2); margin-bottom: 10px; padding-left: 22px; }
+.apop__actions { display: flex; justify-content: flex-end; gap: 8px; padding-left: 22px; }
+.astage { position: relative; }
+.astage--modal .app, .astage--modal .page { filter: none; }
+.pin { position: absolute; border: 1px dashed var(--warn); background: var(--warn-bg); color: #ad6800; font-size: 11.5px; padding: 3px 8px; border-radius: var(--radius); z-index: 5; }
+</style>
+</head>
+<body>
+<div class="gal">
+
+  <h1>Platform 管理后台还原稿</h1>
+  <p class="lead">Harness 业务五个页面的静态还原。页面标题、描述、表格列、操作按钮、状态标签配色与弹窗文案全部取自本仓库源码（见文件头注释列出的路径），不是重新设计。</p>
+  <div class="meta">
+    <span class="tagx tagx--ver badge--ver">v0.1</span>
+    <span class="tagx tagx--f4">F4 还原稿</span>
+    <span class="tagx tagx--warn">外壳为重建</span>
+    <span class="tagx">使用者：管理员 + 运维</span>
+    <span class="tagx">7 屏</span>
+    <span class="tagx">antd 6.6.1</span>
+  </div>
+  <p class="note"><b>还原范围的关键限制：</b>左侧导航、顶栏、布局与主题 token 由 <code>@mss-boot-io/admin-web 1.3.7</code> 提供。该包不在本仓库，本地也未安装依赖，<b>无法逐字读取其实包源码或编译产物 CSS</b>，因此这部分按 <code>antd 6.6.1</code> 默认设计变量与 ProLayout 常见形态重建，<b>不是逐像素取自实包</b>。页面主体（标题/描述/Tabs/表格/按钮/弹窗）来自仓库源码，可信度更高。若要消除这一差距，需要在该目录执行依赖安装后重新对照。</p>
+
+  <h2>1. 屏清单</h2>
+  <div class="tblx">
+    <table>
+      <thead><tr><th>#</th><th>屏</th><th>源码位置</th><th>还原可信度</th></tr></thead>
+      <tbody>
+        <tr><td>P1</td><td>Harness 平台概览</td><td><code>pages/Overview/index.tsx</code></td><td>主体源码级；外壳重建</td></tr>
+        <tr><td>P2</td><td>端点注册审批 + 验证用户码弹窗</td><td><code>pages/Enrollments/index.tsx</code></td><td>主体源码级；外壳重建</td></tr>
+        <tr><td>P3</td><td>端点管理 + 吊销确认</td><td><code>pages/Endpoints/index.tsx</code></td><td>主体源码级；外壳重建</td></tr>
+        <tr><td>P4</td><td>ACP 会话 + 关闭确认</td><td><code>pages/Sessions/index.tsx</code></td><td>主体源码级；外壳重建</td></tr>
+        <tr><td>P5</td><td>密文投递状态</td><td><code>pages/Delivery/index.tsx</code></td><td>主体源码级；外壳重建</td></tr>
+        <tr><td>P6</td><td>403 禁止态</td><td><code>HarnessPage.tsx</code> <code>PageForbidden</code></td><td>文案源码级；组件外观重建</td></tr>
+        <tr><td>P7</td><td>空态 / 加载态 / 错误态</td><td><code>HarnessAsyncContent.tsx</code></td><td>分支逻辑源码级；组件外观重建</td></tr>
+      </tbody>
+    </table>
+  </div>
+
+  <h2>2. 画面</h2>
+
+  <figure class="shot">
+    <div class="shotbox">
+      <div class="app">
+        <nav class="sider">
+          <div class="sider__brand"><span class="sider__logo">H</span><span class="sider__name">Harness</span></div>
+          <div class="sider__menu">
+            <div class="sider__group">平台功能</div>
+            <div class="sider__item sider__item--on"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><rect x="4" y="7" width="16" height="12" rx="3"/><path d="M12 3v4M9 12h.01M15 12h.01M9 16h6"/></svg>Harness 平台</div>
+            <div class="sider__unverified">Foundation 菜单（用户 / 角色 / 菜单 / 审计等）由 <b>@mss-boot-io/admin-web</b> 运行时注入，本仓库 <code>generated/routes.ts</code> 为空数组，无法读取其名称与顺序，故此处不虚构。</div>
+          </div>
+        </nav>
+        <div class="main">
+          <div class="header"><span class="crumb">首页<i>/</i>Harness 平台</span><span class="avatar">A</span></div>
+          <div class="page">
+            <div class="page__head">
+              <div><h2 class="page__title">Harness 平台概览</h2><p class="page__desc">查看端点注册、在线端点、ACP 会话和密文投递健康状态。</p></div>
+              <div class="aspace"><button class="abtn"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M20 11a8 8 0 1 0-2.3 5.7M20 5v6h-6"/></svg>刷新</button></div>
+            </div>
+            <div class="tabs"><a class="on" href="#">概览</a><a href="#">注册审批</a><a href="#">端点</a><a href="#">会话</a><a href="#">投递</a></div>
+            <div class="arow">
+              <div class="acard"><div class="acard__body"><div class="astat__title">待处理注册</div><div class="astat__value">1</div></div></div>
+              <div class="acard"><div class="acard__body"><div class="astat__title">活跃端点</div><div class="astat__value">3</div></div></div>
+              <div class="acard"><div class="acard__body"><div class="astat__title">活跃会话</div><div class="astat__value">2</div></div></div>
+            </div>
+            <div class="arow" style="margin-top:16px">
+              <div class="acard"><div class="acard__body"><div class="astat__title">未确认密文帧</div><div class="astat__value">2</div></div></div>
+              <div class="acard"><div class="acard__body"><div class="astat__title">冲突密文帧</div><div class="astat__value">0</div></div></div>
+              <div class="acard" style="border-style:dashed;background:transparent"><div class="acard__body" style="color:var(--t3);font-size:12px;line-height:1.8">这一格不是页面内容。<br />真实页面共 5 个统计卡，按 <code>Col xs=24 sm=12 xl=8</code> 自动换行：窄屏 1 列、中屏 2 列、宽屏 3 列。</div></div>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+    <figcaption><b>P1 · 概览</b>　五个 <code>Statistic</code> 静态量：待处理注册 / 活跃端点 / 活跃会话 / 未确认密文帧 / 冲突密文帧。整页没有任何会话内容、Prompt 或工具参数——只暴露计数。侧栏只有一个经源码确认的条目：<code>routes.config.ts</code> 里其余四页都是 <code>hideInMenu: true</code>，只能靠页面内的 Tabs 切换。</figcaption>
+  </figure>
+
+  <figure class="shot">
+    <div class="shotbox">
+      <div class="app">
+        <nav class="sider">
+          <div class="sider__brand"><span class="sider__logo">H</span><span class="sider__name">Harness</span></div>
+          <div class="sider__menu"><div class="sider__group">平台功能</div>
+            <div class="sider__item sider__item--on"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><rect x="4" y="7" width="16" height="12" rx="3"/><path d="M12 3v4M9 12h.01M15 12h.01M9 16h6"/></svg>Harness 平台</div>
+          </div>
+        </nav>
+        <div class="main">
+          <div class="header"><span class="crumb">首页<i>/</i>Harness 平台<i>/</i>注册审批</span><span class="avatar">A</span></div>
+          <div class="page">
+            <div class="page__head">
+              <div><h2 class="page__title">端点注册审批</h2><p class="page__desc">核对并批准或拒绝 ABA/HC 的短期注册请求。</p></div>
+              <div class="aspace"><button class="abtn"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M20 11a8 8 0 1 0-2.3 5.7M20 5v6h-6"/></svg>刷新</button></div>
+            </div>
+            <div class="tabs"><a href="#">概览</a><a class="on" href="#">注册审批</a><a href="#">端点</a><a href="#">会话</a><a href="#">投递</a></div>
+            <div class="acard" style="overflow:hidden">
+              <table class="atable">
+                <thead><tr><th>端点</th><th>类型</th><th>状态</th><th>ID</th><th>过期时间</th><th>操作</th></tr></thead>
+                <tbody>
+                  <tr>
+                    <td>aba-lab-03</td><td>aba</td>
+                    <td><span class="atag atag--gold">PENDING</span></td>
+                    <td><span class="acell-id"><span>9f2c4a71-1b77-4c20-8ad3-9f2c4a711b77</span><svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><rect x="8" y="8" width="12" height="13" rx="2"/><path d="M16 8V5a2 2 0 0 0-2-2H5a2 2 0 0 0-2 2v9a2 2 0 0 0 2 2h3"/></svg></span></td>
+                    <td>2026年9月15日 14:12:00</td>
+                    <td><div class="aspace"><button class="abtn abtn--primary abtn--sm">批准</button><button class="abtn abtn--danger abtn--sm">拒绝</button></div></td>
+                  </tr>
+                  <tr>
+                    <td>aba-lab-02</td><td>aba</td>
+                    <td><span class="atag atag--blue">APPROVED</span></td>
+                    <td><span class="acell-id"><span>3ad9b7e0-5c11-49d4-9d43-3ad9b7e05c11</span><svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><rect x="8" y="8" width="12" height="13" rx="2"/><path d="M16 8V5a2 2 0 0 0-2-2H5a2 2 0 0 0-2 2v9a2 2 0 0 0 2 2h3"/></svg></span></td>
+                    <td>2026年9月15日 09:51:00</td>
+                    <td>—</td>
+                  </tr>
+                  <tr>
+                    <td>hc-phone-b</td><td>hc-native</td>
+                    <td><span class="atag atag--red">DENIED</span></td>
+                    <td><span class="acell-id"><span>5c119d43-7e21-4a80-b0f6-5c119d437e21</span><svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><rect x="8" y="8" width="12" height="13" rx="2"/><path d="M16 8V5a2 2 0 0 0-2-2H5a2 2 0 0 0-2 2v9a2 2 0 0 0 2 2h3"/></svg></span></td>
+                    <td>2026年9月13日 18:30:00</td>
+                    <td>—</td>
+                  </tr>
+                </tbody>
+              </table>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+    <figcaption><b>P2 · 注册审批</b>　列顺序与 <code>Enrollments/index.tsx</code> 一致：端点 / 类型 / 状态 / ID / 过期时间 / 操作，<code>scroll.x = 960</code>，<code>pagination = false</code>。状态标签用 <code>HarnessStatus</code> 的固定色表：PENDING → gold，APPROVED → blue，DENIED → red。只有 <code>status === 'PENDING'</code> 且账号有 <code>harness:approve</code> 时操作列才出现「批准 / 拒绝」，否则显示 <code>—</code>。</figcaption>
+  </figure>
+
+  <figure class="shot">
+    <div class="shotbox astage astage--modal" style="min-height:560px">
+      <div class="app">
+        <nav class="sider">
+          <div class="sider__brand"><span class="sider__logo">H</span><span class="sider__name">Harness</span></div>
+          <div class="sider__menu"><div class="sider__group">平台功能</div>
+            <div class="sider__item sider__item--on"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><rect x="4" y="7" width="16" height="12" rx="3"/><path d="M12 3v4M9 12h.01M15 12h.01M9 16h6"/></svg>Harness 平台</div>
+          </div>
+        </nav>
+        <div class="main">
+          <div class="header"><span class="crumb">首页<i>/</i>Harness 平台<i>/</i>注册审批</span><span class="avatar">A</span></div>
+          <div class="page">
+            <div class="page__head"><div><h2 class="page__title">端点注册审批</h2><p class="page__desc">核对并批准或拒绝 ABA/HC 的短期注册请求。</p></div></div>
+            <div class="tabs"><a href="#">概览</a><a class="on" href="#">注册审批</a><a href="#">端点</a><a href="#">会话</a><a href="#">投递</a></div>
+            <div class="acard"><div class="acard__body" style="color:var(--t3)">（表格被弹窗遮挡，此处省略）</div></div>
+          </div>
+        </div>
+      </div>
+      <div class="amodal-stage">
+        <div class="amodal">
+          <div class="amodal__head"><div class="amodal__title">验证用户码<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" style="color:var(--t3)"><path d="m6 6 12 12M6 18 18 6"/></svg></div></div>
+          <div class="amodal__body">
+            <div class="ainput" style="color:var(--t3)">输入端点显示的短期用户码</div>
+          </div>
+          <div class="amodal__foot"><button class="abtn">取消</button><button class="abtn abtn--primary" style="opacity:.5">批准</button></div>
+        </div>
+      </div>
+    </div>
+    <figcaption><b>P2b · 验证用户码弹窗</b>　批准与拒绝共用同一个弹窗，<code>okText</code> 随决策切换（批准 / 拒绝）。用户码为空时确定按钮禁用（<code>okButtonProps.disabled = !userCode.trim()</code>）；提交期间按钮进入 loading。输入框 <code>maxLength=64</code>、<code>autoComplete="one-time-code"</code>。批准成功后提示「注册决定已保存。」并刷新列表。</figcaption>
+  </figure>
+
+  <figure class="shot">
+    <div class="shotbox astage" style="min-height:600px">
+      <div class="app">
+        <nav class="sider">
+          <div class="sider__brand"><span class="sider__logo">H</span><span class="sider__name">Harness</span></div>
+          <div class="sider__menu"><div class="sider__group">平台功能</div>
+            <div class="sider__item sider__item--on"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><rect x="4" y="7" width="16" height="12" rx="3"/><path d="M12 3v4M9 12h.01M15 12h.01M9 16h6"/></svg>Harness 平台</div>
+          </div>
+        </nav>
+        <div class="main">
+          <div class="header"><span class="crumb">首页<i>/</i>Harness 平台<i>/</i>端点</span><span class="avatar">A</span></div>
+          <div class="page">
+            <div class="page__head">
+              <div><h2 class="page__title">端点管理</h2><p class="page__desc">查看并管理当前账号拥有的 ABA 和 HC 端点。</p></div>
+              <div class="aspace"><button class="abtn"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M20 11a8 8 0 1 0-2.3 5.7M20 5v6h-6"/></svg>刷新</button></div>
+            </div>
+            <div class="tabs"><a href="#">概览</a><a href="#">注册审批</a><a class="on" href="#">端点</a><a href="#">会话</a><a href="#">投递</a></div>
+            <div class="acard" style="overflow:hidden">
+              <table class="atable">
+                <thead><tr><th>名称</th><th>类型</th><th>状态</th><th>ID</th><th>平台</th><th>版本</th><th>最近在线</th><th>操作</th></tr></thead>
+                <tbody>
+                  <tr>
+                    <td>aba-lab-01</td><td>aba</td><td><span class="atag atag--green">ACTIVE</span></td>
+                    <td><span class="acell-id"><span>9f2c4a71-1b77-…</span><svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><rect x="8" y="8" width="12" height="13" rx="2"/><path d="M16 8V5a2 2 0 0 0-2-2H5a2 2 0 0 0-2 2v9a2 2 0 0 0 2 2h3"/></svg></span></td>
+                    <td>linux-x86_64</td><td>0.1.0</td><td>2026年9月15日 15:02:11</td>
+                    <td><div class="aspace"><button class="abtn abtn--sm">暂停</button><button class="abtn abtn--danger abtn--sm">吊销</button></div></td>
+                  </tr>
+                  <tr>
+                    <td>hc-web-lab</td><td>hc-web</td><td><span class="atag atag--green">ACTIVE</span></td>
+                    <td><span class="acell-id"><span>5c119d43-7e21-…</span><svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><rect x="8" y="8" width="12" height="13" rx="2"/><path d="M16 8V5a2 2 0 0 0-2-2H5a2 2 0 0 0-2 2v9a2 2 0 0 0 2 2h3"/></svg></span></td>
+                    <td>macos-aarch64</td><td>0.1.0</td><td>2026年9月15日 15:01:04</td>
+                    <td><div class="aspace"><button class="abtn abtn--sm">暂停</button><button class="abtn abtn--danger abtn--sm">吊销</button></div></td>
+                  </tr>
+                  <tr>
+                    <td>aba-lab-02</td><td>aba</td><td><span class="atag atag--orange">SUSPENDED</span></td>
+                    <td><span class="acell-id"><span>3ad9b7e0-5c11-…</span><svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><rect x="8" y="8" width="12" height="13" rx="2"/><path d="M16 8V5a2 2 0 0 0-2-2H5a2 2 0 0 0-2 2v9a2 2 0 0 0 2 2h3"/></svg></span></td>
+                    <td>linux-x86_64</td><td>0.1.0</td><td>2026年9月12日 08:20:45</td>
+                    <td><div class="aspace"><button class="abtn abtn--sm">恢复</button><button class="abtn abtn--danger abtn--sm">吊销</button></div></td>
+                  </tr>
+                  <tr>
+                    <td>aba-lab-03</td><td>aba</td><td><span class="atag atag--red">REVOKED</span></td>
+                    <td><span class="acell-id"><span>0b935f22-4d18-…</span><svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><rect x="8" y="8" width="12" height="13" rx="2"/><path d="M16 8V5a2 2 0 0 0-2-2H5a2 2 0 0 0-2 2v9a2 2 0 0 0 2 2h3"/></svg></span></td>
+                    <td>linux-x86_64</td><td>—</td><td>2026年9月11日 19:44:02</td>
+                    <td>—</td>
+                  </tr>
+                </tbody>
+              </table>
+            </div>
+          </div>
+        </div>
+        <div style="position:absolute;top:250px;right:120px">
+          <div class="apop">
+            <div class="apop__title"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="#faad14" stroke-width="2" style="margin-top:2px"><circle cx="12" cy="12" r="9"/><path d="M12 8v5M12 16h.01"/></svg><span>吊销</span></div>
+            <div class="apop__desc">吊销后该端点不能继续连接或获取新密钥包。</div>
+            <div class="apop__actions"><button class="abtn abtn--sm">取消</button><button class="abtn abtn--primary abtn--sm">确定</button></div>
+          </div>
+        </div>
+      </div>
+    </div>
+    <figcaption><b>P3 · 端点管理 + 吊销确认</b>　列顺序来自 <code>Endpoints/index.tsx</code>：名称 / 类型 / 状态 / ID / 平台 / 版本 / 最近在线 / 操作，<code>scroll.x = 1200</code>。操作列按状态变化：ACTIVE → 「暂停 + 吊销」，SUSPENDED → 「恢复 + 吊销」，REVOKED → <code>—</code>。吊销走 <code>Popconfirm</code>，标题「吊销」、描述「吊销后该端点不能继续连接或获取新密钥包。」。状态色：ACTIVE → green，SUSPENDED → orange（源码映射是 <code>orange</code>），REVOKED → red。</figcaption>
+  </figure>
+
+  <figure class="shot">
+    <div class="shotbox astage" style="min-height:600px">
+      <div class="app">
+        <nav class="sider">
+          <div class="sider__brand"><span class="sider__logo">H</span><span class="sider__name">Harness</span></div>
+          <div class="sider__menu"><div class="sider__group">平台功能</div>
+            <div class="sider__item sider__item--on"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><rect x="4" y="7" width="16" height="12" rx="3"/><path d="M12 3v4M9 12h.01M15 12h.01M9 16h6"/></svg>Harness 平台</div>
+          </div>
+        </nav>
+        <div class="main">
+          <div class="header"><span class="crumb">首页<i>/</i>Harness 平台<i>/</i>会话</span><span class="avatar">A</span></div>
+          <div class="page">
+            <div class="page__head">
+              <div><h2 class="page__title">ACP 会话</h2><p class="page__desc">查看 Runtime、Workspace、密钥代次和会话状态。</p></div>
+              <div class="aspace"><button class="abtn"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M20 11a8 8 0 1 0-2.3 5.7M20 5v6h-6"/></svg>刷新</button></div>
+            </div>
+            <div class="tabs"><a href="#">概览</a><a href="#">注册审批</a><a href="#">端点</a><a class="on" href="#">会话</a><a href="#">投递</a></div>
+            <div class="acard" style="overflow:hidden">
+              <table class="atable">
+                <thead><tr><th>会话 ID</th><th>状态</th><th>Runtime</th><th>Workspace</th><th>密钥代次</th><th>最近活动</th><th>操作</th></tr></thead>
+                <tbody>
+                  <tr>
+                    <td><span class="acell-id"><span>sess-a41f0c72</span><svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><rect x="8" y="8" width="12" height="13" rx="2"/><path d="M16 8V5a2 2 0 0 0-2-2H5a2 2 0 0 0-2 2v9a2 2 0 0 0 2 2h3"/></svg></span></td>
+                    <td><span class="atag atag--green">ACTIVE</span></td>
+                    <td>rt-codex-a</td><td>ws-demo-project</td><td>3</td><td>2026年9月15日 15:02:30</td>
+                    <td><div class="aspace"><a class="abtn abtn--link" href="#">查看投递</a><button class="abtn abtn--danger abtn--sm">关闭</button></div></td>
+                  </tr>
+                  <tr>
+                    <td><span class="acell-id"><span>sess-77c2b190</span><svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><rect x="8" y="8" width="12" height="13" rx="2"/><path d="M16 8V5a2 2 0 0 0-2-2H5a2 2 0 0 0-2 2v9a2 2 0 0 0 2 2h3"/></svg></span></td>
+                    <td><span class="atag atag--volcano">UNCERTAIN</span></td>
+                    <td>rt-codex-a</td><td>ws-docs</td><td>1</td><td>2026年9月14日 11:20:08</td>
+                    <td><div class="aspace"><a class="abtn abtn--link" href="#">查看投递</a><button class="abtn abtn--danger abtn--sm">关闭</button></div></td>
+                  </tr>
+                  <tr>
+                    <td><span class="acell-id"><span>sess-0b935f22</span><svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><rect x="8" y="8" width="12" height="13" rx="2"/><path d="M16 8V5a2 2 0 0 0-2-2H5a2 2 0 0 0-2 2v9a2 2 0 0 0 2 2h3"/></svg></span></td>
+                    <td><span class="atag">CLOSED</span></td>
+                    <td>rt-deepseek-b</td><td>ws-demo-project</td><td>1</td><td>2026年9月12日 19:44:02</td>
+                    <td><a class="abtn abtn--link" href="#">查看投递</a></td>
+                  </tr>
+                </tbody>
+              </table>
+            </div>
+          </div>
+        </div>
+        <div style="position:absolute;top:250px;right:120px">
+          <div class="apop">
+            <div class="apop__title"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="#faad14" stroke-width="2" style="margin-top:2px"><circle cx="12" cy="12" r="9"/><path d="M12 8v5M12 16h.01"/></svg><span>关闭</span></div>
+            <div class="apop__desc">关闭会话后，相关本地 Agent 和密钥应进入清理流程。</div>
+            <div class="apop__actions"><button class="abtn abtn--sm">取消</button><button class="abtn abtn--primary abtn--sm">确定</button></div>
+          </div>
+        </div>
+      </div>
+    </div>
+    <figcaption><b>P4 · ACP 会话</b>　列顺序：会话 ID / 状态 / Runtime / Workspace / 密钥代次 / 最近活动 / 操作，<code>scroll.x = 1120</code>。终止态集合是 <code>ABA_REVOKED / CLOSED / FAILED</code>——这些行不出现「关闭」按钮，但「查看投递」始终存在（带 <code>sessionId</code> 跳转）。关闭需要 <code>harness:operate</code>。</figcaption>
+  </figure>
+
+  <figure class="shot">
+    <div class="shotbox">
+      <div class="app">
+        <nav class="sider">
+          <div class="sider__brand"><span class="sider__logo">H</span><span class="sider__name">Harness</span></div>
+          <div class="sider__menu"><div class="sider__group">平台功能</div>
+            <div class="sider__item sider__item--on"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><rect x="4" y="7" width="16" height="12" rx="3"/><path d="M12 3v4M9 12h.01M15 12h.01M9 16h6"/></svg>Harness 平台</div>
+          </div>
+        </nav>
+        <div class="main">
+          <div class="header"><span class="crumb">首页<i>/</i>Harness 平台<i>/</i>投递</span><span class="avatar">A</span></div>
+          <div class="page">
+            <div class="page__head"><div><h2 class="page__title">密文投递状态</h2><p class="page__desc">按会话查看安全投影后的 Frame 与 ACK 元数据，不展示密文内容。</p></div></div>
+            <div class="tabs"><a href="#">概览</a><a href="#">注册审批</a><a href="#">端点</a><a href="#">会话</a><a class="on" href="#">投递</a></div>
+            <div class="acard" style="margin-bottom:16px"><div class="acard__body">
+              <div style="display:flex">
+                <div class="ainput ainput--compact" style="flex:1;color:var(--t3)">输入 32 字符 Session ID</div>
+                <button class="abtn abtn--primary" style="border-radius:0 var(--radius) var(--radius) 0;border-left:0"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="11" cy="11" r="7"/><path d="m16 16 4.5 4.5"/></svg>查询</button>
+              </div>
+            </div></div>
+            <div class="acard" style="margin-bottom:16px">
+              <div class="acard__head">会话摘要</div>
+              <div class="acard__body">
+                <div class="adesc">
+                  <div class="adesc__item"><span class="adesc__label">会话 ID</span><span class="adesc__value" style="font-family:ui-monospace,Menlo,monospace;font-size:13px">sess-a41f0c72</span></div>
+                  <div class="adesc__item"><span class="adesc__label">状态</span><span class="adesc__value"><span class="atag atag--green">ACTIVE</span></span></div>
+                  <div class="adesc__item"><span class="adesc__label">密钥代次</span><span class="adesc__value">3</span></div>
+                  <div class="adesc__item"><span class="adesc__label">Runtime</span><span class="adesc__value">rt-codex-a</span></div>
+                  <div class="adesc__item"><span class="adesc__label">Workspace</span><span class="adesc__value">ws-demo-project</span></div>
+                </div>
+              </div>
+            </div>
+            <div class="acard" style="margin-bottom:16px">
+              <div class="acard__head">密文 Frame</div>
+              <table class="atable">
+                <thead><tr><th>消息 ID</th><th>方向</th><th>Sequence</th><th>密钥代次</th><th>密文字节</th><th>状态</th><th>接收时间</th></tr></thead>
+                <tbody>
+                  <tr><td><span class="acell-id"><span>msg-4f21c8</span><svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><rect x="8" y="8" width="12" height="13" rx="2"/><path d="M16 8V5a2 2 0 0 0-2-2H5a2 2 0 0 0-2 2v9a2 2 0 0 0 2 2h3"/></svg></span></td>
+                    <td>HC_TO_ABA</td><td>128</td><td>3</td><td>1024</td><td><span class="atag atag--green">ACKNOWLEDGED</span></td><td>2026年9月15日 15:02:30</td></tr>
+                  <tr><td><span class="acell-id"><span>msg-4f21c9</span><svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><rect x="8" y="8" width="12" height="13" rx="2"/><path d="M16 8V5a2 2 0 0 0-2-2H5a2 2 0 0 0-2 2v9a2 2 0 0 0 2 2h3"/></svg></span></td>
+                    <td>HC_TO_ABA</td><td>129</td><td>3</td><td>2048</td><td><span class="atag atag--gold">PENDING</span></td><td>2026年9月15日 15:02:31</td></tr>
+                  <tr><td><span class="acell-id"><span>msg-4f21ca</span><svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><rect x="8" y="8" width="12" height="13" rx="2"/><path d="M16 8V5a2 2 0 0 0-2-2H5a2 2 0 0 0-2 2v9a2 2 0 0 0 2 2h3"/></svg></span></td>
+                    <td>ABA_TO_HC</td><td>341</td><td>3</td><td>512</td><td><span class="atag atag--red">CONFLICT</span></td><td>2026年9月15日 15:02:31</td></tr>
+                </tbody>
+              </table>
+            </div>
+            <div class="acard">
+              <div class="acard__head">ACK 游标</div>
+              <table class="atable">
+                <thead><tr><th>方向</th><th>发送端点</th><th>接收端点</th><th>最高连续 ACK</th><th>更新时间</th></tr></thead>
+                <tbody>
+                  <tr><td>HC_TO_ABA</td>
+                    <td><span class="acell-id"><span>hc-web-lab</span><svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><rect x="8" y="8" width="12" height="13" rx="2"/><path d="M16 8V5a2 2 0 0 0-2-2H5a2 2 0 0 0-2 2v9a2 2 0 0 0 2 2h3"/></svg></span></td>
+                    <td><span class="acell-id"><span>aba-lab-01</span><svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><rect x="8" y="8" width="12" height="13" rx="2"/><path d="M16 8V5a2 2 0 0 0-2-2H5a2 2 0 0 0-2 2v9a2 2 0 0 0 2 2h3"/></svg></span></td>
+                    <td>128</td><td>2026年9月15日 15:02:30</td></tr>
+                  <tr><td>ABA_TO_HC</td>
+                    <td><span class="acell-id"><span>aba-lab-01</span><svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><rect x="8" y="8" width="12" height="13" rx="2"/><path d="M16 8V5a2 2 0 0 0-2-2H5a2 2 0 0 0-2 2v9a2 2 0 0 0 2 2h3"/></svg></span></td>
+                    <td><span class="acell-id"><span>hc-web-lab</span><svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><rect x="8" y="8" width="12" height="13" rx="2"/><path d="M16 8V5a2 2 0 0 0-2-2H5a2 2 0 0 0-2 2v9a2 2 0 0 0 2 2h3"/></svg></span></td>
+                    <td>339</td><td>2026年9月15日 15:02:29</td></tr>
+                </tbody>
+              </table>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+    <figcaption><b>P5 · 密文投递状态</b>　三段结构：查询卡（<code>Space.Compact</code> 输入 + 「查询」）→ 会话摘要（<code>Descriptions</code> 五项）→ 密文 Frame 表 → ACK 游标表。未输入 Session ID 时只显示一行次要文字「请输入一个 Session ID 查看投递状态。」，不发请求。Frame 表有 7 列（消息 ID / 方向 / Sequence / 密钥代次 / 密文字节 / 状态 / 接收时间），<code>scroll.x = 960</code>。整页只出现字节数，没有任何密文内容。</figcaption>
+  </figure>
+
+  <div class="arow--3" style="display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:22px">
+    <figure class="shot">
+      <div class="shotbox">
+        <div class="page" style="padding:0">
+          <div class="aforbid">
+            <h3>403</h3>
+            <p>当前账号没有访问 Harness 管理功能的权限。</p>
+          </div>
+        </div>
+      </div>
+      <figcaption><b>P6 · 403 禁止态</b>　<code>HarnessPage</code> 在最外层检查 <code>harness:read</code>，缺失时整个页面（含 Tabs）被 <code>PageForbidden</code> 替换，直接渲染上面的文案。</figcaption>
+    </figure>
+    <figure class="shot">
+      <div class="shotbox">
+        <div class="page" style="padding:0">
+          <div class="aempty"><div class="aempty__art"></div>当前没有已注册端点。</div>
+        </div>
+      </div>
+      <figcaption><b>P7a · 空态</b>　<code>HarnessAsyncContent</code> 在数据为空时渲染 <code>PageEmpty</code>，文案随页面不同（这里是「当前没有已注册端点。」）。</figcaption>
+    </figure>
+    <figure class="shot">
+      <div class="shotbox">
+        <div class="page" style="padding:0">
+          <div class="aempty" style="padding:40px 16px">
+            <div style="height:8px;background:var(--fill);border-radius:4px;margin:0 auto 10px;width:70%;animation:none"></div>
+            <div style="height:8px;background:var(--fill);border-radius:4px;margin:0 auto 10px;width:52%"></div>
+            <div style="height:8px;background:var(--fill);border-radius:4px;margin:0 auto;width:38%"></div>
+            <div style="margin-top:16px;color:var(--t3);font-size:12px">加载态（PageLoading）</div>
+          </div>
+        </div>
+      </div>
+      <figcaption><b>P7b · 加载态</b>　<code>loading</code> 分支渲染 <code>PageLoading</code>；错误分支渲染 <code>PageError</code>，带 <code>getRequestErrorMessage(error)</code> 与「重试」。四态判定顺序是 loading → forbidden → error → empty → ready。</figcaption>
+    </figure>
+  </div>
+
+  <h2>3. 还原偏差（必须知道）</h2>
+  <p class="note">
+    <b>1. 应用外壳未逐像素还原。</b>左侧导航、顶栏、布局、主题 token、<code>PageContainer</code> / <code>PageEmpty</code> / <code>PageError</code> / <code>PageLoading</code> / <code>PageForbidden</code> 的具体外观都来自 <code>@mss-boot-io/admin-web 1.3.7</code>。该包不在仓库内，本机也没有安装依赖，因此无法读取其实包源码或构建产物 CSS。本稿按 <code>antd 6.6.1</code> 默认设计变量重建，<b>侧栏宽度、品牌区、菜单字体、空态插画等细节可能与生产界面不同</b>。<br />
+    <b>2. Foundation 菜单未还原。</b><code>platform/web/src/generated/routes.ts</code> 是空数组，Foundation 菜单由运行时包注入。因此侧栏只画了源码可确认的一条「Harness 平台」，其余位置用虚线框说明原因，没有虚构菜单名。<br />
+    <b>3. 示例数据为占位值。</b>端点名、ID、时间、Runtime / Workspace、字节数均为按源码字段格式编造的示例，不是任何真实运行数据。文中 ID 已被截断成 <code>…</code> 形式以匹配 <code>CompactID</code> 的 <code>ellipsis</code> 行为。<br />
+    <b>4. 标签色是映射表还原。</b>颜色取自 <code>harness/format.tsx</code> 的 <code>statusColors</code> 表（ACTIVE→green、APPROVED→blue、PENDING→gold、SUSPENDED/REKEY_REQUIRED→orange、DENIED/FAILED/REVOKED/CONFLICT→red、UNCERTAIN→volcano、CLOSED→default）。antd 各色的实际色值按 antd 6 默认调色板重建，不是取实包 CSS。<br />
+    <b>5. 交互未绑定。</b>按钮、链接、Tabs、弹窗均为静态展示；Popconfirm 与 Modal 用叠加层复现视觉，不响应点击。<br />
+    <b>6. 未覆盖。</b>真实登录跳转、请求头与 CSRF、<code>Idempotency-Key</code> 生成过程、<code>message.useMessage()</code> 的全局提示动效、i18n 切换（en-US）、表头排序与列宽拖拽、响应式断点下的真实折叠行为。
+  </p>
+
+</div>
+</body>
+</html>
