@@ -6,6 +6,57 @@
 
 ---
 
+## 2026-09-15 09:05 +08:00 — Platform 还原稿外壳升级为上游源码级（v0.3）
+
+分支 `design/prototype-gallery`。本检查点提交 `d816c3ffc102d511e40a59660873a06efc2c71fd`，提交消息 `docs(prototypes): make Platform replica shell source-level (v0.3)`。
+
+触发：用户要求「做出 100% 还原的静态页面」，并说明该原型将交付给 agent 对照开发；同时明确不安装依赖。
+
+取包方式（不污染仓库）：
+
+```bash
+mkdir -p /tmp/proto-ref/admin-web-1.3.7 && cd /tmp/proto-ref/admin-web-1.3.7
+curl -sSL -o pkg.tgz https://registry.npmjs.org/@mss-boot-io/admin-web/-/admin-web-1.3.7.tgz
+tar xzf pkg.tgz
+```
+
+tgz `integrity` = `sha512-dWobxeye4pTIeBfNZqFXCVKSVwJbrV9lz/LQebCIe/M4DK57uLP/IBMei8U6A76ekNmU94oyOCJIwpugMoornA==`。包内**附带完整 `src/` 源码**，不只有构建产物。仅在临时目录解析，`platform/web` 与 `hc` 下均未产生 `node_modules`。
+
+取到的关键实数：
+
+- `package/default-settings.ts`：`navTheme: 'realDark'`、`colorPrimary: '#1677ff'`、`layout: 'mix'`、`contentWidth: 'Fluid'`、`fixedHeader: false`、`fixSiderbar: true`、`colorWeak: false`、`title: 'mss-boot-io'`、`logo: '/logo.svg'`、`splitMenus: false`。
+- `src/shared/design-system/theme.ts`：`algorithm = navTheme === 'realDark' ? theme.darkAlgorithm : theme.defaultAlgorithm`；`cssVar.prefix = 'mss'`；`borderRadius: 8`；字体栈以 `Inter` 开头；`Button.controlHeight: 36`；`Card.headerFontSize: 16`；`Table.headerBg: 'var(--mss-color-fill-quaternary)'`。
+- `src/shared/theme/ThemeRuntimeProvider.tsx`：把上述配置交给 antd `ConfigProvider`，并设 `html.dataset.mssTheme = navTheme`、`html.style.colorScheme = 'dark'`、`colorWeak` 时 `body{filter:invert(80%)}`。
+- `package/core-routes.cjs`：Foundation 全部核心路由与菜单 `name` / `icon`；`package/locales/zh-CN.ts` 给出中文名，共 16 项可见菜单。
+- `src/shared/layout/{RuntimeLayout,LayoutChrome,HeaderActions}.tsx`：mix 布局、品牌区（28×28 logo + 标题，链接 `/workplace`）、面包屑、**用户名水印（gapX 320 / gapY 240 / fontSize 12 / 暗色 rgba(255,255,255,0.035)）**、页脚（版权 + 备案号 + GitHub 链接）、头部动作（菜单搜索 / 通知 / 帮助文档 / 语言切换 / 头像菜单）。
+- `src/shared/design-system/PageState.tsx`：`PageLoading` = `Skeleton active(rows 5, title)`；`PageEmpty` = `Empty` + `PRESENTED_IMAGE_SIMPLE`；`PageError` = `Result status="error"` 标题「加载失败」+ 主按钮「重试」；`PageForbidden` = `Result status="403"` + `LockOutlined`。
+- `src/tailwind.css`：`body{background:var(--mss-color-bg-layout)}`；`*:focus-visible{outline:2px solid var(--mss-color-primary)}`。
+
+已编写并提交：
+
+- `platform-replica/` v0.2 → **v0.3**：整体改为暗色并重绘 10 屏；侧栏从 1 项扩为完整 16 项 Foundation 菜单 + Harness 项；补品牌区、面包屑、水印、页脚、头部动作；四态改为与 `PageState.tsx` 一致的实现。
+- `platform-replica/README.md` v0.3：新增「上游包怎么取的」与「已确认的上游实数」两节，含取包命令、integrity、主题配置原文、16 项菜单表、四态实现与界面文案表。
+- `docs/prototypes/CONVENTIONS.md` v0.6：F4 新增「只下载包到仓库外临时目录解析」的取证路径与记录要求（包名 / 版本 / integrity / 关键实数），并强调不得把依赖装入仓库。
+- `docs/prototypes/README.md` v0.6：清单版本列同步为 v0.3。
+
+**方向性更正**：v0.2 按浅色重建 Platform 外壳是错的 —— 默认 `navTheme: 'realDark'` 会让 antd 走 `darkAlgorithm`，整站暗色。另外 v0.2 认为 Foundation 菜单不可读也是错的，`core-routes.cjs` 里全都有。
+
+已执行检查（本地静态检查，不等于完整验证）：
+
+- 版本/保真度三处一致逐项通过；画面数与声明一致（10/10）。
+- 8 个 HTML 标签配对校验通过。
+- 敏感模式与外部依赖扫描无匹配。
+- 地址校验：**修正了校验器本身** —— 原正则会把页脚 GitHub 图标的 SVG path 坐标（如 `2.65.64.7`）误判为 IP。改为先剔除 `d="..."` 与 `url("data:...")` 再扫 token，结果仅回环地址与 RFC 5737 保留网段。
+- 确认仓库未被污染：`platform/web` 与 `hc` 下无 `node_modules`。
+
+未执行：
+
+- 未做与真实浏览器渲染的逐像素对比；未做真机与无障碍实测。
+- 未覆盖登录页、菜单搜索/通知/语言切换浮层、移动端头部。
+- 未创建 PR，未请求评审；未改动任何代码、协议、Migration 或既有 Accepted 契约。
+
+**待用户确认**：生产实际运行的 `navTheme` 是否被应用级或用户级 override 覆盖为浅色。代码默认值是 `realDark`，但 `ThemeSettings` 支持应用/用户层覆盖，部署后可能不同。
+
 ## 2026-09-15 08:50 +08:00 — 不装依赖，改用后端源头回填 Platform 还原稿（v0.2）
 
 分支 `design/prototype-gallery`。本检查点提交 `e5a578a9296408c91bd228091d0df1ea22eb737e`，提交消息 `docs(prototypes): backfill Platform replica from backend migrations (v0.2)`。
