@@ -39,6 +39,16 @@ struct Record {
     runtime_id: String,
     workspace_id: String,
     closed: bool,
+    #[serde(default)]
+    resource_faults: Option<ResourceFaults>,
+}
+
+#[derive(Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct ResourceFaults {
+    pids_max: u64,
+    memory_oom: u64,
+    memory_oom_kill: u64,
 }
 
 #[derive(Clone, Default, Serialize, Deserialize)]
@@ -291,6 +301,7 @@ impl Supervisor {
             runtime_id: runtime.id.clone(),
             workspace_id: workspace.id.clone(),
             closed: false,
+            resource_faults: None,
         };
         let mut next = registry.state.clone();
         next.records.insert(id.clone(), record.clone());
@@ -485,6 +496,9 @@ impl Supervisor {
             return Err(ProcessError::CleanupUnconfirmed);
         }
         current.closed = true;
+        if record.boot == self.boot && group.exists() {
+            current.resource_faults = resource_faults(&group).ok();
+        }
         if let Err(error) = persist(&self.config.state_directory, &next) {
             registry.faulted = true;
             return Err(error);
@@ -1061,6 +1075,27 @@ fn group_empty(group: &Path) -> Result<bool, ProcessError> {
         Some("1") => Ok(false),
         _ => Err(ProcessError::CleanupUnconfirmed),
     }
+}
+
+fn resource_faults(group: &Path) -> Result<ResourceFaults, ProcessError> {
+    let pids = fs::read_to_string(group.join("pids.events")).map_err(unavailable)?;
+    let memory = fs::read_to_string(group.join("memory.events")).map_err(unavailable)?;
+    fn value(text: &str, key: &str) -> Result<u64, ProcessError> {
+        text.lines()
+            .find_map(|line| {
+                line.split_once(' ')
+                    .filter(|(name, _)| *name == key)
+                    .map(|(_, value)| value)
+            })
+            .ok_or(ProcessError::CleanupUnconfirmed)?
+            .parse()
+            .map_err(unavailable)
+    }
+    Ok(ResourceFaults {
+        pids_max: value(&pids, "max")?,
+        memory_oom: value(&memory, "oom")?,
+        memory_oom_kill: value(&memory, "oom_kill")?,
+    })
 }
 
 #[cfg(test)]

@@ -36,6 +36,7 @@ fn fixture() -> Result<(tempfile::TempDir, Supervisor, Record), Box<dyn std::err
         runtime_id: "fixture".into(),
         workspace_id: "project".into(),
         closed: false,
+        resource_faults: None,
     };
     let mut state = State {
         version: 2,
@@ -53,7 +54,7 @@ fn fixture() -> Result<(tempfile::TempDir, Supervisor, Record), Box<dyn std::err
             runtime_roots: vec![],
             network: crate::config::IsolationNetwork::None,
             run_memory_bytes: 1_073_741_824,
-            run_tasks: 96,
+            run_tasks: 192,
         },
         registry: Arc::new(Mutex::new(Registry {
             state,

@@ -148,7 +148,7 @@ allowed_runtimes = ["fixture"]
 properties = ["Delegate=yes", "ProtectControlGroups=no", "NoNewPrivileges=yes",
     "ProtectSystem=strict", "ProtectHome=yes", "PrivateTmp=yes", "PrivateDevices=yes",
     "CapabilityBoundingSet=", "RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6 AF_NETLINK",
-    "KillMode=control-group", "MemoryMax=4G", "TasksMax=256", "LimitCORE=0", "LimitNOFILE=8192", "UMask=0077",
+    "KillMode=control-group", "MemoryMax=4G", "TasksMax=512", "LimitCORE=0", "LimitNOFILE=8192", "UMask=0077",
     f"ReadWritePaths={state} {workspace}{' ' + str(peer_workspace) if args.parallel else ''} /sys/fs/cgroup/system.slice/{unit}.service"]
 if args.codex or args.provider:
     properties += ["EnvironmentFile=/etc/harness-aba/codex.env"]
@@ -230,6 +230,9 @@ try:
     registry = json.loads((state / "registry.json").read_text())
     facts["whole_scope_cleanup_recorded"] = len(registry["records"]) == (2 if args.parallel else 1) and all(
         item["closed"] for item in registry["records"].values())
+    if not args.crash:
+        facts["no_runtime_resource_rejection"] = all(item.get("resource_faults") == {
+            "pids_max": 0, "memory_oom": 0, "memory_oom_kill": 0} for item in registry["records"].values())
     if not args.codex and not args.retirement:
         before = (workspace / "isolation-heartbeat").read_text()
         time.sleep(0.3)

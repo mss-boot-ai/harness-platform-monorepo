@@ -6,4 +6,4 @@ cgroup_root = "/sys/fs/cgroup/system.slice/harness-aba.service"
 runtime_roots = ["/opt/harness/bin/codex-acp", "/opt/harness/codex-venv"]
 network = "none" # Deterministic fixture mode; reviewed Codex profiles use "codex_provider" after verification.
 run_memory_bytes = 1073741824
-run_tasks = 96
+run_tasks = 192

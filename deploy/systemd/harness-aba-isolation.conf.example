@@ -6,3 +6,4 @@ ProtectControlGroups=false
 ReadWritePaths=/sys/fs/cgroup/system.slice/harness-aba.service
 StateDirectory=harness-aba/process-scopes-v1
 StateDirectoryMode=0700
+TasksMax=512

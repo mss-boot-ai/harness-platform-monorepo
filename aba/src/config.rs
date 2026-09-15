@@ -64,7 +64,7 @@ fn default_run_memory() -> u64 {
     1_073_741_824
 }
 fn default_run_tasks() -> u32 {
-    96
+    192
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -220,7 +220,7 @@ impl AgentConfig {
                 || isolation.runtime_roots.is_empty()
                 || isolation.runtime_roots.len() > 16
                 || !(134_217_728..=2_147_483_648).contains(&isolation.run_memory_bytes)
-                || !(16..=128).contains(&isolation.run_tasks)
+                || !(16..=256).contains(&isolation.run_tasks)
                 || isolation.runtime_roots.iter().any(|path| {
                     !path.starts_with("/opt/harness") || path == Path::new("/opt/harness")
                 })
