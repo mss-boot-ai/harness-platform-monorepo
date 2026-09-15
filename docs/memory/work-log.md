@@ -6,6 +6,37 @@
 
 ---
 
+## 2026-09-15 08:20 +08:00 — 原型提升为按端完整页面稿（F3）
+
+分支 `design/prototype-gallery`，承接同日 07:55 检查点。本检查点提交 `5bb39a52f8af6a766032a83fb61cd48403dd9f25`，提交消息 `docs(prototypes): add full HC and Platform page sets, raise fidelity to F3`。
+
+触发：用户反馈首批原型「太糙」，要求「全面的 Platform 和 HC 端完整页面图」。原 `hc-remote-console/` 与 `platform-admin/` 各只有一个界面、保真度过低，无法用于确认完整信息架构。
+
+已编写并提交：
+
+- `docs/prototypes/hc-pages/` v0.1（F3 · Partial impl）：HC 端 16 个页面，覆盖 `docs/architecture/HC.md` §20 页面清单 —— 登录、端点注册/解锁、待授权设备（设备码核对）、ABA 列表、ABA 详情、连接与重连状态机、会话列表、新建会话、ACP 会话（移动 + 桌面）、权限请求中心、当前 HC 安全设置、所有 Endpoint 管理、证书与轮换、安全通知与审计摘要、内容可见性（Opaque / Managed）。
+- `docs/prototypes/platform-pages/` v0.1（F3 · Visual baseline）：Platform 端 18 个页面 —— Harness 业务 14 页（Overview、Enrollments 列表、Enrollment 审批、Endpoints 列表、Endpoint 详情、Sessions 列表、Session 详情、Delivery、证书与 Trust Manifest、轮换任务、审计日志、通知、系统健康、403/错误页）+ Foundation 4 页（登录、用户、角色与权限、菜单与路由）。每页附实现状态：已实现 / 部分实现 / 未实现 / Foundation。
+- `docs/prototypes/CONVENTIONS.md` v0.3：把原「低保真优先」改为保真度分级 F1/F2/F3，完整页面清单强制 F3；补充 F3 最低内容要求（应用外壳、页面头、真实字段与示例值、操作入口、状态变体、空/错/无权限态）；页面清单类原型强制附「页面 / 路由或入口 / 实现状态」表；示例地址改用 RFC 5737 保留网段。
+- `docs/prototypes/README.md` v0.3：清单增加页面数与保真度列。
+- `hc-remote-console/` → `hc-remote-console-v1/`、`platform-admin/` → `platform-admin-v1/`，状态改为 `Superseded` 并指向新页面集，保留历史。
+- `docs/README.md`：更新原型入口说明。
+
+已执行检查（本地静态检查，不等于完整验证）：
+
+- 版本与保真度三处一致（原型 README / HTML 徽标 / 总清单表）逐项脚本校验通过。
+- 6 个 HTML 标签配对校验（Python `html.parser`）全部通过。
+- 私钥块与常见 Token 前缀扫描：无匹配。
+- 外部依赖扫描（`src=`/`href=`/`@import`/CDN 主机）：无匹配。
+- IP 字面量清单全部为 RFC 5737 保留网段（198.51.100.0/24、203.0.113.0/24）。
+
+未执行：
+
+- 未做浏览器逐页视觉走查与截图；未做移动端真机与无障碍工具实测。
+- 未创建 PR，未请求评审。
+- 未改动任何代码、协议、Migration 或既有 Accepted 契约；页面稿的「实现状态」列不改变 `docs/roadmap/DELIVERY.md` 与任何验证报告的结论。
+
+约束：页面稿为结构化表达手段，不作为验收证据，不得被引用为产品版本或已上线依据。
+
 ## 2026-09-15 07:55 +08:00 — 原型图与说明目录建立（docs/prototypes）
 
 仓库 `mss-boot-ai/harness-platform-monorepo`。从 `main`（HEAD `1227b39`）新建专用分支 `design/prototype-gallery`，已 push 到 `origin` 并设置跟踪。本检查点提交 `22692318fc3306bab0a7b27f3f346fed75b54864`，提交消息 `docs(prototypes): add prototype gallery with conventions and three wireframes`。
