@@ -2,6 +2,8 @@
 
 日期：2026-09-15。状态：H1 部分已实现并在 dev-242 验证；未部署到现有 ABA 服务。H2–H5 与完整 Remote 未完成。
 
+独立复核结论：Codex with ChatGPT 已将 `36e743923c8235fade10c82faa9fc38662fc2431` 接受为 `ACCEPTED_FOR_BOUNDED_CONTAINMENT_AND_SCOPE_RECOVERY`，未发现该修复范围内的剩余阻塞。仅接受上述 H1 边界，不是 H2 业务恢复、正式部署或完整产品完成。
+
 最新组合验收源：`36e743923c8235fade10c82faa9fc38662fc2431`。67 个 Rust 测试、clippy all-targets `-D warnings`、16 个 Python adapter 测试通过；四组目标主机检查均通过。此时仍是隔离候选验证，不是现网部署或完整持久 Host 验收。
 
 ## 用户约束与边界
@@ -24,7 +26,7 @@
 
 `aba/src/process/supervision.rs` 保留随机 scope、boot/device/inode、profile/工作区绑定和关闭 tombstone。持久 claim 在启动前提交；gate 独占且一次消费。关闭先阻止晚启动，再强制清理并检查整个 cgroup，最后持久记录并释放目录锁。未知记录、未确认清理或提交失败不返回“已经关闭”。这些是进程所有权元数据，不是 H2 的业务事务日志。
 
-Host 位于委派树的 host 叶节点；运行时位于 runs 子树。运行时总量仅使用外层内存预算的 75%，预留 64 个 task 给 Host；默认单 Run 内存 1 GiB、96 task。外层实际测试为 MemoryMax=4G、TasksMax=256、NoNewPrivileges、空 capabilities、ProtectSystem=strict、私有临时目录/设备，保留 Codex 嵌套沙箱需要的 AF_NETLINK。
+Host 位于委派树的 host 叶节点；运行时位于 runs 子树。运行时总量仅使用外层内存预算的 75%，预留 64 个 task 给 Host；最终默认单 Run 内存 1 GiB、192 task。最终外层测试为 MemoryMax=4G、TasksMax=512、NoNewPrivileges、空 capabilities、ProtectSystem=strict、私有临时目录/设备，保留 Codex 嵌套沙箱需要的 AF_NETLINK。初版 96/256 的历史失败与修复保留在下文。
 
 运行时使用 private mount/PID/user/IPC/UTS/cgroup/network namespace；只挂载选定工作区、只读 runtime、自己的 HOME。真实 provider key 只在外层可信代理中；沙箱仅收到非秘密占位值。实际运行时看不到代理 Unix socket；只通过命名空间内 loopback 调用固定 HTTPS provider。没有任意 CONNECT、目标地址、重定向或客户端 header 覆盖。模型、调用数量、输出预算、工具种类及输入引用有受限策略；附加 `client_metadata` 被剥离。
 

@@ -1,6 +1,6 @@
 # 同端点持久 Host 契约
 
-日期：2026-09-15。状态：H1 进程隔离/固定 provider 出口及真实控制流程部分已验证，尚未部署；H2–H5 未完成。证据见[现有账号隔离报告](../roadmap/verification/2026-09-15-existing-account-host-isolation.md)。
+日期：2026-09-15。状态：H1 有界进程隔离、固定 provider 出口及 scope 恢复检查点已通过独立复核，尚未部署；H2–H5 未完成。证据见[现有账号隔离报告](../roadmap/verification/2026-09-15-existing-account-host-isolation.md)。
 
 本阶段落实 ADR-0007，不改变既有 AWP v1 的 AAD、签名、Nonce、方向和原始帧重放含义。当前已验收部署 `b482117a406545e9e6a20a6d641d827b1688244d` 保持运行；只有新候选完整验证后才协调更新。
 

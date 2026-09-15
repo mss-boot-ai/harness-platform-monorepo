@@ -247,8 +247,8 @@ try:
     if args.parallel:
         facts["peer_survived_first_scope_cleanup"] = "Independent peer runtime and relay remained usable after the first scope closed." in result.stdout
     report = {"source_sha": args.source_sha, "binary_sha256": hashlib.sha256(binary.read_bytes()).hexdigest(),
-        "unit": unit, "facts": facts, "scope": "isolated real Codex reply and read-only tool" if args.codex else "deterministic kernel containment; fixed provider path enabled" if args.provider else "deterministic kernel containment, no network",
-        "completion": "partial H1 evidence; approval/cancellation/restart matrix and complete Host remain open"}
+        "unit": unit, "facts": facts, "scope": "isolated real Codex reply, file access, approvals, configuration, actual cancellation and continuation" if args.codex else "closed-scope retirement recovery in a fresh process, no runtime execution" if args.retirement else "deterministic kernel containment; fixed provider path enabled" if args.provider else "deterministic kernel containment, no network",
+        "completion": "bounded H1 probe evidence only; deployed Host business persistence and complete Remote remain open"}
     (base / "verification.json").write_text(json.dumps(report, indent=2))
     print(json.dumps(report, indent=2))
     if not all(facts.values()):
