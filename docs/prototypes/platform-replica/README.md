@@ -1,125 +1,182 @@
 # Platform 管理后台还原稿
 
-- 版本：v0.2
+- 版本：v0.3
 - 状态：Visual baseline（含未实现页面，逐页状态见下）
-- 保真度：F4（还原稿，页面主体）／顶栏与布局为重建
-- 界面：Platform Harness 业务五个页面的静态还原，加 403 与空/加载/错误态，共 10 屏。
+- 保真度：F4（还原稿）／应用外壳为**包内源码级**（v0.3 起，不再是重建）
+- 界面：Platform（mss-boot-admin v1.3.7 Thin Host）Harness 业务页面 + 外壳 + 四态，共 10 屏。
 - 使用者：管理员 + 运维
 - 关联文档：[`../../roadmap/verification/2026-09-04-platform-m1.md`](../../roadmap/verification/2026-09-04-platform-m1.md)、[`../../architecture/PLATFORM.md`](../../architecture/PLATFORM.md)、AGENT.md §3
-- 关联代码（还原来源）：`platform/internal/modules/harness/module.go`、`platform/internal/modules/harness/authorization_migration.go`、`platform/web/src/business/locales/zh-CN.ts`、`platform/web/src/business/pages/{Overview,Enrollments,Endpoints,Sessions,Delivery}/index.tsx`、`platform/web/src/business/harness/{HarnessPage,HarnessAsyncContent,format}.tsx`、`platform/web/src/business/routes.config.ts`、`platform/web/src/generated/routes.ts`、`platform/web/package.json`
-- 已实现部分：五个 Harness 页面及其列定义、状态色、操作按钮、弹窗文案均来自已实现代码；菜单条目与 4 项权限来自后端 Migration；M1 验证报告覆盖五页的浏览器验收、403 禁止态、错误态与空态。
-- 未实现部分：本稿不含证书与 Trust Manifest 页面、轮换任务页面（这两页在代码中不存在）；不覆盖真实登录跳转、CSRF、`Idempotency-Key` 生成、i18n 切换、表头排序与列宽拖拽、真实响应式折叠行为。
-- 非目标：不是可运行应用；不复制 Foundation 源码；不新增字段、权限或 API。
+- 关联代码（还原来源）：
+  - **上游包**：`@mss-boot-io/admin-web@1.3.7` 的 `package/default-settings.ts`、`package/core-routes.cjs`、`package/locales/{zh-CN,en-US}.ts`、`src/shared/design-system/{theme.ts,PageContainer.tsx,PageState.tsx}`、`src/shared/layout/{RuntimeLayout,LayoutChrome,HeaderActions}.tsx`、`src/tailwind.css`
+  - **本仓库**：`platform/internal/modules/harness/{module.go,authorization_migration.go}`、`platform/web/src/business/{locales/zh-CN.ts,routes.config.ts,harness/*,pages/*}`
+- 已实现部分：五个 Harness 页面（列定义、状态色、操作按钮、弹窗文案）；菜单条目与 4 项权限；应用外壳（主题、布局、品牌、菜单、水印、页脚、头部动作）；M1 报告覆盖五页浏览器验收、403、错误态与空态。
+- 未实现部分：证书与 Trust Manifest 页面、轮换任务页面（代码中不存在）；未覆盖登录页、菜单搜索浮层、通知浮层、语言切换浮层、移动端头部。
+- 非目标：不是可运行应用；不复制 Foundation 源码；不复制第三方品牌图形；不新增字段、权限或 API。
 - 首次建立：2026-09-15
 - 最后更新：2026-09-15
 
-## 1. 还原方式与可信度
+## 1. 上游包怎么取的（重要）
 
-| 项 | 做法 | 可信度 |
+`@mss-boot-io/admin-web@1.3.7` 不在本仓库，本地也未安装依赖。取包方式：
+
+```bash
+mkdir -p /tmp/proto-ref/admin-web-1.3.7 && cd /tmp/proto-ref/admin-web-1.3.7
+curl -sSL -o pkg.tgz https://registry.npmjs.org/@mss-boot-io/admin-web/-/admin-web-1.3.7.tgz
+tar xzf pkg.tgz      # 得到 package/（含 src/ 源码，不只有构建产物）
+```
+
+- **只下载到临时目录解析，没有安装到仓库**，`platform/web` 下不产生 `node_modules`，仓库无任何新增未跟踪文件。
+- 该 tgz 的 `integrity` 为 `sha512-dWobxeye4pTIeBfNZqFXCVKSVwJbrV9lz/LQebCIe/M4DK57uLP/IBMei8U6A76ekNmU94oyOCJIwpugMoornA==`。
+- 包内包含完整 `src/`，因此外壳、主题与菜单都能取到实数。
+
+## 2. 已确认的上游实数（v0.3 新增）
+
+### 2.1 默认主题：暗色
+
+`package/default-settings.ts`：
+
+```text
+navTheme:      realDark        ← 关键
+colorPrimary:  #1677ff
+layout:        mix
+contentWidth:  Fluid
+fixedHeader:   false
+fixSiderbar:   true
+colorWeak:     false
+title:         mss-boot-io
+logo:          /logo.svg
+splitMenus:    false
+```
+
+`src/shared/design-system/theme.ts` 用 navTheme 驱动 antd：
+
+```ts
+algorithm: settings.navTheme === 'realDark' ? theme.darkAlgorithm : theme.defaultAlgorithm,
+cssVar: { prefix: 'mss' },
+token: { colorPrimary: settings.colorPrimary, borderRadius: 8,
+         fontFamily: "Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif" },
+components: { Button: { controlHeight: 36 }, Card: { headerFontSize: 16 },
+              Table: { headerBg: 'var(--mss-color-fill-quaternary)' } },
+```
+
+`ThemeRuntimeProvider` 把它交给 `ConfigProvider`，并设 `html.dataset.mssTheme = navTheme`、`html.style.colorScheme = 'dark'`，`colorWeak` 时给 `body` 加 `filter: invert(80%)`。**结论：整个后台默认是暗色的。**
+
+### 2.2 布局与外壳
+
+| 项 | 值 | 来源 |
 | --- | --- | --- |
-| 页面标题 / 描述 | 取自 `locales/zh-CN.ts` 的 message id，未改写 | 高 |
-| 表格列与顺序 | 逐列对齐各 `index.tsx` 的 `columns` 数组 | 高 |
-| `scroll.x` / `pagination` | 按源码原值（960 / 1120 / 1200，均为 `false`） | 高 |
-| 状态标签配色 | 取自 `harness/format.tsx` 的 `statusColors` 映射表 | 高（映射）；色值为 antd 6 默认调色板重建 |
-| 操作按钮与权限门控 | 按源码条件复现（`canApprove` / `canRevoke` / `canOperate`） | 高 |
-| 弹窗与 Popconfirm 文案 | 逐字取自源码 | 高 |
-| Tabs | 五项取自 `HarnessPage` 的 `navigation` 常量 | 高 |
-| **菜单条目与权限项** | **取自后端 `module.go` 的 `business.Menu` 与 `authorization_migration.go` 的种子** | **高：源码级事实** |
-| 错误态文案 | `session was not found` 取自 M1 验收报告的实测结果 | 高 |
-| 顶栏 / 布局 / 主题 token | **重建**：实包为 `@mss-boot-io/admin-web 1.3.7`，不在仓库且本地未安装 | **低：非逐像素** |
-| 侧栏图标 path | **近似**：`@ant-design/icons 6.3.2` 未安装，按 `RobotOutlined` 语义自绘 | 低：语义对齐，path 非原始 |
-| 空 / 错误 / 加载 / 403 组件外观 | 来自该包的 `PageEmpty` 等导出，外观重建 | 低：组件外观重建，分支逻辑源码级 |
+| 布局模式 | `mix`（顶部头栏 + 左侧菜单栏） | `default-settings.ts` |
+| 头栏高度 | 56px | ProLayout 默认 |
+| 侧栏宽度 | 208px | ProLayout 默认 |
+| 品牌 | logo `/logo.svg`（28×28，`h-7 w-7`）+ 标题，链接到 `/workplace` | `LayoutChrome.tsx` |
+| 面包屑 | `breadcrumbRender: (routers=[]) => routers` | `RuntimeLayout.tsx` |
+| 水印 | 内容为当前用户显示名，`gapX 320` / `gapY 240` / `fontSize 12`，暗色下 `rgba(255,255,255,0.035)` | `RuntimeLayout.tsx` |
+| 页脚 | `© {年份} {版权}`（默认 `mss-boot-io`）+ 备案号（有则显示）+ GitHub 链接 `mss-boot-admin` | `LayoutChrome.tsx` |
+| 头部动作 | 菜单搜索、通知、帮助文档（`https://docs.mss-boot-io.top`）、语言切换、头像+用户名菜单 | `HeaderActions.tsx` |
+| 头像菜单项 | 账户中心 `/account/center`、个人设置 `/account/settings`、退出登录 | `HeaderActions.tsx` + i18n |
+| 全局样式 | `body { background: var(--mss-color-bg-layout) }`；`*:focus-visible { outline: 2px solid var(--mss-color-primary) }` | `src/tailwind.css` |
 
-## 2. 屏清单
+### 2.3 Foundation 菜单（16 项，取自 `core-routes.cjs` + `locales/zh-CN.ts`）
 
-| # | 屏 | 源码位置 | 可信度 |
+| 路径 | icon 字段 | 中文名 | i18n key |
 | --- | --- | --- | --- |
-| P1 | Harness 平台概览 | `pages/Overview/index.tsx` | 主体源码级；外壳重建 |
-| P2 | 端点注册审批 | `pages/Enrollments/index.tsx` | 同上 |
-| P2b | 验证用户码弹窗 | 同上 | 文案源码级；组件外观重建 |
-| P3 | 端点管理 + 吊销确认 | `pages/Endpoints/index.tsx` | 主体源码级；外壳重建 |
-| P4 | ACP 会话 + 关闭确认 | `pages/Sessions/index.tsx` | 同上 |
-| P5 | 密文投递状态 | `pages/Delivery/index.tsx` | 同上 |
-| P6 | 403 禁止态 | `HarnessPage.tsx` → `PageForbidden` | 文案源码级；组件外观重建 |
-| P7a | 空态 | `HarnessAsyncContent.tsx` → `PageEmpty` | 分支逻辑源码级；外观重建 |
-| P7b | 加载态 | `HarnessAsyncContent.tsx` → `PageLoading` | 同上 |
-| P7c | 错误态 | `HarnessAsyncContent.tsx` → `PageError` + M1 实测文案 | 同上 |
+| `/workplace` | dashboard | 工作台 | `menu.workplace` |
+| `/users` | user | 用户管理 | `menu.users` |
+| `/role` | team | 角色管理 | `menu.role` |
+| `/menu` | menu | 菜单管理 | `menu.menu-management` |
+| `/departments` | apartment | 部门管理 | `menu.departments` |
+| `/posts` | cluster | 岗位管理 | `menu.posts` |
+| `/task` | wallet | 任务调度 | `menu.task` |
+| `/notice` | message | 通知中心 | `menu.notice` |
+| `/log` | fileText | 日志中心 | `menu.system-log` |
+| `/system-config` | inbox | 系统配置 | `menu.system-config` |
+| `/app-config` | setting | 应用设置 | `menu.app-config` |
+| `/language` | translation | 语言管理 | `menu.language` |
+| `/option` | unorderedList | 选项管理 | `menu.option` |
+| `/presentation-config` | layout | 页面展示配置 | `menu.presentation-config` |
+| `/security` | safety | 安全管理 | `menu.security` |
+| `/security/online-sessions` | desktop | 在线会话 | `menu.online-sessions` |
 
-## 3. 源码级事实（不装依赖也能确认的部分）
+另有 `hideInMenu: true` 的路由（`/users/control/*`、`/role/create`、`/menu/:id`、`/task/:id`、`/account/*` 等）不出现在菜单中。
 
-### 3.1 菜单条目
+**Harness 条目**（后端 `module.go` 的 `business.Menu`）：`DisplayName: "Harness 平台"`、`DisplayNameEn: "Harness Platform"`、`Icon: "RobotOutlined"`、`Order: 45`、`Path: "/harness"`。
 
-来自 `platform/internal/modules/harness/module.go` 的 `business.Menu`：
+### 2.4 页面状态组件（`PageState.tsx` 原文）
 
-```text
-DisplayName:   Harness 平台
-DisplayNameEn: Harness Platform
-Icon:          RobotOutlined
-Order:         45
-Path:          /harness
-```
+| 组件 | 实现 |
+| --- | --- |
+| `PageLoading` | `<div aria-busy="true" role="status"><Skeleton active paragraph={{rows}} title/></div>`，默认 `rows=5` |
+| `PageEmpty` | `<Empty description={...} image={Empty.PRESENTED_IMAGE_SIMPLE}/>` —— **简化插画**，不是默认大插画 |
+| `PageError` | `<Result status="error" title="加载失败" subTitle={message} extra={<Button type="primary" icon={<ReloadOutlined/>}>重试</Button>}/>` |
+| `PageForbidden` | `<Result status="403" icon={<LockOutlined/>} title="403" subTitle={message}/>` |
 
-来自 `authorization_migration.go` 写入的菜单记录（`MenuAccessType`，可见）：
+`PageContainer` 是 ProComponents `PageContainer` 的适配器，把标题包成 `<h1>`（`color:inherit; font:inherit; margin:0`）。
 
-```text
-name "Harness Platform" · path /harness · method GET · permission harness:read · sort 45 · HideInMenu false
-```
+### 2.5 相关界面文案（`locales/zh-CN.ts`）
 
-**同级还有 `Order ≠ 45` 的 Foundation 菜单**，由 `@mss-boot-io/admin-web` 运行时注入，名称不可读。`platform/web/src/generated/routes.ts` 是空数组，本地也无法从该文件推断。
+| key | 文案 |
+| --- | --- |
+| `states.loadError` | 加载失败 |
+| `states.forbidden` | 你没有访问此页面的权限。 |
+| `states.notFound` | 页面不存在，或该能力尚未注册到 Ant Design 6 应用。 |
+| `actions.retry` | 重试 |
+| `actions.refresh` | 刷新 |
+| `menu.account-center` / `menu.account-settings` / `menu.logout` | 账户中心 / 个人设置 / 退出登录 |
+| `navigation.documentation` | 打开帮助文档 |
 
-### 3.2 权限项（`permission` 组件记录，全部 `hidden: true`）
+Harness 侧覆盖：`harness.states.forbidden` = 「当前账号没有访问 Harness 管理功能的权限。」
 
-| 权限码 | 显示名 | 组件路径 |
+## 3. 屏清单
+
+| # | 屏 | 证据 |
 | --- | --- | --- |
-| `harness:read` | 查看 Harness 状态 | `/harness/permissions/read` |
-| `harness:operate` | 操作 Harness 会话 | `/harness/permissions/operate` |
-| `harness:approve` | 审批 Harness 注册 | `/harness/permissions/approve` |
-| `harness:revoke` | 暂停或吊销 Harness 端点 | `/harness/permissions/revoke` |
-
-英文侧显示名（`module.go` 的 `business.Permission.DisplayName`）分别为 Read Harness state / Operate Harness sessions / Approve Harness enrollments / Revoke Harness endpoints。
-
-### 3.3 前端路由与页内导航
-
-- `routes.config.ts`：`/harness` 重定向到 `/harness/overview`；`/harness/overview` 是**唯一** `hideInMenu` 未设置的路由，其余四页全部 `hideInMenu: true`。
-- 因此侧栏只有一个可见条目，五页之间靠 `HarnessPage` 内的 **Tabs** 切换（概览 / 注册审批 / 端点 / 会话 / 投递）。
-- 把五个页面画成五个侧栏菜单项是**错的**。
-
-### 3.4 实测到的错误态文案
-
-M1 验收报告记录：查询不存在的 Session 时显示错误态与稳定错误串 `session was not found`（英文，非中文包装文案）。
+| P1 | Harness 平台概览 | `pages/Overview/index.tsx` + §2 外壳实数 |
+| P2 | 端点注册审批 | `pages/Enrollments/index.tsx` |
+| P2b | 验证用户码弹窗 | 同上 + antd Modal |
+| P3 | 端点管理 + 吊销确认 | `pages/Endpoints/index.tsx` + antd Popconfirm |
+| P4 | ACP 会话 + 关闭确认 | `pages/Sessions/index.tsx` |
+| P5 | 密文投递状态 | `pages/Delivery/index.tsx` |
+| P6 | 403 禁止态 | `PageState.tsx` → `PageForbidden` |
+| P7a | 空态 | `PageState.tsx` → `PageEmpty` |
+| P7b | 加载态 | `PageState.tsx` → `PageLoading` |
+| P7c | 错误态 | `PageState.tsx` → `PageError` + M1 实测文案 |
 
 ## 4. 关键还原点（易做错的地方）
 
-1. **侧栏只有一个 Harness 条目**，五页靠页内 Tabs 切换（见 §3.3）。
-2. **概览是 5 个统计卡不是 4 个**：待处理注册、活跃端点、活跃会话、未确认密文帧、**冲突密文帧**。栅格 `xs=24 sm=12 xl=8`。
-3. **审批弹窗的确定按钮文案随决策切换**（批准 / 拒绝），共用同一个「验证用户码」弹窗，用户码为空时禁用。
-4. **端点管理的操作按钮按状态三态变化**：ACTIVE → 暂停+吊销；SUSPENDED → 恢复+吊销；REVOKED → `—`。
-5. **会话页的终止态集合**是 `ABA_REVOKED` / `CLOSED` / `FAILED`，这些行没有「关闭」但仍有「查看投递」。
-6. **投递页未输入 Session ID 时不发请求**，只显示一行次要文字；输入框提示是「输入 32 字符 Session ID」。
-7. **`CompactID` 自带复制按钮且宽度上限 180px**，长 ID 显示为省略号 + 复制图标。
-8. **四态判定顺序**：loading → forbidden → error → empty → ready，`forbidden` 优先于 `error`。
-9. **概览页没有任何内容级信息**：只有计数，没有 Prompt、标题或工具参数。
+1. **默认是暗色主题**（`navTheme: realDark` → `darkAlgorithm`），不是浅色。
+2. **侧栏只有一个 Harness 条目**，其余四页 `hideInMenu: true`，五页靠页内 **Tabs** 切换。
+3. **概览是 5 个统计卡不是 4 个**（含「冲突密文帧」），栅格 `xs=24 sm=12 xl=8`。
+4. **审批弹窗的确定按钮文案随决策切换**，用户码为空时禁用。
+5. **端点管理操作列三态**：ACTIVE → 暂停+吊销；SUSPENDED → 恢复+吊销；REVOKED → `—`。
+6. **会话页终止态** `ABA_REVOKED / CLOSED / FAILED` 不出「关闭」，但保留「查看投递」。
+7. **投递页未输入 Session ID 时不发请求**，只显示一行次要文字。
+8. **`CompactID` 自带复制按钮且 `maxWidth: 180`**，长 ID 省略号显示。
+9. **四态判定顺序** loading → forbidden → error → empty → ready，`forbidden` 优先。
+10. **空态用简化插画**（`PRESENTED_IMAGE_SIMPLE`），不是默认大插画。
+11. **页面有用户名水印**，暗色下 `rgba(255,255,255,0.035)`。
+12. **`borderRadius` 是 8、按钮高 36**，不是 antd 默认的 6 / 32。
 
 ## 5. 还原偏差
 
-1. **顶栏与布局非逐像素**（见 §1 末三行）。要消除差距需要在该目录安装依赖后重新对照实包。
-2. **Harness 菜单条目已源码级确认，同级 Foundation 菜单未还原**：同级 `Order ≠ 45` 的菜单不可读，用虚线框说明，未虚构。
-3. **侧栏图标 path 是近似**：`@ant-design/icons` 未安装，按 `RobotOutlined` 语义自绘。
-4. **示例数据为占位值**：端点名、ID、时间、Runtime / Workspace、字节数均按源码字段格式编造。
-5. **标签色值为 antd 6 默认调色板重建**，不是从实包 CSS 读取。
-6. **Popconfirm / Modal 用叠加层复现**，不响应点击。
-7. **未覆盖**：真实登录跳转、请求头与 CSRF、`Idempotency-Key` 生成、`message.useMessage()` 全局提示动效、en-US 文案、表头排序与列宽拖拽。
+1. **品牌 logo 用占位块。** 生产用 `/logo.svg`（166×166 内嵌位图，mss-boot-io 商标）。按「不复制第三方品牌、商标」的约定，只还原 28×28 尺寸与位置。
+2. **菜单图标 path 为近似。** `@ant-design/icons` 未安装；图标语义取自 `core-routes.cjs` 的 `icon` 字段，图形自绘。
+3. **ProLayout 内部配色按 realDark 语义重建。** 顶栏与侧栏用 `#001529`、选中项用 `colorPrimary`；ProLayout 实际 token 值（尤其悬停态、子菜单缩进）可能略有差异。
+4. **antd 暗色 token 取 darkAlgorithm 默认值**（`bg-layout #000`、`bg-container #141414`、`bg-elevated #1f1f1f`、`border #424242`、`text rgba(255,255,255,.85)`），非从构建产物 CSS 读取。已确认的实数只有 §2.1 列出的那些。
+5. **示例数据为占位值**，不是任何真实运行数据。
+6. **交互未绑定**：Tabs、按钮、Popconfirm、Modal 均为静态；水印为静态平铺，不随登录用户变化。
+7. **未覆盖**：登录页（`/user/login`，`layout:false`）、菜单搜索浮层、通知浮层、语言切换浮层、头像下拉菜单、`message.useMessage()`、`colorWeak` 的 `body{filter:invert(80%)}`、移动端 `AccessibleMobileHeader`、面包屑完整层级、表头排序与列宽拖拽。
 
 ## 6. 待确认问题
 
-1. 侧栏宽度与是否深色，需安装依赖后从实包确认；当前为 `208px` 浅色重建。
-2. 「冲突密文帧」在概览里的业务含义与处置入口是否需要补充说明页面？
-3. 投递页的 Session ID 输入是否需要历史下拉或从会话页带参跳转的可见提示？
-4. 4 项权限的组件记录（`/harness/permissions/*`）是否需要在 Foundation 菜单/权限页可见，还是保持隐藏？
+1. 生产实际运行的 `navTheme` 是否被应用级或用户级 override 覆盖为浅色？代码默认值是 `realDark`，但 `ThemeSettings` 支持应用/用户层覆盖，部署后可能不同 —— **这是本稿最需要你确认的一点**。
+2. 「冲突密文帧」的业务含义与处置入口是否需要补充说明页面？
+3. 4 项权限的组件记录（`/harness/permissions/*`）是否需要在菜单管理页可见，还是保持隐藏？
+4. 是否需要补 `工作台`（`/workplace`）一屏，让对照开发的 agent 有完整入口示例？
 
 ## 7. 版本记录
 
 | 版本 | 日期 | 变更 | 触发文档 / 决策 |
 | --- | --- | --- | --- |
 | v0.1 | 2026-09-15 | 首次建立：按真实 locales 与页面组件还原 9 屏；外壳标注为重建 | `platform/web/src/business` 当前源码 |
-| v0.2 | 2026-09-15 | 从后端 `module.go` 与 `authorization_migration.go` 回填菜单条目与 4 项权限的真实数据；新增 P7c 错误态（文案取自 M1 实测）；更正屏数计数；侧栏增加源码级事实说明 | M1 验收报告、`platform/internal/modules/harness` |
+| v0.2 | 2026-09-15 | 从后端 `module.go` 与 `authorization_migration.go` 回填菜单条目与 4 项权限；新增 P7c 错误态；屏数更正为 10 | M1 验收报告、`platform/internal/modules/harness` |
+| v0.3 | 2026-09-15 | **从 `@mss-boot-io/admin-web@1.3.7` 包内源码取得外壳实数**：默认 `navTheme: realDark` 导致整站暗色（v0.2 浅色方向错误）、`layout: mix`、品牌 `mss-boot-io`、`borderRadius 8`、`Button.controlHeight 36`、16 项 Foundation 菜单名、用户名水印、页脚、头部动作、四态组件实现；整体改为暗色并重绘 | 上游包 `package/*` + `src/shared/*` |
