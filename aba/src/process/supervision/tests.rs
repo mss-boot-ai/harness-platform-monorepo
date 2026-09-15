@@ -98,6 +98,15 @@ fn whole_scope_kill_and_persisted_receipt_precede_lease_release()
     let lease = File::open(&record.workspace)?;
     rustix::fs::flock(&lease, rustix::fs::FlockOperation::NonBlockingLockExclusive)?;
     // Lost reply: retry exact original ID, never allocate or start another scope.
+    // The fake filesystem has ordinary files where cgroupfs has virtual files.
+    let group = supervisor
+        .config
+        .cgroup_root
+        .join("runs")
+        .join(&record.scope);
+    fs::remove_file(group.join("cgroup.kill"))?;
+    fs::remove_file(group.join("cgroup.events"))?;
+    fs::remove_dir(group)?;
     supervisor.close_run([1; 16])?;
     assert!(supervisor.close_run([3; 16]).is_err());
     Ok(())
@@ -296,6 +305,47 @@ fn malformed_registry_scope_or_version_fails_closed() -> Result<(), Box<dyn std:
     assert!(validate_state(&state).is_err());
     assert!(!valid_scope_name("harness-run-../-scope"));
     Ok(())
+}
+
+#[test]
+fn closed_known_empty_scope_is_eligible_for_interrupted_retirement()
+-> Result<(), Box<dyn std::error::Error>> {
+    let (_directory, supervisor, record) = fixture()?;
+    supervisor.close_run([1; 16])?;
+    assert!(supervisor.closed_scope_remnant(&record)?.is_some());
+    let group = supervisor
+        .config
+        .cgroup_root
+        .join("runs")
+        .join(&record.scope);
+    fs::write(group.join("cgroup.events"), b"populated 1\n")?;
+    assert!(supervisor.closed_scope_remnant(&record).is_err());
+    fs::write(group.join("cgroup.events"), b"populated 0\n")?;
+    fs::write(
+        supervisor
+            .config
+            .state_directory
+            .join(format!("{}.gate", record.run)),
+        b"open\n",
+    )?;
+    assert!(supervisor.closed_scope_remnant(&record).is_err());
+    Ok(())
+}
+
+#[test]
+fn parent_child_workspaces_conflict_but_siblings_do_not() {
+    assert!(workspaces_overlap(
+        Path::new("/srv/harness-workspaces/a"),
+        Path::new("/srv/harness-workspaces/a/sub")
+    ));
+    assert!(workspaces_overlap(
+        Path::new("/srv/harness-workspaces/a/sub"),
+        Path::new("/srv/harness-workspaces/a")
+    ));
+    assert!(!workspaces_overlap(
+        Path::new("/srv/harness-workspaces/a"),
+        Path::new("/srv/harness-workspaces/ab")
+    ));
 }
 
 #[test]

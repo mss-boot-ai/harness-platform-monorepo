@@ -144,7 +144,6 @@ impl Supervisor {
             .state
             .records
             .values()
-            .filter(|record| !record.closed)
             .cloned()
             .collect();
         for record in records {
@@ -227,8 +226,7 @@ impl Supervisor {
         }
         if registry.state.records.values().any(|record| {
             !record.closed
-                && (record.workspace.starts_with(&workspace_path)
-                    || workspace_path.starts_with(&record.workspace)
+                && (workspaces_overlap(&record.workspace, &workspace_path)
                     || (record.workspace_device == metadata.dev()
                         && record.workspace_inode == metadata.ino()))
         }) {
@@ -389,6 +387,10 @@ impl Supervisor {
                 return Err(ProcessError::CleanupUnconfirmed);
             }
             if current.closed {
+                drop(registry);
+                if let Some(group) = self.closed_scope_remnant(record)? {
+                    fs::remove_dir(group).map_err(unavailable)?;
+                }
                 return Ok(());
             }
         }
@@ -466,6 +468,42 @@ impl Supervisor {
         }
         Ok(())
     }
+
+    // Resume retirement after a crash between the durable close and rmdir. A known
+    // closed directory is removable only with its sealed gate, exact inode, and no live tasks.
+    fn closed_scope_remnant(&self, record: &Record) -> Result<Option<PathBuf>, ProcessError> {
+        let group = self.config.cgroup_root.join("runs").join(&record.scope);
+        let metadata = match fs::symlink_metadata(&group) {
+            Ok(metadata) => metadata,
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(None),
+            Err(error) => return Err(unavailable(error)),
+        };
+        if record.boot != self.boot
+            || !metadata.is_dir()
+            || metadata.file_type().is_symlink()
+            || metadata.dev() != record.device
+            || metadata.ino() != record.inode
+        {
+            return Err(ProcessError::CleanupUnconfirmed);
+        }
+        let mut gate = open_gate(
+            &self
+                .config
+                .state_directory
+                .join(format!("{}.gate", record.run)),
+        )?;
+        lock_gate(&gate, rustix::fs::FlockOperation::NonBlockingLockExclusive)?;
+        let mut value = [0; 5];
+        gate.read_exact(&mut value).map_err(unavailable)?;
+        if &value != b"shut\n" || !group_empty(&group)? {
+            return Err(ProcessError::CleanupUnconfirmed);
+        }
+        Ok(Some(group))
+    }
+}
+
+fn workspaces_overlap(left: &Path, right: &Path) -> bool {
+    left.starts_with(right) || right.starts_with(left)
 }
 
 impl Scope {
