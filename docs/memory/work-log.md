@@ -6,6 +6,42 @@
 
 ---
 
+## 2026-09-15 08:35 +08:00 — 新增 F4 还原稿：HC Web 与 Platform 后台按源码复刻
+
+分支 `design/prototype-gallery`，承接同日 08:20 检查点。本检查点提交 `40eec902a5e66c7e153b20f23dae832e7b55f3b3`，提交消息 `docs(prototypes): add F4 replicas of HC Web and Platform admin`。
+
+触发：用户要求「高度还原的页面，和现在的页面一模一样的静态 html 页面」。此前的 F3 结构稿是设计稿，不能满足。为此新增 F4 还原稿级别并实际读取源码复刻。
+
+已编写并提交：
+
+- `docs/prototypes/hc-replica/` v0.1（F4 · 11 屏）：样式块**直接使用 `hc/web/src/styles.css` 原文**（逐行照抄，未改一个字符）；DOM 结构与全部中文文案取自 `App.tsx`、`SessionSetup.tsx`、`chat/ChatWorkspace.tsx`、`chat/Dialog.tsx`、`chat/Markdown.tsx`、`chat/Icon.tsx`、`remote/RuntimeControls.tsx`、`PlatformSetup.tsx`、`GatewaySetup.tsx`；图标使用 `Icon.tsx` 的原始 SVG path 与 `stroke-width=1.7`。覆盖欢迎页、会话页（计划/工具/权限/用量）、侧栏搜索、只读态与保留草稿、执行环境 popover、设置弹窗两态、结束会话确认、工具授权确认、端点非独占、移动端 390px。
+- `docs/prototypes/platform-replica/` v0.1（F4 · 9 屏）：页面标题/描述取自 `locales/zh-CN.ts`；表格列与顺序、`scroll.x`（960/1120/1200）、`pagination=false`、权限门控（`canApprove`/`canRevoke`/`canOperate`）、状态色映射表、Popconfirm 与 Modal 文案逐项对齐五个 `pages/*/index.tsx`。覆盖五页 + 403 + 空态 + 加载态。
+- `docs/prototypes/CONVENTIONS.md` v0.4：新增 F4 还原稿级别；规定 F4 必须列还原来源与还原偏差；样式来源优先级为「项目自有 CSS 原文 > 依赖包实包源码/构建产物 > 按组件库设计变量重建」，用第三种时必须在文件头与 README 同时标注「外壳为重建，非逐像素」；版本徽标元素强制带 `badge--ver` 类以便脚本校验。
+- `docs/prototypes/README.md` v0.4：清单纳入两份还原稿，新增 §3.1「F3 设计稿 vs F4 还原稿，用哪个」。
+- `docs/README.md`：更新原型入口说明。
+
+**关键更正**：`platform/web/src/business/routes.config.ts` 中除 `/harness/overview` 外，其余四页均为 `hideInMenu: true`，真实导航靠 `HarnessPage` 内的 Tabs 完成。此前 F3 稿把五个页面画成五个侧栏菜单项，是错的。
+
+**明确的还原限制**（已在两个文件的文件头与 README 中标注，未声称「一模一样」）：
+
+- 应用外壳（左侧导航、顶栏、布局、主题 token，以及 `PageEmpty`/`PageError`/`PageLoading`/`PageForbidden` 的具体外观）由 `@mss-boot-io/admin-web 1.3.7` 提供。该包不在本仓库，本机也没有安装依赖（无 `node_modules`、无 pnpm store），**无法读取实包源码或编译产物 CSS**，因此按 `antd 6.6.1` 默认设计变量重建，非逐像素。
+- `platform/web/src/generated/routes.ts` 是空数组，Foundation 菜单由运行时包注入，名称与顺序不可读，因此未虚构菜单项，改用虚线框说明。
+- 示例数据全部为占位值；交互未绑定；`<dialog>` 的 `::backdrop` 用叠加层复现。
+- `hc/web/src/styles.css` 声明 Inter 但未外链加载，实际渲染依赖系统是否安装，本稿同样如此。
+
+已执行检查（本地静态检查，不等于完整验证）：
+
+- 版本与保真度三处一致（原型 README / HTML `badge--ver` 徽标 / 总清单表）逐项脚本校验通过。**过程中发现两个还原稿的版本徽标未使用约定类名导致校验失败，已修复并把该类名要求写入规范。**
+- 8 个 HTML 标签配对校验（Python `html.parser`）全部通过。
+- 私钥块与常见 Token 前缀扫描：无匹配。外部依赖扫描（`src=`/`@import`/CDN）：无匹配。
+- IP 字面量清单全部为 RFC 5737 保留网段。
+
+未执行：
+
+- 未做与真实浏览器渲染或生产构建产物的逐像素对比；未做真机与无障碍工具实测。
+- 未安装前端依赖，因此未取得 `@mss-boot-io/admin-web` 的实际样式。
+- 未创建 PR，未请求评审；未改动任何代码、协议、Migration 或既有 Accepted 契约。
+
 ## 2026-09-15 08:20 +08:00 — 原型提升为按端完整页面稿（F3）
 
 分支 `design/prototype-gallery`，承接同日 07:55 检查点。本检查点提交 `5bb39a52f8af6a766032a83fb61cd48403dd9f25`，提交消息 `docs(prototypes): add full HC and Platform page sets, raise fidelity to F3`。
