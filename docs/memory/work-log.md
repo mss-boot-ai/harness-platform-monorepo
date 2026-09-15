@@ -6,6 +6,39 @@
 
 ---
 
+## 2026-09-15 07:55 +08:00 — 原型图与说明目录建立（docs/prototypes）
+
+仓库 `mss-boot-ai/harness-platform-monorepo`。从 `main`（HEAD `1227b39`）新建专用分支 `design/prototype-gallery`，已 push 到 `origin` 并设置跟踪。本检查点提交 `22692318fc3306bab0a7b27f3f346fed75b54864`，提交消息 `docs(prototypes): add prototype gallery with conventions and three wireframes`。
+
+用户指令：在 `docs/` 下建立用于原型图与说明的目录，由本 Agent 负责该工作，并新开专用分支；随后追加要求原型必须带版本号。
+
+已编写并提交：
+
+- `docs/prototypes/README.md`：目录入口、状态标签、版本规则、原型清单、阅读与新增流程。
+- `docs/prototypes/CONVENTIONS.md`（文档 v0.2）：低保真与自包含单文件原则、状态标签语义、§4 版本编号与变更记录（`vMAJOR.MINOR`，首版固定 `v0.1`，强制 README/HTML 徽标/清单三处一致）、主题与可读性、禁止事项、安全 UI 必表达项、评审流程。
+- `docs/prototypes/TEMPLATE/`：可复制骨架与规范样式源（自包含单文件 HTML，无外部依赖）。
+- `docs/prototypes/hc-remote-console/` v0.1（Partial impl）：HC 远程会话主界面；桌面与移动布局、输入区六态、连接状态与执行状态分离、Opaque/UNCERTAIN/Backpressure/权限卡表达。
+- `docs/prototypes/aba-enrollment/` v0.1（Partial impl）：ABA 设备授权七步流程、终端侧输出、HC 授权页、状态机、Platform 可见与不可见边界。
+- `docs/prototypes/platform-admin/` v0.1（Visual baseline）：管理后台五页面列定义、五态、权限矩阵。
+- `docs/README.md`：登记原型目录入口与文档权威顺序说明。
+
+已执行检查（均为本地静态检查，不等于完整验证）：
+
+- 版本三处一致性脚本校验：三个原型的 README 头部、HTML 徽标、总清单版本列均为 `v0.1`。
+- HTML 标签配对校验（Python `html.parser`）：4 个 HTML 文件全部通过。
+- 敏感模式扫描（私钥块、常见 Token 前缀、IPv4 字面量）：无匹配。
+- 外部依赖扫描（`src=`/`href=`/`@import`/CDN 主机）：无匹配。
+
+未执行：
+
+- 未做浏览器逐页视觉走查与截图；未做移动端真机与无障碍工具实测。
+- 未创建 PR，未请求评审。
+- 未改动任何代码、协议、Migration 或既有 Accepted 契约。
+
+约束：原型是低保真表达手段，不作为验收证据；本检查点不含真实密钥、Token、Ticket、生产地址或用户数据。`push` 不等于验证通过。
+
+相邻已知问题（本检查点未处理，另行确认后修正）：`AGENT.md` §6 仍写开发分支 `codex/bootstrap-harness-platform-foundation`，该分支已不存在；`docs/memory/project-memory.md` §1 与 `docs/remote/` 仍描述 PR #3 为 Draft，而 `main` 已于 2026-09-14 21:53 通过 squash 合入 #3（`1227b39`）。
+
 ## 2026-09-14 20:10 +08:00 — HC 持久会话页面接入与浏览器恢复验证
 
 仓库 `mss-boot-ai/harness-platform-monorepo`，用户指定分支 `design/device-fabric-foundation`，Draft PR #3。本轮由 `717a85351beed69834ef810c5cf9aaeb09dc78d7` 继续，所有代码检查点先最小检查、commit/push，再执行完整验证。最终已验证实现源 `a0dad3fdbfb9a15b701f4973c48b8d2158072442`，提交消息 `fix(hc): retain failed drafts independently across conversation switches`。
