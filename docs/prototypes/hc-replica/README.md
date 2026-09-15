@@ -3,7 +3,7 @@
 - 版本：v0.1
 - 状态：Partial impl
 - 保真度：F4（还原稿）
-- 界面：HC Web 生产界面的静态还原，覆盖欢迎页、会话页、侧栏、执行环境、设置弹窗、确认弹窗、只读态、端点非独占态与移动端，共 10 屏。
+- 界面：HC Web 生产界面的静态还原，覆盖欢迎页、会话页、侧栏、执行环境、设置弹窗、确认弹窗、只读态、端点非独占态与移动端，共 11 屏。
 - 使用者：最终用户
 - 关联文档：[`../../architecture/HC.md`](../../architecture/HC.md)、[`../../product/HC-CHAT-EXPERIENCE.md`](../../product/HC-CHAT-EXPERIENCE.md)、[`../../remote/README.md`](../../remote/README.md)、[`../../roadmap/verification/2026-09-14-hc-remote-conversations.md`](../../roadmap/verification/2026-09-14-hc-remote-conversations.md)
 - 关联代码（还原来源）：`hc/web/src/styles.css`（全文照抄）、`hc/web/src/App.tsx`、`hc/web/src/SessionSetup.tsx`、`hc/web/src/GatewaySetup.tsx`、`hc/web/src/PlatformSetup.tsx`、`hc/web/src/chat/{ChatWorkspace,Dialog,Icon,Markdown,model}.tsx`、`hc/web/src/remote/RuntimeControls.tsx`
@@ -73,3 +73,4 @@
 | 版本 | 日期 | 变更 | 触发文档 / 决策 |
 | --- | --- | --- | --- |
 | v0.1 | 2026-09-15 | 首次建立：按真实 `styles.css` 与组件源码还原 11 屏 | `hc/web/src` 当前源码 |
+| v0.1（修订） | 2026-09-15 | 更正屏数声明 10 → 11（实际 11 个画面，设计内容未变） | 自检发现 |

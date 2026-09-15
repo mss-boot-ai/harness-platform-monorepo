@@ -1,7 +1,7 @@
 # Harness Platform 原型图与说明
 
 - 状态：Draft（目录与规范本身待评审）
-- 文档版本：v0.4
+- 文档版本：v0.5
 - 建立日期：2026-09-15
 - 分支：`design/prototype-gallery`
 - 用途：用可离线打开的结构化原型表达 Platform 与 HC 的完整页面与关键交互，并为每个原型配一份可追溯的说明文档。
@@ -60,7 +60,7 @@
 | 目录 | 界面 | 页面数 | 版本 | 保真度 | 状态 | 关联文档 |
 | --- | --- | --- | --- | --- | --- | --- |
 | [`hc-replica/`](hc-replica/) | **HC Web 还原稿**（生产界面复刻） | 11 屏 | v0.1 | F4 | Partial impl | [`../architecture/HC.md`](../architecture/HC.md)、[`../remote/README.md`](../remote/README.md) |
-| [`platform-replica/`](platform-replica/) | **Platform 后台还原稿**（页面主体复刻，外壳为重建） | 9 屏 | v0.1 | F4 | Visual baseline | [`../roadmap/verification/2026-09-04-platform-m1.md`](../roadmap/verification/2026-09-04-platform-m1.md) |
+| [`platform-replica/`](platform-replica/) | **Platform 后台还原稿**（页面主体与菜单权限源码级；顶栏布局为重建） | 10 屏 | v0.2 | F4 | Visual baseline | [`../roadmap/verification/2026-09-04-platform-m1.md`](../roadmap/verification/2026-09-04-platform-m1.md) |
 | [`hc-pages/`](hc-pages/) | HC 端完整页面（设计稿） | 16 | v0.1 | F3 | Partial impl | [`../architecture/HC.md`](../architecture/HC.md) §20、[`../remote/README.md`](../remote/README.md) |
 | [`platform-pages/`](platform-pages/) | Platform 端完整页面（设计稿，含未实现页） | 18 | v0.1 | F3 | Visual baseline | [`../roadmap/verification/2026-09-04-platform-m1.md`](../roadmap/verification/2026-09-04-platform-m1.md)、[`../architecture/PLATFORM.md`](../architecture/PLATFORM.md) |
 | [`aba-enrollment/`](aba-enrollment/) | ABA 设备授权流程（终端 + 流程 + 状态机） | — | v0.1 | F3 | Partial impl | [`../architecture/ARCHITECTURE.md`](../architecture/ARCHITECTURE.md) §6.1、ADR-0005 |
@@ -114,3 +114,4 @@
 | v0.2 | 2026-09-15 | 新增原型版本编号要求（`vMAJOR.MINOR`），清单增加「版本」列 |
 | v0.3 | 2026-09-15 | 新增 `hc-pages/`（16 页）与 `platform-pages/`（18 页）完整页面稿；引入保真度分级（F1/F2/F3）；`hc-remote-console-v1/`、`platform-admin-v1/` 标为 Superseded |
 | v0.4 | 2026-09-15 | 新增 F4 还原稿级别与 `hc-replica/`（11 屏）、`platform-replica/`（9 屏）；补充 F3/F4 选用指引；明确取不到实包时不得声称「一模一样」 |
+| v0.5 | 2026-09-15 | `platform-replica/` 升至 v0.2：从后端 Migration 与模块描述符回填菜单条目、4 项权限与错误态实测文案，屏数更正为 10；补充 Draft 阶段的版本递增规则与回环地址例外 |

@@ -71,6 +71,7 @@ button { font: inherit; cursor: default; }
 .sider__item svg { flex: none; color: var(--t2); }
 .sider__item--on { background: var(--primary-bg); color: var(--primary); font-weight: 500; }
 .sider__item--on svg { color: var(--primary); }
+.sider__note { margin: 12px 10px 0; border: 1px solid var(--primary-border); background: var(--primary-bg); border-radius: var(--radius); padding: 9px 11px; font-size: 11.5px; line-height: 1.7; color: #0958d9; }
 .sider__unverified { margin: 12px 10px; border: 1px dashed var(--warn-border); background: var(--warn-bg); border-radius: var(--radius); padding: 9px 11px; font-size: 11.5px; line-height: 1.7; color: #ad6800; }
 .main { display: flex; flex-direction: column; min-width: 0; background: var(--layout); }
 .header { height: 56px; background: var(--container); border-bottom: 1px solid var(--split); display: flex; align-items: center; gap: 14px; padding: 0 20px; }
@@ -147,14 +148,14 @@ button { font: inherit; cursor: default; }
   <h1>Platform 管理后台还原稿</h1>
   <p class="lead">Harness 业务五个页面的静态还原。页面标题、描述、表格列、操作按钮、状态标签配色与弹窗文案全部取自本仓库源码（见文件头注释列出的路径），不是重新设计。</p>
   <div class="meta">
-    <span class="tagx tagx--ver badge--ver">v0.1</span>
+    <span class="tagx tagx--ver badge--ver">v0.2</span>
     <span class="tagx tagx--f4">F4 还原稿</span>
     <span class="tagx tagx--warn">外壳为重建</span>
     <span class="tagx">使用者：管理员 + 运维</span>
-    <span class="tagx">7 屏</span>
+    <span class="tagx">10 屏</span>
     <span class="tagx">antd 6.6.1</span>
   </div>
-  <p class="note"><b>还原范围的关键限制：</b>左侧导航、顶栏、布局与主题 token 由 <code>@mss-boot-io/admin-web 1.3.7</code> 提供。该包不在本仓库，本地也未安装依赖，<b>无法逐字读取其实包源码或编译产物 CSS</b>，因此这部分按 <code>antd 6.6.1</code> 默认设计变量与 ProLayout 常见形态重建，<b>不是逐像素取自实包</b>。页面主体（标题/描述/Tabs/表格/按钮/弹窗）来自仓库源码，可信度更高。若要消除这一差距，需要在该目录执行依赖安装后重新对照。</p>
+  <p class="note"><b>还原范围的关键限制：</b>顶部导航与布局、主题 token、以及 <code>PageEmpty</code> / <code>PageError</code> / <code>PageLoading</code> / <code>PageForbidden</code> 的组件外观由 <code>@mss-boot-io/admin-web 1.3.7</code> 提供。该包不在本仓库，本地也未安装依赖，<b>无法逐字读取其实包源码或编译产物 CSS</b>，因此这部分按 <code>antd 6.6.1</code> 默认设计变量与 ProLayout 常见形态重建，<b>不是逐像素取自实包</b>。若要消除这一差距，需要在该目录执行依赖安装后重新对照。<br /><br /><b>不装依赖也能做准的部分已做准：</b>页面标题与描述、Tabs 五项、表格列与顺序、<code>scroll.x</code>、权限门控、状态色映射、全部弹窗与提示文案来自前端源码；<b>菜单条目与权限项来自后端 Migration 与模块描述符</b>（<code>module.go</code>、<code>authorization_migration.go</code>），因此侧栏那条「Harness 平台」及其 <code>RobotOutlined</code> / <code>Order 45</code> 是源码级事实，不是猜测。</p>
 
   <h2>1. 屏清单</h2>
   <div class="tblx">
@@ -162,12 +163,15 @@ button { font: inherit; cursor: default; }
       <thead><tr><th>#</th><th>屏</th><th>源码位置</th><th>还原可信度</th></tr></thead>
       <tbody>
         <tr><td>P1</td><td>Harness 平台概览</td><td><code>pages/Overview/index.tsx</code></td><td>主体源码级；外壳重建</td></tr>
-        <tr><td>P2</td><td>端点注册审批 + 验证用户码弹窗</td><td><code>pages/Enrollments/index.tsx</code></td><td>主体源码级；外壳重建</td></tr>
+        <tr><td>P2</td><td>端点注册审批</td><td><code>pages/Enrollments/index.tsx</code></td><td>主体源码级；外壳重建</td></tr>
+        <tr><td>P2b</td><td>验证用户码弹窗</td><td>同上</td><td>文案源码级；组件外观重建</td></tr>
         <tr><td>P3</td><td>端点管理 + 吊销确认</td><td><code>pages/Endpoints/index.tsx</code></td><td>主体源码级；外壳重建</td></tr>
         <tr><td>P4</td><td>ACP 会话 + 关闭确认</td><td><code>pages/Sessions/index.tsx</code></td><td>主体源码级；外壳重建</td></tr>
         <tr><td>P5</td><td>密文投递状态</td><td><code>pages/Delivery/index.tsx</code></td><td>主体源码级；外壳重建</td></tr>
-        <tr><td>P6</td><td>403 禁止态</td><td><code>HarnessPage.tsx</code> <code>PageForbidden</code></td><td>文案源码级；组件外观重建</td></tr>
-        <tr><td>P7</td><td>空态 / 加载态 / 错误态</td><td><code>HarnessAsyncContent.tsx</code></td><td>分支逻辑源码级；组件外观重建</td></tr>
+        <tr><td>P6</td><td>403 禁止态</td><td><code>HarnessPage.tsx</code> → <code>PageForbidden</code></td><td>文案源码级；组件外观重建</td></tr>
+        <tr><td>P7a</td><td>空态</td><td><code>HarnessAsyncContent.tsx</code> → <code>PageEmpty</code></td><td>分支逻辑源码级；组件外观重建</td></tr>
+        <tr><td>P7b</td><td>加载态</td><td><code>HarnessAsyncContent.tsx</code> → <code>PageLoading</code></td><td>同上</td></tr>
+        <tr><td>P7c</td><td>错误态</td><td><code>HarnessAsyncContent.tsx</code> → <code>PageError</code>；实例文案见 M1 验收报告</td><td>文案源码级；组件外观重建</td></tr>
       </tbody>
     </table>
   </div>
@@ -182,7 +186,8 @@ button { font: inherit; cursor: default; }
           <div class="sider__menu">
             <div class="sider__group">平台功能</div>
             <div class="sider__item sider__item--on"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><rect x="4" y="7" width="16" height="12" rx="3"/><path d="M12 3v4M9 12h.01M15 12h.01M9 16h6"/></svg>Harness 平台</div>
-            <div class="sider__unverified">Foundation 菜单（用户 / 角色 / 菜单 / 审计等）由 <b>@mss-boot-io/admin-web</b> 运行时注入，本仓库 <code>generated/routes.ts</code> 为空数组，无法读取其名称与顺序，故此处不虚构。</div>
+            <div class="sider__note">唯一经源码确认的条目。后端 <code>platform/internal/modules/harness/module.go</code> 声明：<code>DisplayName: "Harness 平台"</code>、<code>DisplayNameEn: "Harness Platform"</code>、<code>Icon: "RobotOutlined"</code>、<code>Order: 45</code>、<code>Path: "/harness"</code>。前端 <code>routes.config.ts</code> 里其余四页均 <code>hideInMenu: true</code>。</div>
+            <div class="sider__unverified">同级的 Foundation 菜单（<code>Order</code> 非 45 的其它项）由 <b>@mss-boot-io/admin-web</b> 运行时注入，本仓库 <code>generated/routes.ts</code> 为空数组，名称与顺序不可读，故此处不虚构。</div>
           </div>
         </nav>
         <div class="main">
@@ -480,7 +485,7 @@ button { font: inherit; cursor: default; }
     <figcaption><b>P5 · 密文投递状态</b>　三段结构：查询卡（<code>Space.Compact</code> 输入 + 「查询」）→ 会话摘要（<code>Descriptions</code> 五项）→ 密文 Frame 表 → ACK 游标表。未输入 Session ID 时只显示一行次要文字「请输入一个 Session ID 查看投递状态。」，不发请求。Frame 表有 7 列（消息 ID / 方向 / Sequence / 密钥代次 / 密文字节 / 状态 / 接收时间），<code>scroll.x = 960</code>。整页只出现字节数，没有任何密文内容。</figcaption>
   </figure>
 
-  <div class="arow--3" style="display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:22px">
+  <div style="display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:22px">
     <figure class="shot">
       <div class="shotbox">
         <div class="page" style="padding:0">
@@ -511,18 +516,31 @@ button { font: inherit; cursor: default; }
           </div>
         </div>
       </div>
-      <figcaption><b>P7b · 加载态</b>　<code>loading</code> 分支渲染 <code>PageLoading</code>；错误分支渲染 <code>PageError</code>，带 <code>getRequestErrorMessage(error)</code> 与「重试」。四态判定顺序是 loading → forbidden → error → empty → ready。</figcaption>
+      <figcaption><b>P7b · 加载态</b>　<code>loading</code> 分支渲染 <code>PageLoading</code>。四态判定顺序是 loading → forbidden → error → empty → ready，<code>forbidden</code> 优先于 <code>error</code>。</figcaption>
+    </figure>
+    <figure class="shot">
+      <div class="shotbox">
+        <div class="page" style="padding:0">
+          <div class="aempty" style="padding:44px 16px">
+            <div style="width:54px;height:54px;margin:0 auto 14px;border-radius:50%;border:1px solid var(--error-border);background:var(--error-bg);display:grid;place-items:center;color:var(--error);font-size:24px">!</div>
+            <div style="color:var(--t1);margin-bottom:14px">session was not found</div>
+            <button class="abtn abtn--primary">重试</button>
+          </div>
+        </div>
+      </div>
+      <figcaption><b>P7c · 错误态</b>　<code>PageError</code> 渲染 <code>getRequestErrorMessage(error)</code> 的文本与「重试」按钮（回调 <code>onRetry</code>）。上例文案 <code>session was not found</code> 取自 M1 验收报告实际观察到的结果：查询不存在的 Session 时显示该稳定错误串，不是中文包装文案。</figcaption>
     </figure>
   </div>
 
   <h2>3. 还原偏差（必须知道）</h2>
   <p class="note">
-    <b>1. 应用外壳未逐像素还原。</b>左侧导航、顶栏、布局、主题 token、<code>PageContainer</code> / <code>PageEmpty</code> / <code>PageError</code> / <code>PageLoading</code> / <code>PageForbidden</code> 的具体外观都来自 <code>@mss-boot-io/admin-web 1.3.7</code>。该包不在仓库内，本机也没有安装依赖，因此无法读取其实包源码或构建产物 CSS。本稿按 <code>antd 6.6.1</code> 默认设计变量重建，<b>侧栏宽度、品牌区、菜单字体、空态插画等细节可能与生产界面不同</b>。<br />
-    <b>2. Foundation 菜单未还原。</b><code>platform/web/src/generated/routes.ts</code> 是空数组，Foundation 菜单由运行时包注入。因此侧栏只画了源码可确认的一条「Harness 平台」，其余位置用虚线框说明原因，没有虚构菜单名。<br />
-    <b>3. 示例数据为占位值。</b>端点名、ID、时间、Runtime / Workspace、字节数均为按源码字段格式编造的示例，不是任何真实运行数据。文中 ID 已被截断成 <code>…</code> 形式以匹配 <code>CompactID</code> 的 <code>ellipsis</code> 行为。<br />
-    <b>4. 标签色是映射表还原。</b>颜色取自 <code>harness/format.tsx</code> 的 <code>statusColors</code> 表（ACTIVE→green、APPROVED→blue、PENDING→gold、SUSPENDED/REKEY_REQUIRED→orange、DENIED/FAILED/REVOKED/CONFLICT→red、UNCERTAIN→volcano、CLOSED→default）。antd 各色的实际色值按 antd 6 默认调色板重建，不是取实包 CSS。<br />
-    <b>5. 交互未绑定。</b>按钮、链接、Tabs、弹窗均为静态展示；Popconfirm 与 Modal 用叠加层复现视觉，不响应点击。<br />
-    <b>6. 未覆盖。</b>真实登录跳转、请求头与 CSRF、<code>Idempotency-Key</code> 生成过程、<code>message.useMessage()</code> 的全局提示动效、i18n 切换（en-US）、表头排序与列宽拖拽、响应式断点下的真实折叠行为。
+    <b>1. 应用外壳未逐像素还原。</b>顶栏、布局、主题 token、<code>PageContainer</code> / <code>PageEmpty</code> / <code>PageError</code> / <code>PageLoading</code> / <code>PageForbidden</code> 的具体外观都来自 <code>@mss-boot-io/admin-web 1.3.7</code>。该包不在仓库内，本机也没有安装依赖，因此无法读取其实包源码或构建产物 CSS。本稿按 <code>antd 6.6.1</code> 默认设计变量重建，<b>侧栏宽度、品牌区、顶栏高度、空态插画、错误页插画等细节可能与生产界面不同</b>。<br />
+    <b>2. Harness 菜单条目已源码级确认，同级 Foundation 菜单未还原。</b>后端 <code>platform/internal/modules/harness/module.go</code> 声明 <code>DisplayName: "Harness 平台"</code>、<code>DisplayNameEn: "Harness Platform"</code>、<code>Icon: "RobotOutlined"</code>、<code>Order: 45</code>、<code>Path: "/harness"</code>；<code>authorization_migration.go</code> 另写入 4 条隐藏的权限组件记录（查看 Harness 状态 / 操作 Harness 会话 / 审批 Harness 注册 / 暂停或吊销 Harness 端点）与若干隐藏 API 记录。这些已如实体现。同级 <code>Order≠45</code> 的 Foundation 菜单由运行时包注入、不可读，故用虚线框说明，未虚构。<br />
+    <b>3. 图标 path 是近似。</b><code>@ant-design/icons 6.3.2</code> 同样未安装，侧栏图标按 <code>RobotOutlined</code> 的语义（方形头部 + 天线 + 双眼）自绘，<b>不是 antd 原始 path</b>。<br />
+    <b>4. 示例数据为占位值。</b>端点名、ID、时间、Runtime / Workspace、字节数均为按源码字段格式编造的示例，不是任何真实运行数据。文中 ID 已被截断成 <code>…</code> 形式以匹配 <code>CompactID</code> 的 <code>ellipsis</code> 行为。<br />
+    <b>5. 标签色是映射表还原。</b>颜色取自 <code>harness/format.tsx</code> 的 <code>statusColors</code> 表（ACTIVE→green、APPROVED→blue、PENDING→gold、SUSPENDED/REKEY_REQUIRED→orange、DENIED/FAILED/REVOKED/CONFLICT→red、UNCERTAIN→volcano、CLOSED→default）。antd 各色的实际色值按 antd 6 默认调色板重建，不是取实包 CSS。<br />
+    <b>6. 交互未绑定。</b>按钮、链接、Tabs、弹窗均为静态展示；Popconfirm 与 Modal 用叠加层复现视觉，不响应点击。<br />
+    <b>7. 未覆盖。</b>真实登录跳转、请求头与 CSRF、<code>Idempotency-Key</code> 生成过程、<code>message.useMessage()</code> 的全局提示动效、i18n 切换（en-US）、表头排序与列宽拖拽、响应式断点下的真实折叠行为。
   </p>
 
 </div>
