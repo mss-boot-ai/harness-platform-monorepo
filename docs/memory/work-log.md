@@ -6,6 +6,12 @@
 
 ---
 
+## 2026-09-15 08:24 +08:00 — H1 边界修复与四组实机组合回归
+
+实现源 `36e743923c8235fade10c82faa9fc38662fc2431`：67 个 Rust 测试、clippy、16 个 adapter 测试及四组 dev-242 验证通过。包括正向 socketpair 白名单、原 delegation 绑定/错误迁移拒绝、真实 post-commit/pre-removal 退休在新进程完成、Host SIGKILL 恢复、两个 scope 的独立性及真实 Codex 完整控制流程。已修复目录父子重叠占用及中断退休；registry v2 不猜测升级旧绑定。
+
+保留 40827a 的真实取消失败：内核 pids controller 拒绝 fork。36e7439 在保留总量限制的前提下提高至单 Run 192/服务 512 task，增加实际资源拒绝计数，重新验收正常流程均为零。全部使用原账号，正式 ABA 的 PID/InvocationID 与旧运行版本仍未改变。H2 未实现，未更新正式服务；详细边界、完整 SHA 与二进制 hash 见[H1 报告](../roadmap/verification/2026-09-15-existing-account-host-isolation.md)。Codex with ChatGPT 正在对该修复检查点进行独立复核。
+
 ## 2026-09-15 07:55 +08:00 — 复用现有账号的 Host 隔离与真实控制验证
 
 用户授权继续开发环境变更，但明确不创建新账号。确认平台 admin 与 OS 账号不同后，保留 admin 登录/密码与现有端点，复用 `harness-aba`，将方案收敛到现有服务的 cgroup delegation 和 namespace 隔离；没有新增 root 管理服务、用户、sudo 权限或替换身份。所有检查点沿 `codex/remote-project-workspace-recovery` 普通 commit/push，未合并或修改正在运行的 b482 部署。
