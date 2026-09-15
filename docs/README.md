@@ -35,11 +35,14 @@
 
 界面原型与配套说明独立维护在 [`prototypes/`](prototypes/README.md)：
 
-- [`prototypes/README.md`](prototypes/README.md)：目录入口、状态与版本规则、原型清单。
-- [`prototypes/CONVENTIONS.md`](prototypes/CONVENTIONS.md)：制作规范、版本编号与禁止事项。
-- 首批原型：`hc-remote-console/`（HC 远程会话主界面）、`aba-enrollment/`（设备授权）、`platform-admin/`（管理后台五页面）。
+- [`prototypes/README.md`](prototypes/README.md)：目录入口、状态 / 保真度 / 版本规则、原型清单。
+- [`prototypes/CONVENTIONS.md`](prototypes/CONVENTIONS.md)：制作规范、保真度分级（F1/F2/F3）、版本编号与禁止事项。
+- [`prototypes/hc-pages/`](prototypes/hc-pages/README.md)：**HC 端完整页面稿（16 页）**，覆盖 `architecture/HC.md` §20 页面清单。
+- [`prototypes/platform-pages/`](prototypes/platform-pages/README.md)：**Platform 端完整页面稿（18 页）**，含 Harness 业务与 Foundation 模块，并逐页标注实现状态。
+- [`prototypes/aba-enrollment/`](prototypes/aba-enrollment/README.md)：ABA 设备授权流程、终端侧输出与状态机。
+- `hc-remote-console-v1/`、`platform-admin-v1/`：已被上述页面稿取代，标为 `Superseded`，保留历史。
 
-原型是低保真表达手段，**不是验收证据**，也不修改任何已接受契约；「已实现/已验证」结论仍只能来自代码、提交、CI 与验证报告。
+原型是结构化表达手段，**不是验收证据**，也不修改任何已接受契约；「已实现/已验证」结论仍只能来自代码、提交、CI 与验证报告。页面稿中的「实现状态」列不改变 `roadmap/DELIVERY.md` 与验证报告的结论。
 
 ## 2. 文档权威顺序
 

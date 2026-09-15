@@ -2,6 +2,7 @@
 
 - 版本：v0.1
 - 状态：Partial impl
+- 保真度：F3（结构稿）
 - 界面：本机启动 ABA 后，用户在已认证 HC 上核对设备码并批准该设备，Platform 用 ABA KEM 公钥封装下发凭据。
 - 使用者：最终用户 + 运维
 - 关联文档：[`../../architecture/ARCHITECTURE.md`](../../architecture/ARCHITECTURE.md) §6.1、[`../../architecture/SECURITY.md`](../../architecture/SECURITY.md)、[`../../architecture/ABA.md`](../../architecture/ABA.md)、ADR-0005、D-012/D-013/D-014

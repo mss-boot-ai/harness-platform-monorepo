@@ -1,0 +1,729 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>HC 端完整页面 — 原型 v0.1</title>
+<style>
+*,*::before,*::after{box-sizing:border-box}
+:root{
+  --bg:#eef0f3;--surface:#fff;--surface-2:#f6f7f9;--surface-3:#eceef1;
+  --ink:#12161a;--ink-2:#4b535c;--ink-3:#818a94;
+  --line:#e2e5e9;--line-2:#cbd1d8;
+  --blue:#1a67b3;--blue-bg:#e8f2fc;
+  --green:#2f6b12;--green-bg:#e9f4dc;
+  --amber:#8a5309;--amber-bg:#fdf0d8;
+  --red:#a52a2a;--red-bg:#fdeaea;
+  --purple:#5044b0;--purple-bg:#eeeafe;
+  --teal:#0d6b54;--teal-bg:#e0f4ee;
+  --r:10px;--r-sm:7px;--r-lg:14px;
+  --sh:0 1px 2px rgba(16,24,40,.06);
+  --font:-apple-system,BlinkMacSystemFont,"Segoe UI","PingFang SC","Hiragino Sans GB","Microsoft YaHei",sans-serif;
+  --mono:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;
+}
+@media (prefers-color-scheme:dark){:root{
+  --bg:#15181b;--surface:#1e2226;--surface-2:#252a2f;--surface-3:#2c3238;
+  --ink:#e9ebee;--ink-2:#a7aeb6;--ink-3:#7c848d;
+  --line:#2c3238;--line-2:#3d444b;
+  --blue:#7fb2e5;--blue-bg:#132a41;
+  --green:#9bc76a;--green-bg:#1d2a13;
+  --amber:#e8a83c;--amber-bg:#2e2210;
+  --red:#e58b8b;--red-bg:#331a1a;
+  --purple:#a9a3ea;--purple-bg:#1f1c3c;
+  --teal:#5fc4a6;--teal-bg:#0f2a23;
+  --sh:0 1px 2px rgba(0,0,0,.3);
+}}
+body{margin:0;background:var(--bg);color:var(--ink);font:13.5px/1.6 var(--font);-webkit-font-smoothing:antialiased}
+.wrap{max-width:1120px;margin:0 auto;padding:28px 22px 80px}
+h1{font-size:21px;font-weight:600;margin:0 0 6px;letter-spacing:-.01em}
+h2{font-size:14.5px;font-weight:600;margin:34px 0 12px;padding-bottom:8px;border-bottom:1px solid var(--line)}
+h3{font-size:13.5px;font-weight:600;margin:0 0 3px}
+p{margin:0 0 10px}
+.sub{color:var(--ink-2);margin:0 0 12px;max-width:82ch}
+.hint{font-size:12px;color:var(--ink-3);border-left:2px solid var(--line-2);padding-left:10px;margin:12px 0}
+.mono{font-family:var(--mono);font-size:11.5px}
+.muted{color:var(--ink-3)}
+.badges{display:flex;flex-wrap:wrap;gap:7px;margin:0 0 8px}
+.badge{display:inline-flex;align-items:center;gap:5px;padding:2px 9px;border-radius:999px;font-size:11.5px;
+  border:1px solid var(--line-2);background:var(--surface);color:var(--ink-2)}
+.badge--ver{border-color:var(--ink-2);background:var(--surface-2);color:var(--ink);font-family:var(--mono)}
+.badge--wip{border-color:var(--amber);background:var(--amber-bg);color:var(--amber)}
+.badge--ok{border-color:var(--green);background:var(--green-bg);color:var(--green)}
+.badge--plan{border-color:var(--purple);background:var(--purple-bg);color:var(--purple)}
+.card{background:var(--surface);border:1px solid var(--line);border-radius:var(--r);box-shadow:var(--sh)}
+.card__h{padding:11px 13px;border-bottom:1px solid var(--line);font-size:12.5px;font-weight:600;display:flex;
+  align-items:center;justify-content:space-between;gap:8px}
+.card__b{padding:13px}
+.grid{display:grid;gap:14px}
+.g2{grid-template-columns:repeat(2,minmax(0,1fr))}
+.g3{grid-template-columns:repeat(3,minmax(0,1fr))}
+@media (max-width:900px){.g2,.g3{grid-template-columns:1fr}}
+.row{display:flex;gap:8px;align-items:center;flex-wrap:wrap}
+.between{justify-content:space-between}
+.kv{display:grid;grid-template-columns:auto 1fr;gap:6px 14px;font-size:12.5px}
+.kv dt{color:var(--ink-3);white-space:nowrap}
+.kv dd{margin:0}
+.pill{display:inline-flex;align-items:center;gap:5px;padding:2px 8px;border-radius:999px;font-size:11.5px;
+  border:1px solid var(--line-2);background:var(--surface-2);color:var(--ink-2);white-space:nowrap}
+.pill--ok{border-color:var(--green);background:var(--green-bg);color:var(--green)}
+.pill--warn{border-color:var(--amber);background:var(--amber-bg);color:var(--amber)}
+.pill--bad{border-color:var(--red);background:var(--red-bg);color:var(--red)}
+.pill--info{border-color:var(--blue);background:var(--blue-bg);color:var(--blue)}
+.btn{display:inline-flex;align-items:center;justify-content:center;gap:5px;padding:6px 12px;font:inherit;
+  font-size:12.5px;border-radius:var(--r-sm);border:1px solid var(--line-2);background:var(--surface);
+  color:var(--ink);cursor:default;white-space:nowrap}
+.btn--pri{background:var(--blue);border-color:var(--blue);color:#fff}
+.btn--ghost{background:transparent;border-color:transparent;color:var(--ink-2)}
+.btn--bad{background:transparent;border-color:var(--red);color:var(--red)}
+.btn--sm{padding:4px 9px;font-size:11.5px}
+.btn--block{width:100%}
+.note{display:flex;gap:9px;padding:10px 12px;border-radius:var(--r-sm);border:1px solid var(--line-2);
+  background:var(--surface-2);font-size:12.5px}
+.note--info{border-color:var(--blue);background:var(--blue-bg);color:var(--blue)}
+.note--warn{border-color:var(--amber);background:var(--amber-bg);color:var(--amber)}
+.note--bad{border-color:var(--red);background:var(--red-bg);color:var(--red)}
+.note b{font-weight:600}
+.map{display:grid;gap:9px;grid-template-columns:repeat(4,minmax(0,1fr))}
+@media (max-width:900px){.map{grid-template-columns:repeat(2,minmax(0,1fr))}}
+.map__c{border:1px solid var(--line);border-radius:var(--r);background:var(--surface);padding:10px 12px;font-size:12px}
+.map__t{font-weight:600;margin-bottom:6px;font-size:12px}
+.map__i{color:var(--ink-2);padding:2px 0;display:block}
+table{width:100%;border-collapse:collapse;font-size:12px;background:var(--surface)}
+th,td{text-align:left;padding:8px 11px;border-bottom:1px solid var(--line);vertical-align:top}
+th{font-weight:600;color:var(--ink-2);background:var(--surface-2);font-size:11.5px}
+.tbl{border:1px solid var(--line);border-radius:var(--r);overflow:hidden;box-shadow:var(--sh)}
+.gal{display:grid;gap:26px;grid-template-columns:repeat(auto-fill,minmax(392px,1fr))}
+.screen{display:flex;flex-direction:column;gap:9px}
+.screen__cap{display:flex;flex-direction:column;gap:3px}
+.screen__meta{font-size:11.5px;color:var(--ink-3)}
+.ann{border:1px dashed var(--line-2);border-radius:var(--r);background:var(--surface);padding:11px 12px;font-size:12px}
+.ann ul{margin:6px 0 0;padding-left:18px;color:var(--ink-2)}
+.phone{width:392px;max-width:100%;border:1px solid var(--line-2);border-radius:24px;background:var(--surface);
+  box-shadow:var(--sh);overflow:hidden;display:flex;flex-direction:column}
+.sb{display:flex;justify-content:space-between;align-items:center;padding:7px 16px 4px;font-size:11px;color:var(--ink-3)}
+.sb__dots{display:flex;gap:3px}
+.sb__dots i{width:5px;height:5px;border-radius:50%;background:currentColor;opacity:.5}
+.hd{display:flex;align-items:center;gap:9px;padding:9px 14px;border-bottom:1px solid var(--line)}
+.hd__t{font-size:13.5px;font-weight:600;flex:1}
+.hd__s{font-size:11px;color:var(--ink-3);font-weight:400}
+.bd{background:var(--bg);padding:12px;display:flex;flex-direction:column;gap:10px;min-height:300px}
+.tabs{display:flex;gap:4px;padding:9px 14px;border-top:1px solid var(--line);background:var(--surface)}
+.tabs span{flex:1;text-align:center;font-size:10.5px;color:var(--ink-3);padding:3px 0;border-radius:var(--r-sm)}
+.tabs span.on{color:var(--blue);background:var(--blue-bg);font-weight:600}
+.li{display:flex;align-items:center;gap:10px;padding:10px 12px;border:1px solid var(--line);
+  border-radius:var(--r);background:var(--surface)}
+.li--on{border-color:var(--blue)}
+.li__b{flex:1;min-width:0}
+.li__t{font-size:12.5px;font-weight:600;display:flex;align-items:center;gap:6px}
+.li__s{font-size:11px;color:var(--ink-3);margin-top:1px}
+.field{display:flex;flex-direction:column;gap:4px}
+.field label{font-size:11.5px;color:var(--ink-3)}
+.inp{padding:7px 10px;border:1px solid var(--line-2);border-radius:var(--r-sm);background:var(--surface);
+  font-size:12.5px;color:var(--ink-2);display:flex;align-items:center;justify-content:space-between}
+.inp--ph{color:var(--ink-3)}
+.bub{max-width:86%;padding:8px 11px;border-radius:11px;border:1px solid var(--line);background:var(--surface);font-size:12.5px}
+.bub--me{align-self:flex-end;background:var(--blue-bg);border-color:var(--blue);color:var(--blue)}
+.msg{align-self:flex-start;display:flex;flex-direction:column;gap:3px;max-width:92%}
+.msg--me{align-self:flex-end;align-items:flex-end}
+.who{font-size:10.5px;color:var(--ink-3)}
+.tool{border:1px solid var(--line);border-radius:var(--r-sm);background:var(--surface);padding:9px 11px;font-size:11.5px}
+.tool__h{display:flex;justify-content:space-between;align-items:center;gap:8px;margin-bottom:5px}
+.tool__n{font-family:var(--mono);font-weight:600;font-size:11.5px}
+.appr{border:1px solid var(--amber);background:var(--amber-bg);color:var(--amber);border-radius:var(--r-sm);padding:10px 11px;font-size:11.5px}
+.cmp{border-top:1px solid var(--line);background:var(--surface);padding:10px 12px 12px}
+.cmp__b{border:1px solid var(--line-2);border-radius:var(--r);padding:9px 11px;min-height:46px;font-size:12.5px;color:var(--ink-2)}
+.cmp__h{display:flex;justify-content:space-between;font-size:10.5px;color:var(--ink-3);margin-top:6px}
+.code{background:var(--surface-2);border:1px solid var(--line);border-radius:var(--r-sm);padding:9px 11px;
+  font-family:var(--mono);font-size:11px;line-height:1.8;color:var(--ink-2);white-space:pre-wrap}
+.codebig{font-family:var(--mono);font-size:27px;font-weight:600;letter-spacing:.15em;text-align:center;
+  padding:14px;border:1px dashed var(--line-2);border-radius:var(--r);background:var(--surface-2)}
+.steps{display:flex;flex-direction:column;gap:0}
+.stp{display:flex;gap:10px;font-size:12px}
+.stp__d{display:flex;flex-direction:column;align-items:center;flex:none;width:16px}
+.stp__n{width:16px;height:16px;border-radius:50%;border:1px solid var(--line-2);background:var(--surface);
+  font-size:9.5px;display:flex;align-items:center;justify-content:center;color:var(--ink-3);flex:none}
+.stp__n.ok{background:var(--green);border-color:var(--green);color:#fff}
+.stp__n.now{background:var(--blue);border-color:var(--blue);color:#fff}
+.stp__l{width:1px;flex:1;background:var(--line-2);min-height:14px}
+.stp__b{padding-bottom:9px}
+.stp__t{font-weight:600;font-size:12px}
+.stp__s{font-size:11px;color:var(--ink-3)}
+.bar{height:6px;border-radius:999px;background:var(--surface-3);overflow:hidden}
+.bar i{display:block;height:100%;background:var(--blue);border-radius:999px}
+.deskshot{border:1px solid var(--line-2);border-radius:var(--r);overflow:hidden;background:var(--surface);box-shadow:var(--sh)}
+.deskshot__bar{display:flex;align-items:center;gap:7px;padding:7px 11px;background:var(--surface-3);border-bottom:1px solid var(--line);font-size:11px;color:var(--ink-3)}
+.dot3{display:flex;gap:4px}.dot3 i{width:8px;height:8px;border-radius:50%;background:var(--line-2)}
+.dsplit{display:grid;grid-template-columns:196px 1fr 168px;min-height:340px}
+@media (max-width:820px){.dsplit{grid-template-columns:1fr 1fr}}
+.dcol{border-right:1px solid var(--line);padding:10px;font-size:11.5px}
+.dcol:last-child{border-right:0}
+.dside{background:var(--surface-2)}
+</style>
+</head>
+<body>
+<div class="wrap">
+
+  <h1>HC 端完整页面</h1>
+  <p class="sub">HC（Web / PWA / 后续小程序与原生）的全量页面稿，按 <span class="mono">docs/architecture/HC.md</span> §20「主要页面」清单逐项覆盖。页面稿为结构稿（F3），用于确认信息层级、字段与状态，不做视觉定稿。</p>
+  <div class="badges">
+    <span class="badge badge--ver">v0.1</span>
+    <span class="badge badge--wip">Partial impl</span>
+    <span class="badge">使用者：最终用户</span>
+    <span class="badge">16 个页面</span>
+  </div>
+  <p class="hint">版本 v0.1 · 最后更新 2026-09-15 · 版本号只标识设计稿迭代，不代表产品版本或实现进度。取代 <span class="mono">hc-remote-console-v1/</span>。</p>
+
+  <h2>1. 页面地图</h2>
+  <div class="map">
+    <div class="map__c"><div class="map__t">A. 账号与端点</div>
+      <span class="map__i">A1 登录 / Human Session</span>
+      <span class="map__i">A2 端点注册 · 解锁</span>
+      <span class="map__i">A3 待授权设备（核对设备码）</span>
+    </div>
+    <div class="map__c"><div class="map__t">B. 设备与执行环境</div>
+      <span class="map__i">B1 ABA 设备列表</span>
+      <span class="map__i">B2 ABA 详情（Runtime / Workspace）</span>
+      <span class="map__i">B3 连接与重连状态</span>
+    </div>
+    <div class="map__c"><div class="map__t">C. 会话</div>
+      <span class="map__i">C1 会话列表</span>
+      <span class="map__i">C2 新建会话</span>
+      <span class="map__i">C3 ACP 会话（移动）</span>
+      <span class="map__i">C4 ACP 会话（桌面）</span>
+      <span class="map__i">C5 权限请求中心</span>
+    </div>
+    <div class="map__c"><div class="map__t">D. 安全与凭据</div>
+      <span class="map__i">D1 当前 HC 安全设置</span>
+      <span class="map__i">D2 所有 Endpoint 管理</span>
+      <span class="map__i">D3 证书与轮换状态</span>
+      <span class="map__i">D4 安全通知与审计摘要</span>
+      <span class="map__i">D5 内容可见性（Opaque / Managed）</span>
+    </div>
+  </div>
+
+  <h2>2. 页面清单与文档对应</h2>
+  <div class="tbl">
+    <table>
+      <thead><tr><th>#</th><th>页面</th><th>主要元素</th><th>文档依据</th></tr></thead>
+      <tbody>
+        <tr><td>A1</td><td>登录 / Human Session</td><td>登录表单、Endpooint 未就绪提示</td><td>HC.md §6.1</td></tr>
+        <tr><td>A2</td><td>端点注册 · 解锁</td><td>密钥生成说明、Assurance、安全存储能力探测</td><td>HC.md §7、§8.1</td></tr>
+        <tr><td>A3</td><td>待授权设备</td><td>设备卡、设备码核对、有效期、二次确认</td><td>ARCHITECTURE §6.1、ADR-0005</td></tr>
+        <tr><td>B1</td><td>ABA 设备列表</td><td>在线/离线、Runtime/Workspace 计数</td><td>HC.md §20</td></tr>
+        <tr><td>B2</td><td>ABA 详情</td><td>Runtime Profile、Workspace、AEC 摘要、操作</td><td>HC.md §13</td></tr>
+        <tr><td>B3</td><td>连接与重连状态</td><td>连接状态机、ACK Cursor、Resume</td><td>HC.md §12、§18</td></tr>
+        <tr><td>C1</td><td>会话列表</td><td>多会话、草稿指示、归档/重命名</td><td>remote/README §9</td></tr>
+        <tr><td>C2</td><td>新建会话</td><td>ABA / Runtime / Workspace / 模式选择</td><td>HC.md §13</td></tr>
+        <tr><td>C3</td><td>ACP 会话（移动）</td><td>消息、工具卡、审批卡、输入区六态</td><td>HC.md §15/16/19</td></tr>
+        <tr><td>C4</td><td>ACP 会话（桌面）</td><td>同上 + 会话列与成果栏</td><td>HC-CHAT-EXPERIENCE</td></tr>
+        <tr><td>C5</td><td>权限请求中心</td><td>待处理、历史、三按钮、风险与期限</td><td>HC.md §16</td></tr>
+        <tr><td>D1</td><td>当前 HC 安全设置</td><td>端点类型、Assurance、指纹、模式、通知</td><td>HC.md §9、§21</td></tr>
+        <tr><td>D2</td><td>所有 Endpoint 管理</td><td>端点列表、独立状态、吊销</td><td>D-012、HC.md §11</td></tr>
+        <tr><td>D3</td><td>证书与轮换状态</td><td>HEC、Root/UCA、Token Family、Session Key</td><td>D-031</td></tr>
+        <tr><td>D4</td><td>安全通知与审计摘要</td><td>事件列表、不含敏感摘要的提醒</td><td>remote/README §9</td></tr>
+        <tr><td>D5</td><td>内容可见性</td><td>Opaque 说明、Managed Mode 未启用</td><td>HC.md §21、§22、D-016</td></tr>
+      </tbody>
+    </table>
+  </div>
+
+  <h2>3. 页面稿</h2>
+  <div class="gal">
+
+    <div class="screen">
+      <div class="screen__cap"><h3>A1 · 登录 / Human Session</h3>
+        <span class="screen__meta">Human Identity 建立；登录不等于端点身份</span></div>
+      <div class="phone">
+        <div class="sb"><span>9:41</span><span class="sb__dots"><i></i><i></i><i></i></span></div>
+        <div class="hd"><span class="hd__t">Harness</span></div>
+        <div class="bd">
+          <div class="note note--info"><b>Opaque</b><span>会话内容在 HC 与 ABA 之间加密。</span></div>
+          <div class="field"><label>邮箱</label><div class="inp inp--ph">you@example.invalid</div></div>
+          <div class="field"><label>密码</label><div class="inp inp--ph">••••••••••</div></div>
+          <button class="btn btn--pri btn--block">登录</button>
+          <div class="note"><b>下一步</b><span>登录后仍需注册或解锁本机 HC 端点。浏览器 Session 不作为 Endpoint Identity。</span></div>
+        </div>
+      </div>
+      <div class="ann"><b>约束</b><ul>
+        <li>不使用 Local Storage 保存 Access Token。</li>
+        <li>登录态与端点凭据是两层身份，缺一不可。</li>
+      </ul></div>
+    </div>
+
+    <div class="screen">
+      <div class="screen__cap"><h3>A2 · 端点注册 · 解锁</h3>
+        <span class="screen__meta">本地生成签名与 KEM 密钥；能力探测失败则不降级</span></div>
+      <div class="phone">
+        <div class="sb"><span>9:41</span><span class="sb__dots"><i></i><i></i><i></i></span></div>
+        <div class="hd"><span class="hd__t">注册本机端点<span class="hd__s"> · 首次使用</span></span></div>
+        <div class="bd">
+          <div class="card"><div class="card__b">
+            <dl class="kv">
+              <dt>端点类型</dt><dd>hc-web</dd>
+              <dt>签名密钥</dt><dd>P-256 · 不可导出（WebCrypto）</dd>
+              <dt>KEM 密钥</dt><dd>P-256 · 不可导出</dd>
+              <dt>密钥存储</dt><dd>IndexedDB CryptoKey 句柄</dd>
+              <dt>Assurance</dt><dd><span class="pill pill--info">web-software</span></dd>
+            </dl>
+          </div></div>
+          <div class="note note--warn"><b>能力探测</b><span>已通过：随机数、P-256、HPKE、AES-GCM、IndexedDB 结构化克隆。</span></div>
+          <div class="note"><b>不会上传私钥</b><span>注册只提交公钥与持有证明。</span></div>
+          <button class="btn btn--pri btn--block">生成端点密钥并注册</button>
+          <button class="btn btn--ghost btn--block">仅供临时使用（关闭页面即失效）</button>
+        </div>
+      </div>
+      <div class="ann"><b>失败分支</b><ul>
+        <li>安全存储不可用：注册失败并说明原因，不降级明文保存。</li>
+        <li>可选临时端点（web-ephemeral），但权限与 Assurance 降级。</li>
+      </ul></div>
+    </div>
+
+    <div class="screen">
+      <div class="screen__cap"><h3>A3 · 待授权设备</h3>
+        <span class="screen__meta">核对设备码后批准；无「全部批准」</span></div>
+      <div class="phone">
+        <div class="sb"><span>9:41</span><span class="sb__dots"><i></i><i></i><i></i></span></div>
+        <div class="hd"><span class="hd__t">待授权设备</span><span class="pill pill--warn">1 个请求</span></div>
+        <div class="bd">
+          <div class="note note--warn"><b>先核对</b><span>请确认设备码与本机 ABA 终端显示的一致，再批准。</span></div>
+          <div class="li"><div class="li__b">
+            <div class="li__t">aba-lab-01 <span class="pill pill--warn">待批准</span></div>
+            <div class="li__s">类型 aba · linux-x86_64 · 首次出现 14:02</div>
+            <div class="li__s mono">签名指纹 SHA-256 9f2c…4a71</div>
+          </div></div>
+          <div>
+            <div class="screen__meta" style="margin-bottom:5px">终端显示的设备码</div>
+            <div class="codebig">K7F2 · 9QDA</div>
+          </div>
+          <div class="note note--info"><b>有效期</b><span>剩余 09:41。过期后需在 ABA 重新发起。</span></div>
+          <button class="btn btn--pri btn--block">批准此设备</button>
+          <div class="row"><button class="btn btn--bad" style="flex:1">拒绝</button><button class="btn btn--ghost" style="flex:1">稍后</button></div>
+        </div>
+      </div>
+      <div class="ann"><b>安全表达</b><ul>
+        <li>批准前弹出二次认证，不提供「记住并跳过」。</li>
+        <li>指纹只显示截断值，完整值在详情内按需展开。</li>
+      </ul></div>
+    </div>
+
+    <div class="screen">
+      <div class="screen__cap"><h3>B1 · ABA 设备列表</h3>
+        <span class="screen__meta">可用执行端；资源由端点本地提供</span></div>
+      <div class="phone">
+        <div class="sb"><span>9:41</span><span class="sb__dots"><i></i><i></i><i></i></span></div>
+        <div class="hd"><span class="hd__t">我的执行端</span><span class="btn btn--sm">刷新</span></div>
+        <div class="bd">
+          <div class="li li--on"><div class="li__b">
+            <div class="li__t">aba-lab-01 <span class="pill pill--ok">在线</span></div>
+            <div class="li__s">Runtime 2 · Workspace 3 · 最后可见 刚刚</div>
+          </div><span class="mono muted">›</span></div>
+          <div class="li"><div class="li__b">
+            <div class="li__t">aba-lab-02 <span class="pill">离线</span></div>
+            <div class="li__s">Runtime 1 · Workspace 1 · 最后可见 6 小时前</div>
+          </div><span class="mono muted">›</span></div>
+          <div class="note"><b>资源说明</b><span>Runtime 与 Workspace 名称、路径由该 ABA 本地配置提供，Platform 不存储真实路径。</span></div>
+        </div>
+        <div class="tabs"><span class="on">执行端</span><span>会话</span><span>权限</span><span>设置</span></div>
+      </div>
+      <div class="ann"><b>注意</b><ul>
+        <li>离线端点的会话不可新建；已有会话显示等待 Key Package。</li>
+      </ul></div>
+    </div>
+
+    <div class="screen">
+      <div class="screen__cap"><h3>B2 · ABA 详情（Runtime / Workspace）</h3>
+        <span class="screen__meta">只展示不透明 ID 与安全摘要</span></div>
+      <div class="phone">
+        <div class="sb"><span>9:41</span><span class="sb__dots"><i></i><i></i><i></i></span></div>
+        <div class="hd"><span class="mono muted">‹</span><span class="hd__t">aba-lab-01</span><span class="btn btn--sm btn--pri">新建会话</span></div>
+        <div class="bd">
+          <div class="card"><div class="card__b"><dl class="kv">
+            <dt>状态</dt><dd><span class="pill pill--ok">在线</span></dd>
+            <dt>版本</dt><dd class="mono">0.1.0</dd>
+            <dt>最后在线</dt><dd>刚刚</dd>
+            <dt>AEC 序列</dt><dd class="mono">…7c41</dd>
+            <dt>要求 Assurance</dt><dd>web-software 以上</dd>
+          </dl></div></div>
+          <div class="screen__meta">Runtime Profile（不透明 ID + 安全摘要）</div>
+          <div class="li"><div class="li__b">
+            <div class="li__t mono" style="font-family:var(--mono)">rt-codex-a</div>
+            <div class="li__s">Codex ACP · 支持流式 · 支持取消 · 支持权限往返</div>
+          </div></div>
+          <div class="li"><div class="li__b">
+            <div class="li__t mono">rt-deepseek-b</div>
+            <div class="li__s">DeepSeek · 不支持 loadSession · 配置变更受限</div>
+          </div></div>
+          <div class="screen__meta">Workspace</div>
+          <div class="li"><div class="li__b"><div class="li__t mono">ws-demo-project</div><div class="li__s">已授权读写 · 单 writer</div></div></div>
+          <div class="li"><div class="li__b"><div class="li__t mono">ws-docs</div><div class="li__s">已授权只读</div></div></div>
+          <div class="note note--info"><b>不下发本地参数</b><span>HC 只发送这些不透明 ID，不发送 command / args / cwd / env / 路径。</span></div>
+        </div>
+      </div>
+      <div class="ann"><b>依据</b><ul>
+        <li>HC.md §13：用户必须明确选择 ABA、Runtime、Workspace。</li>
+        <li>D-011：Platform/HC 不能下发任意执行参数。</li>
+      </ul></div>
+    </div>
+
+    <div class="screen">
+      <div class="screen__cap"><h3>B3 · 连接与重连状态</h3>
+        <span class="screen__meta">连接状态机；重连用新 Ticket，保留 ACK Cursor</span></div>
+      <div class="phone">
+        <div class="sb"><span>9:41</span><span class="sb__dots"><i></i><i></i><i></i></span></div>
+        <div class="hd"><span class="hd__t">连接</span><span class="pill pill--warn">重连中</span></div>
+        <div class="bd">
+          <div class="card"><div class="card__b"><div class="steps">
+            <div class="stp"><div class="stp__d"><div class="stp__n ok">1</div><div class="stp__l"></div></div>
+              <div class="stp__b"><div class="stp__t">已登录</div><div class="stp__s">Human Session 有效</div></div></div>
+            <div class="stp"><div class="stp__d"><div class="stp__n ok">2</div><div class="stp__l"></div></div>
+              <div class="stp__b"><div class="stp__t">端点就绪</div><div class="stp__s">HEC 有效 · Assurance web-software</div></div></div>
+            <div class="stp"><div class="stp__d"><div class="stp__n ok">3</div><div class="stp__l"></div></div>
+              <div class="stp__b"><div class="stp__t">获取单次 Ticket</div><div class="stp__s">DPoP 绑定 · 不缓存 · 不写日志</div></div></div>
+            <div class="stp"><div class="stp__d"><div class="stp__n ok">4</div><div class="stp__l"></div></div>
+              <div class="stp__b"><div class="stp__t">WSS 连接 + 首帧挑战</div><div class="stp__s">已用签名密钥应答 ServerChallenge</div></div></div>
+            <div class="stp"><div class="stp__d"><div class="stp__n now">5</div><div class="stp__l"></div></div>
+              <div class="stp__b"><div class="stp__t">重连中</div><div class="stp__s">上次连接中断，正在取新 Ticket</div></div></div>
+            <div class="stp"><div class="stp__d"><div class="stp__n">6</div></div>
+              <div class="stp__b"><div class="stp__t">READY</div><div class="stp__s">恢复发送后进入</div></div></div>
+          </div></div></div>
+          <div class="card"><div class="card__b"><dl class="kv">
+            <dt>Channel</dt><dd class="mono">ch-02 · ABA → HC</dd>
+            <dt>ACK Cursor</dt><dd class="mono">highest_contiguous = 339</dd>
+            <dt>缺口</dt><dd>无</dd>
+            <dt>待重放</dt><dd>原始密文帧 × 2</dd>
+          </dl></div></div>
+          <div class="note"><b>不会自动重发</b><span>Resume 只重放原始帧；未发送的 Prompt 保持草稿状态。</span></div>
+        </div>
+      </div>
+      <div class="ann"><b>依据</b><ul>
+        <li>HC.md §12 状态机：SIGNED_OUT → … → READY → RECONNECTING。</li>
+        <li>HC.md §18：ACK 在验签、解密、解析并入本地队列后发送。</li>
+      </ul></div>
+    </div>
+
+    <div class="screen">
+      <div class="screen__cap"><h3>C1 · 会话列表</h3>
+        <span class="screen__meta">多会话并行；草稿按会话隔离</span></div>
+      <div class="phone">
+        <div class="sb"><span>9:41</span><span class="sb__dots"><i></i><i></i><i></i></span></div>
+        <div class="hd"><span class="hd__t">会话</span><span class="btn btn--sm btn--pri">新建</span></div>
+        <div class="bd">
+          <div class="li"><div class="li__b">
+            <div class="li__t">修复构建错误 <span class="pill pill--info">执行中</span></div>
+            <div class="li__s">aba-lab-01 · rt-codex-a · ws-demo-project</div>
+          </div><span class="mono muted">›</span></div>
+          <div class="li"><div class="li__b">
+            <div class="li__t">整理迁移脚本 <span class="pill">空闲</span> <span class="pill pill--warn">草稿未发送</span></div>
+            <div class="li__s">aba-lab-01 · rt-codex-a · ws-docs</div>
+          </div><span class="mono muted">›</span></div>
+          <div class="li"><div class="li__b">
+            <div class="li__t">排查日志噪声 <span class="pill">已归档</span></div>
+            <div class="li__s">aba-lab-02 · rt-deepseek-b · 3 天前</div>
+          </div><span class="mono muted">›</span></div>
+          <div class="note"><b>删除 ≠ 回滚</b><span>归档只做生命周期管理；新建会话不会终止旧会话上正在执行的轮次。</span></div>
+        </div>
+        <div class="tabs"><span>执行端</span><span class="on">会话</span><span>权限</span><span>设置</span></div>
+      </div>
+      <div class="ann"><b>依据</b><ul>
+        <li>remote/README §9：新建、重命名、归档、搜索、并行切换。</li>
+        <li>草稿按会话隔离，网络恢复不自动重发。</li>
+      </ul></div>
+    </div>
+
+    <div class="screen">
+      <div class="screen__cap"><h3>C2 · 新建会话</h3>
+        <span class="screen__meta">四项必须显式选择；Platform 只登记 ID</span></div>
+      <div class="phone">
+        <div class="sb"><span>9:41</span><span class="sb__dots"><i></i><i></i><i></i></span></div>
+        <div class="hd"><span class="mono muted">‹</span><span class="hd__t">新建会话</span></div>
+        <div class="bd">
+          <div class="field"><label>执行端</label><div class="inp">aba-lab-01 · 在线 <span class="muted">▾</span></div></div>
+          <div class="field"><label>Runtime Profile</label><div class="inp">rt-codex-a · Codex ACP <span class="muted">▾</span></div></div>
+          <div class="field"><label>Workspace</label><div class="inp">ws-demo-project · 读写 <span class="muted">▾</span></div></div>
+          <div class="field"><label>内容可见性</label><div class="inp">Opaque（默认，不可更改）</div></div>
+          <div class="note note--info"><b>Managed Mode</b><span>未启用。它需要单独授权并明确 Platform 可读取内容，不属于端到端加密。</span></div>
+          <div class="note note--warn"><b>预计等待</b><span>需要 ABA 生成会话密钥并下发 Key Package。</span></div>
+          <button class="btn btn--pri btn--block">创建会话</button>
+        </div>
+      </div>
+      <div class="ann"><b>硬约束</b><ul>
+        <li>请求体只含不透明 ID 与协议元数据，不含本地执行参数。</li>
+        <li>未获得 Key Package 前不得发送 ACP 请求。</li>
+      </ul></div>
+    </div>
+
+    <div class="screen">
+      <div class="screen__cap"><h3>C3 · ACP 会话（移动）</h3>
+        <span class="screen__meta">消息、工具卡、审批卡、输入区六态</span></div>
+      <div class="phone">
+        <div class="sb"><span>9:41</span><span class="sb__dots"><i></i><i></i><i></i></span></div>
+        <div class="hd"><span class="mono muted">‹</span><span class="hd__t">修复构建错误<span class="hd__s"> · aba-lab-01</span></span>
+          <span class="pill pill--ok">连接正常</span></div>
+        <div class="bd">
+          <div class="note note--info"><b>Opaque</b><span>会话内容在 HC 与 ABA 之间加密。Platform 可见连接、时间、大小与路由元数据。</span></div>
+          <div class="note note--bad"><b>结果不确定</b><span>上一条请求已在执行端开始但结果无法确认。系统不会自动重试。</span></div>
+          <div class="msg"><span class="who">Agent</span><div class="bub">已读取工作区结构，发现 3 个未通过的类型检查。</div></div>
+          <div class="tool"><div class="tool__h"><span class="tool__n">read_file</span><span class="muted">完成 · 0.4s</span></div>
+            <div class="muted mono">ws-demo-project · 4 个文件</div></div>
+          <div class="msg msg--me"><span class="who">我</span><div class="bub bub--me">按最小改动修掉这三个。</div></div>
+          <div class="appr">
+            <div class="tool__h" style="margin-bottom:5px"><span class="tool__n">apply_patch</span><span>风险：中</span></div>
+            <div>目标 <span class="mono">src/main.rs</span>（+12 −3）· 范围 仅本次 · 来源 aba-lab-01</div>
+            <div class="row" style="margin-top:8px">
+              <button class="btn btn--sm">拒绝</button>
+              <button class="btn btn--sm btn--pri">仅本次允许</button>
+              <button class="btn btn--sm">本 Session 允许</button>
+            </div>
+          </div>
+          <div class="tool" style="border-style:dashed;color:var(--ink-2)">usage · 未报告 token 统计，显示 unknown，不按字符数推算</div>
+        </div>
+        <div class="cmp">
+          <div class="cmp__b">已提交，等待执行端确认</div>
+          <div class="cmp__h"><span>重复点击已禁用</span><span>发送未确认 · 不自动重发</span></div>
+        </div>
+      </div>
+      <div class="ann"><b>输入区六态</b><ul>
+        <li>未发送草稿 / 发送未确认 / 执行中 / 取消待确认 / 可继续 / 连接断开。</li>
+        <li>Enter 发送，Shift+Enter 换行；中文输入法 composition 期间不误发送。</li>
+        <li>不把 thought、tool、协议 JSON 当普通回答展示。</li>
+      </ul></div>
+    </div>
+
+    <div class="screen">
+      <div class="screen__cap"><h3>C4 · ACP 会话（桌面）</h3>
+        <span class="screen__meta">会话列 + 消息 + 成果栏</span></div>
+      <div class="deskshot">
+        <div class="deskshot__bar"><span class="dot3"><i></i><i></i><i></i></span><span>Harness Remote · hc-web-lab</span>
+          <span style="margin-left:auto" class="row"><span class="pill pill--ok">连接正常</span><span class="pill pill--info">执行中</span></span></div>
+        <div class="dsplit">
+          <div class="dcol dside">
+            <div class="row between" style="margin-bottom:8px"><b>会话</b><span class="btn btn--sm">新建</span></div>
+            <div class="li li--on" style="padding:7px 9px"><div class="li__b"><div class="li__t" style="font-size:11.5px">修复构建错误</div><div class="li__s">执行中</div></div></div>
+            <div class="li" style="padding:7px 9px"><div class="li__b"><div class="li__t" style="font-size:11.5px">整理迁移脚本</div><div class="li__s">空闲 · 有草稿</div></div></div>
+            <div class="li" style="padding:7px 9px"><div class="li__b"><div class="li__t" style="font-size:11.5px">排查日志噪声</div><div class="li__s">已归档</div></div></div>
+          </div>
+          <div class="dcol" style="border-right:1px solid var(--line)">
+            <div class="note note--info" style="margin-bottom:8px"><b>Opaque</b><span>内容端到端加密，Platform 不可读。</span></div>
+            <div class="msg"><span class="who">Agent</span><div class="bub">已定位 3 处类型错误，准备做最小修补。</div></div>
+            <div class="tool" style="margin-top:8px"><div class="tool__h"><span class="tool__n">apply_patch</span><span class="muted">已完成</span></div>
+              <div class="code" style="border:0;padding:0;background:transparent">+ let retry: u8 = 3;
+- let retry: u32 = 3;
++ if !ready { return Err(NotReady) }</div></div>
+            <div class="appr" style="margin-top:8px">
+              <div class="tool__h" style="margin-bottom:5px"><span class="tool__n">run_command</span><span>风险：高 · 60s 内有效</span></div>
+              <div>Workspace ws-demo-project · 来源 aba-lab-01</div>
+              <div class="row" style="margin-top:7px"><button class="btn btn--sm">拒绝</button><button class="btn btn--sm btn--pri">仅本次允许</button></div>
+            </div>
+          </div>
+          <div class="dcol dside">
+            <b style="font-size:11.5px">成果</b>
+            <div class="li" style="padding:7px 9px;margin-top:7px"><div class="li__b"><div class="li__t mono" style="font-size:11px">patch.diff</div><div class="li__s">+12 −3 · 已加密</div></div></div>
+            <div class="li" style="padding:7px 9px;margin-top:6px"><div class="li__b"><div class="li__t" style="font-size:11.5px">构建日志</div><div class="li__s">截断显示</div></div></div>
+            <div class="screen__meta" style="margin-top:9px">资源为随机 ID + 独立内容密钥；下载前校验授权。</div>
+          </div>
+        </div>
+      </div>
+      <div class="ann"><b>依据</b><ul>
+        <li>HC-CHAT-EXPERIENCE：左侧会话、中间消息、设置收进抽屉。</li>
+        <li>成果栏属于 R10/R11，当前未实现，此稿为设计目标。</li>
+      </ul></div>
+    </div>
+
+    <div class="screen">
+      <div class="screen__cap"><h3>C5 · 权限请求中心</h3>
+        <span class="screen__meta">一次消费；ABA 本地硬策略优先</span></div>
+      <div class="phone">
+        <div class="sb"><span>9:41</span><span class="sb__dots"><i></i><i></i><i></i></span></div>
+        <div class="hd"><span class="hd__t">权限请求</span><span class="pill pill--warn">1 待处理</span></div>
+        <div class="bd">
+          <div class="appr">
+            <div class="tool__h" style="margin-bottom:6px"><span class="tool__n">run_command</span><span>风险：高</span></div>
+            <dl class="kv" style="gap:3px 10px">
+              <dt>来源</dt><dd>aba-lab-01 · rt-codex-a</dd>
+              <dt>Session</dt><dd class="mono">sess-a41f</dd>
+              <dt>Workspace</dt><dd class="mono">ws-demo-project</dd>
+              <dt>目标</dt><dd class="mono">cargo test --locked</dd>
+              <dt>期限</dt><dd>60 秒后过期</dd>
+            </dl>
+            <div class="row" style="margin-top:8px"><button class="btn btn--sm">拒绝</button><button class="btn btn--sm btn--pri">仅本次允许</button><button class="btn btn--sm">本 Session 允许</button></div>
+          </div>
+          <div class="screen__meta">历史</div>
+          <div class="li"><div class="li__b"><div class="li__t mono" style="font-family:var(--mono)">read_file</div><div class="li__s">已允许 · 仅本次 · 14:07</div></div></div>
+          <div class="li"><div class="li__b"><div class="li__t mono">apply_patch</div><div class="li__s">已拒绝 · 14:03</div></div></div>
+          <div class="li"><div class="li__b"><div class="li__t mono">fetch_url</div><div class="li__s">已过期（未决定）· 13:58</div></div></div>
+          <div class="note"><b>无永久放行</b><span>首发不提供「永久允许所有命令」。ABA 本地硬策略始终优先于 HC 允许。</span></div>
+        </div>
+        <div class="tabs"><span>执行端</span><span>会话</span><span class="on">权限</span><span>设置</span></div>
+      </div>
+      <div class="ann"><b>依据</b><ul>
+        <li>HC.md §16 权限卡必须展示的六项信息与三个按钮。</li>
+        <li>拒绝/过期/撤销必须传回真实 Runtime，不留下 UI 假批准。</li>
+      </ul></div>
+    </div>
+
+    <div class="screen">
+      <div class="screen__cap"><h3>D1 · 当前 HC 安全设置</h3>
+        <span class="screen__meta">端点身份、Assurance 与可见性</span></div>
+      <div class="phone">
+        <div class="sb"><span>9:41</span><span class="sb__dots"><i></i><i></i><i></i></span></div>
+        <div class="hd"><span class="hd__t">安全设置</span></div>
+        <div class="bd">
+          <div class="card"><div class="card__h">本机端点</div><div class="card__b"><dl class="kv">
+            <dt>Endpoint ID</dt><dd class="mono">hc-web-lab</dd>
+            <dt>类型</dt><dd>hc-web</dd>
+            <dt>Assurance</dt><dd><span class="pill pill--info">web-software</span></dd>
+            <dt>签名指纹</dt><dd class="mono">SHA-256 9f2c…4a71</dd>
+            <dt>Key Generation</dt><dd class="mono">gen 3（ACTIVE）</dd>
+            <dt>可见性模式</dt><dd>Opaque</dd>
+          </dl></div></div>
+          <div class="card"><div class="card__h">Trust Manifest</div><div class="card__b"><dl class="kv">
+            <dt>Revision</dt><dd class="mono">12</dd>
+            <dt>到期</dt><dd>2026-10-01</dd>
+            <dt>Root / UCA</dt><dd>已校验 · 未发生回滚</dd>
+          </dl></div></div>
+          <div class="li"><div class="li__b"><div class="li__t">安全通知</div><div class="li__s">仅提醒，不含会话内容摘要</div></div><span class="pill pill--ok">开</span></div>
+          <div class="row"><button class="btn" style="flex:1">轮换会话密钥</button><button class="btn" style="flex:1">诊断</button></div>
+          <button class="btn btn--bad btn--block">解除本端点</button>
+        </div>
+        <div class="tabs"><span>执行端</span><span>会话</span><span>权限</span><span class="on">设置</span></div>
+      </div>
+      <div class="ann"><b>不夸大安全等级</b><ul>
+        <li>浏览器软件密钥不得宣传为硬件级安全（D-032）。</li>
+        <li>高风险操作可要求 Passkey 或多个可信端点确认。</li>
+      </ul></div>
+    </div>
+
+    <div class="screen">
+      <div class="screen__cap"><h3>D2 · 所有 Endpoint 管理</h3>
+        <span class="screen__meta">每端独立密钥与吊销状态</span></div>
+      <div class="phone">
+        <div class="sb"><span>9:41</span><span class="sb__dots"><i></i><i></i><i></i></span></div>
+        <div class="hd"><span class="mono muted">‹</span><span class="hd__t">端点</span></div>
+        <div class="bd">
+          <div class="li li--on"><div class="li__b">
+            <div class="li__t">hc-web-lab <span class="pill pill--ok">本机</span></div>
+            <div class="li__s">hc-web · 最后活跃 刚刚 · gen 3</div>
+          </div></div>
+          <div class="li"><div class="li__b">
+            <div class="li__t">hc-phone-a <span class="pill">离线</span></div>
+            <div class="li__s">hc-native · 最后活跃 2 天前 · gen 1</div>
+          </div><button class="btn btn--sm btn--bad">吊销</button></div>
+          <div class="li"><div class="li__b">
+            <div class="li__t">aba-lab-01 <span class="pill pill--ok">在线</span></div>
+            <div class="li__s">aba · AEC …7c41</div>
+          </div></div>
+          <div class="li"><div class="li__b">
+            <div class="li__t">aba-lab-03 <span class="pill pill--bad">已吊销</span></div>
+            <div class="li__s">aba · 2026-09-11 由管理员吊销</div>
+          </div></div>
+          <div class="note note--warn"><b>吊销后果</b><span>停止新连接、撤销 Token/Ticket、禁止新 Key Package 并触发 Rekey；不会自动重新注册。</span></div>
+        </div>
+        <div class="tabs"><span>执行端</span><span>会话</span><span>权限</span><span class="on">设置</span></div>
+      </div>
+      <div class="ann"><b>依据</b><ul>
+        <li>D-012：每个安装实例独立签名/KEM 密钥与吊销状态。</li>
+        <li>HC.md §11：吊销后清除本地 Session 并提示重新注册。</li>
+      </ul></div>
+    </div>
+
+    <div class="screen">
+      <div class="screen__cap"><h3>D3 · 证书与轮换状态</h3>
+        <span class="screen__meta">四层资产独立周期</span></div>
+      <div class="phone">
+        <div class="sb"><span>9:41</span><span class="sb__dots"><i></i><i></i><i></i></span></div>
+        <div class="hd"><span class="mono muted">‹</span><span class="hd__t">证书与轮换</span></div>
+        <div class="bd">
+          <div class="card"><div class="card__h">HEC（本 HC 端点证书）<span class="pill pill--ok">有效</span></div>
+            <div class="card__b"><dl class="kv">
+              <dt>序列</dt><dd class="mono">…11b0</dd>
+              <dt>生效</dt><dd>2026-09-01</dd>
+              <dt>到期</dt><dd>2026-12-01</dd>
+              <dt>下一动作</dt><dd>2026-11-24（到期前 7 天）</dd>
+            </dl>
+            <div class="bar" style="margin-top:9px"><i style="width:12%"></i></div>
+            <div class="screen__meta" style="margin-top:5px">剩余有效期 12%</div>
+            </div></div>
+          <div class="li"><div class="li__b"><div class="li__t">Root / UCA</div><div class="li__s">rev 12 · 未回滚 · 交叉签名有效</div></div></div>
+          <div class="li"><div class="li__b"><div class="li__t">Token Family</div><div class="li__s">正常 · DPoP 绑定 · 无异常重试</div></div></div>
+          <div class="li"><div class="li__b"><div class="li__t">Session Key</div><div class="li__s">gen 3 ACTIVE · 上一代待退役</div></div></div>
+          <div class="note"><b>不静默替换</b><span>新算法或新 Root 必须显式协商；Manifest Revision 只能单调增加。</span></div>
+        </div>
+      </div>
+      <div class="ann"><b>依据</b><ul>
+        <li>D-031 分层轮换：Root/UCA、Endpoint Credential、Token Family、Session Key。</li>
+        <li>HC.md §10：HEC 过期或吊销时停止创建新连接。</li>
+      </ul></div>
+    </div>
+
+    <div class="screen">
+      <div class="screen__cap"><h3>D4 · 安全通知与审计摘要</h3>
+        <span class="screen__meta">提醒而非可靠通道；打开后查询权威状态</span></div>
+      <div class="phone">
+        <div class="sb"><span>9:41</span><span class="sb__dots"><i></i><i></i><i></i></span></div>
+        <div class="hd"><span class="hd__t">安全通知</span><span class="btn btn--sm">全部已读</span></div>
+        <div class="bd">
+          <div class="li"><div class="li__b">
+            <div class="li__t">新设备获批 <span class="pill pill--info">新</span></div>
+            <div class="li__s">aba-lab-01 于 14:05 被批准 · 操作人 你</div>
+          </div></div>
+          <div class="li"><div class="li__b">
+            <div class="li__t">端点已吊销 <span class="pill pill--info">新</span></div>
+            <div class="li__s">aba-lab-03 于 09-11 被吊销，连接已关闭</div>
+          </div></div>
+          <div class="li"><div class="li__b">
+            <div class="li__t">等待 Key Package</div>
+            <div class="li__s">aba-lab-02 离线，会话 sess-77c2 暂不可发送</div>
+          </div></div>
+          <div class="li"><div class="li__b">
+            <div class="li__t">投递积压</div>
+            <div class="li__s">ch-02 曾积压 2 帧，已恢复</div>
+          </div></div>
+          <div class="note"><b>通知边界</b><span>不含未同意的敏感摘要；不含 Prompt、文件名、命令、Token 或密钥。</span></div>
+        </div>
+        <div class="tabs"><span>执行端</span><span>会话</span><span>权限</span><span class="on">设置</span></div>
+      </div>
+      <div class="ann"><b>依据</b><ul>
+        <li>remote/README §9：通知是提醒而非可靠消息通道，打开后查询权威状态。</li>
+        <li>HC.md §24 禁止遥测与日志出现 ACP 明文与密钥。</li>
+      </ul></div>
+    </div>
+
+    <div class="screen">
+      <div class="screen__cap"><h3>D5 · 内容可见性（Opaque / Managed）</h3>
+        <span class="screen__meta">明确 Platform 能看到与看不到什么</span></div>
+      <div class="phone">
+        <div class="sb"><span>9:41</span><span class="sb__dots"><i></i><i></i><i></i></span></div>
+        <div class="hd"><span class="mono muted">‹</span><span class="hd__t">内容可见性</span></div>
+        <div class="bd">
+          <div class="card"><div class="card__h">Opaque（当前）<span class="pill pill--info">已启用</span></div>
+            <div class="card__b">
+              <p style="margin:0 0 8px">会话内容在此 HC 与 ABA 之间加密。</p>
+              <dl class="kv">
+                <dt>Platform 可见</dt><dd>连接、时间、大小、路由元数据</dd>
+                <dt>Platform 不可见</dt><dd>Prompt、工具参数、源码、Diff、终端输出</dd>
+              </dl>
+              <div class="note note--warn" style="margin-top:9px"><b>恢复限制</b><span>丢失全部有权 Endpoint 或恢复密钥，可能无法恢复历史。</span></div>
+            </div></div>
+          <div class="card"><div class="card__h">Managed Mode<span class="pill">未启用</span></div>
+            <div class="card__b">
+              <p style="margin:0 0 8px"><b>Platform 可以读取内容。</b>这是受控解密，不属于端到端加密。</p>
+              <ul class="muted" style="margin:0;padding-left:18px">
+                <li>会话级或租户策略级显式开关</li>
+                <li>启用需二次认证</li>
+                <li>显示用途、保留期、解密 Worker 与审计</li>
+                <li>不使用绿色端到端加密标识</li>
+              </ul>
+              <button class="btn btn--block" style="margin-top:10px" disabled>申请启用（需管理员策略）</button>
+            </div></div>
+        </div>
+      </div>
+      <div class="ann"><b>依据</b><ul>
+        <li>HC.md §21/§22、D-015、D-016。</li>
+        <li>默认 Opaque，Managed Mode 单独审计且不冒充 E2EE。</li>
+      </ul></div>
+    </div>
+
+  </div>
+
+</div>
+</body>
+</html>

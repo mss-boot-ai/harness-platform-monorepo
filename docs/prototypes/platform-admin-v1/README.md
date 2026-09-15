@@ -1,7 +1,9 @@
 # Platform 管理后台五页面
 
 - 版本：v0.1
-- 状态：Visual baseline
+- 状态：Superseded
+- 被取代于：[`../platform-pages/`](../platform-pages/) v0.1（18 页完整页面稿取代五页面局部稿）
+- 保真度：F2（局部稿）
 - 界面：基于 mss-boot-admin v1.3.7 Thin Host 的 Harness 业务后台五个页面，以及五态与权限矩阵。
 - 使用者：管理员 + 运维
 - 关联文档：[`../../roadmap/verification/2026-09-04-platform-m1.md`](../../roadmap/verification/2026-09-04-platform-m1.md)、[`../../architecture/PLATFORM.md`](../../architecture/PLATFORM.md)、[`../../product/PRD.md`](../../product/PRD.md)、AGENT.md §3

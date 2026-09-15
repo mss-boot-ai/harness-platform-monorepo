@@ -1,7 +1,9 @@
 # HC 远程会话主界面
 
 - 版本：v0.1
-- 状态：Partial impl
+- 状态：Superseded
+- 被取代于：[`../hc-pages/`](../hc-pages/) v0.1（完整页面稿取代单页线框）
+- 保真度：F2（局部稿）
 - 界面：HC（Web / PWA）中以对话为中心的远程会话主界面，含会话列表、消息区、权限卡、输入区与连接/执行状态。
 - 使用者：最终用户
 - 关联文档：[`../../remote/README.md`](../../remote/README.md) §9、[`../../product/HC-CHAT-EXPERIENCE.md`](../../product/HC-CHAT-EXPERIENCE.md)、[`../../architecture/HC.md`](../../architecture/HC.md) §13/§16/§19/§21、ADR-0005

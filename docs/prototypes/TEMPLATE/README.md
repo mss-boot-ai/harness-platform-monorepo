@@ -2,6 +2,7 @@
 
 - 版本：v0.1
 - 状态：模板（不表示任何产品能力）
+- 保真度：F3（作为骨架默认级别；纯单点争议可降到 F1/F2）
 - 用途：复制本目录，快速生成一个符合 `docs/prototypes/CONVENTIONS.md` 的新原型。
 
 ## 使用步骤
@@ -19,6 +20,7 @@
 
 - 版本：v0.1
 - 状态：Design only | Partial impl | Visual baseline | Superseded
+- 保真度：F1 | F2 | F3
 - 界面：<一句话描述这是什么界面>
 - 使用者：最终用户 | 管理员 | 运维
 - 关联文档：<相对路径，如 ../../architecture/HC.md>

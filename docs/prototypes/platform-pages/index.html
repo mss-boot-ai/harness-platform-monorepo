@@ -1,0 +1,1037 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Platform 端完整页面 — 原型 v0.1</title>
+<style>
+*,*::before,*::after{box-sizing:border-box}
+:root{
+  --bg:#eef0f3;--surface:#fff;--surface-2:#f6f7f9;--surface-3:#eceef1;
+  --ink:#12161a;--ink-2:#4b535c;--ink-3:#818a94;
+  --line:#e2e5e9;--line-2:#cbd1d8;
+  --blue:#1a67b3;--blue-bg:#e8f2fc;
+  --green:#2f6b12;--green-bg:#e9f4dc;
+  --amber:#8a5309;--amber-bg:#fdf0d8;
+  --red:#a52a2a;--red-bg:#fdeaea;
+  --purple:#5044b0;--purple-bg:#eeeafe;
+  --teal:#0d6b54;--teal-bg:#e0f4ee;
+  --r:10px;--r-sm:7px;--r-lg:14px;
+  --sh:0 1px 2px rgba(16,24,40,.06);
+  --font:-apple-system,BlinkMacSystemFont,"Segoe UI","PingFang SC","Hiragino Sans GB","Microsoft YaHei",sans-serif;
+  --mono:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;
+}
+@media (prefers-color-scheme:dark){:root{
+  --bg:#15181b;--surface:#1e2226;--surface-2:#252a2f;--surface-3:#2c3238;
+  --ink:#e9ebee;--ink-2:#a7aeb6;--ink-3:#7c848d;
+  --line:#2c3238;--line-2:#3d444b;
+  --blue:#7fb2e5;--blue-bg:#132a41;
+  --green:#9bc76a;--green-bg:#1d2a13;
+  --amber:#e8a83c;--amber-bg:#2e2210;
+  --red:#e58b8b;--red-bg:#331a1a;
+  --purple:#a9a3ea;--purple-bg:#1f1c3c;
+  --teal:#5fc4a6;--teal-bg:#0f2a23;
+  --sh:0 1px 2px rgba(0,0,0,.3);
+}}
+body{margin:0;background:var(--bg);color:var(--ink);font:13.5px/1.6 var(--font);-webkit-font-smoothing:antialiased}
+.wrap{max-width:1180px;margin:0 auto;padding:28px 22px 80px}
+h1{font-size:21px;font-weight:600;margin:0 0 6px;letter-spacing:-.01em}
+h2{font-size:14.5px;font-weight:600;margin:34px 0 12px;padding-bottom:8px;border-bottom:1px solid var(--line)}
+h3{font-size:13.5px;font-weight:600;margin:0 0 3px}
+p{margin:0 0 10px}
+.sub{color:var(--ink-2);margin:0 0 12px;max-width:84ch}
+.hint{font-size:12px;color:var(--ink-3);border-left:2px solid var(--line-2);padding-left:10px;margin:12px 0}
+.mono{font-family:var(--mono);font-size:11.5px}
+.muted{color:var(--ink-3)}
+.badges{display:flex;flex-wrap:wrap;gap:7px;margin:0 0 8px}
+.badge{display:inline-flex;align-items:center;gap:5px;padding:2px 9px;border-radius:999px;font-size:11.5px;
+  border:1px solid var(--line-2);background:var(--surface);color:var(--ink-2)}
+.badge--ver{border-color:var(--ink-2);background:var(--surface-2);color:var(--ink);font-family:var(--mono)}
+.badge--base{border-color:var(--green);background:var(--green-bg);color:var(--green)}
+.badge--wip{border-color:var(--amber);background:var(--amber-bg);color:var(--amber)}
+.badge--plan{border-color:var(--purple);background:var(--purple-bg);color:var(--purple)}
+.row{display:flex;gap:8px;align-items:center;flex-wrap:wrap}
+.between{justify-content:space-between}
+.grid{display:grid;gap:14px}
+.g2{grid-template-columns:repeat(2,minmax(0,1fr))}
+.g3{grid-template-columns:repeat(3,minmax(0,1fr))}
+.g4{grid-template-columns:repeat(4,minmax(0,1fr))}
+@media (max-width:900px){.g2,.g3,.g4{grid-template-columns:1fr 1fr}}
+.card{background:var(--surface);border:1px solid var(--line);border-radius:var(--r);box-shadow:var(--sh)}
+.card__h{padding:10px 13px;border-bottom:1px solid var(--line);font-size:12.5px;font-weight:600;
+  display:flex;align-items:center;justify-content:space-between;gap:8px}
+.card__b{padding:13px}
+.kv{display:grid;grid-template-columns:auto 1fr;gap:6px 14px;font-size:12.5px;margin:0}
+.kv dt{color:var(--ink-3);white-space:nowrap}
+.kv dd{margin:0}
+.pill{display:inline-flex;align-items:center;gap:5px;padding:2px 8px;border-radius:999px;font-size:11.5px;
+  border:1px solid var(--line-2);background:var(--surface-2);color:var(--ink-2);white-space:nowrap}
+.pill--ok{border-color:var(--green);background:var(--green-bg);color:var(--green)}
+.pill--warn{border-color:var(--amber);background:var(--amber-bg);color:var(--amber)}
+.pill--bad{border-color:var(--red);background:var(--red-bg);color:var(--red)}
+.pill--info{border-color:var(--blue);background:var(--blue-bg);color:var(--blue)}
+.btn{display:inline-flex;align-items:center;justify-content:center;gap:5px;padding:5px 11px;font:inherit;
+  font-size:12px;border-radius:var(--r-sm);border:1px solid var(--line-2);background:var(--surface);
+  color:var(--ink);cursor:default;white-space:nowrap}
+.btn--pri{background:var(--blue);border-color:var(--blue);color:#fff}
+.btn--ghost{background:transparent;border-color:transparent;color:var(--ink-2)}
+.btn--bad{background:transparent;border-color:var(--red);color:var(--red)}
+.btn--sm{padding:3px 8px;font-size:11px}
+.btn[disabled]{opacity:.5}
+.note{display:flex;gap:9px;padding:9px 11px;border-radius:var(--r-sm);border:1px solid var(--line-2);
+  background:var(--surface-2);font-size:12px}
+.note--info{border-color:var(--blue);background:var(--blue-bg);color:var(--blue)}
+.note--warn{border-color:var(--amber);background:var(--amber-bg);color:var(--amber)}
+.note--bad{border-color:var(--red);background:var(--red-bg);color:var(--red)}
+.note--ok{border-color:var(--green);background:var(--green-bg);color:var(--green)}
+.note b{font-weight:600}
+table{width:100%;border-collapse:collapse;font-size:12px;background:var(--surface)}
+th,td{text-align:left;padding:8px 11px;border-bottom:1px solid var(--line);vertical-align:top}
+th{font-weight:600;color:var(--ink-2);background:var(--surface-2);font-size:11.5px;white-space:nowrap}
+tbody tr:last-child td{border-bottom:0}
+.tbl{border:1px solid var(--line);border-radius:var(--r);overflow:hidden;box-shadow:var(--sh)}
+.pager{display:flex;align-items:center;justify-content:space-between;gap:10px;padding:8px 12px;
+  border-top:1px solid var(--line);background:var(--surface);font-size:11.5px;color:var(--ink-3)}
+.map{display:grid;gap:9px;grid-template-columns:repeat(4,minmax(0,1fr))}
+@media (max-width:900px){.map{grid-template-columns:1fr 1fr}}
+.map__c{border:1px solid var(--line);border-radius:var(--r);background:var(--surface);padding:10px 12px;font-size:12px}
+.map__t{font-weight:600;margin-bottom:6px;font-size:12px}
+.map__i{color:var(--ink-2);padding:2px 0;display:block}
+.gal{display:grid;gap:26px}
+.screen{display:flex;flex-direction:column;gap:9px}
+.screen__cap{display:flex;flex-direction:column;gap:3px}
+.screen__meta{font-size:11.5px;color:var(--ink-3)}
+.ann{border:1px dashed var(--line-2);border-radius:var(--r);background:var(--surface);padding:11px 12px;font-size:12px}
+.ann ul{margin:6px 0 0;padding-left:18px;color:var(--ink-2)}
+.browser{border:1px solid var(--line-2);border-radius:var(--r);overflow:hidden;background:var(--surface);box-shadow:var(--sh)}
+.browser__bar{display:flex;align-items:center;gap:9px;padding:7px 11px;background:var(--surface-3);
+  border-bottom:1px solid var(--line);font-size:11px;color:var(--ink-3)}
+.dot3{display:flex;gap:4px;flex:0 0 auto}.dot3 i{width:8px;height:8px;border-radius:50%;background:var(--line-2)}
+.url{flex:1;background:var(--surface);border:1px solid var(--line);border-radius:999px;padding:2px 10px;
+  font-family:var(--mono);font-size:10.5px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.app{display:grid;grid-template-columns:210px 1fr;min-height:420px}
+@media (max-width:760px){.app{grid-template-columns:1fr}}
+.nav{background:var(--surface-2);border-right:1px solid var(--line);padding:10px 9px;font-size:12px}
+.nav__brand{display:flex;align-items:center;gap:7px;font-weight:600;font-size:12.5px;padding:4px 6px 10px}
+.nav__logo{width:16px;height:16px;border-radius:5px;background:var(--blue);flex:none}
+.nav__g{font-size:9.5px;letter-spacing:.08em;color:var(--ink-3);padding:9px 6px 4px}
+.nav__i{display:flex;align-items:center;justify-content:space-between;gap:6px;padding:5px 8px;
+  border-radius:var(--r-sm);color:var(--ink-2);margin-bottom:1px}
+.nav__i.on{background:var(--surface);color:var(--ink);font-weight:600;border:1px solid var(--line);box-shadow:var(--sh)}
+.nav__b{font-size:10px;background:var(--amber-bg);color:var(--amber);border:1px solid var(--amber);border-radius:999px;padding:0 5px}
+.main{display:flex;flex-direction:column;min-width:0}
+.topbar{display:flex;align-items:center;gap:10px;padding:8px 14px;border-bottom:1px solid var(--line);background:var(--surface)}
+.crumb{font-size:11.5px;color:var(--ink-3);flex:1}
+.ava{width:22px;height:22px;border-radius:50%;background:var(--blue-bg);color:var(--blue);font-size:10px;
+  display:flex;align-items:center;justify-content:center;border:1px solid var(--blue);flex:none}
+.pg{padding:14px;display:flex;flex-direction:column;gap:13px;background:var(--bg);flex:1;min-width:0}
+.pg__h{display:flex;align-items:flex-start;justify-content:space-between;gap:12px;flex-wrap:wrap}
+.pg__t{font-size:15px;font-weight:600}
+.pg__d{font-size:11.5px;color:var(--ink-3);margin-top:2px;max-width:62ch}
+.stat{border:1px solid var(--line);border-radius:var(--r);background:var(--surface);padding:11px 13px;box-shadow:var(--sh)}
+.stat__k{font-size:11px;color:var(--ink-3)}
+.stat__v{font-size:20px;font-weight:600;font-family:var(--mono);margin:3px 0 2px}
+.filters{display:flex;gap:8px;align-items:center;flex-wrap:wrap}
+.inp{padding:5px 10px;border:1px solid var(--line-2);border-radius:var(--r-sm);background:var(--surface);
+  font-size:12px;color:var(--ink-3);display:inline-flex;align-items:center;gap:8px}
+.tabs{display:flex;gap:2px;border-bottom:1px solid var(--line);font-size:12px}
+.tabs span{padding:7px 12px;color:var(--ink-3)}
+.tabs span.on{color:var(--blue);font-weight:600;border-bottom:2px solid var(--blue);margin-bottom:-1px}
+.lead{display:flex;gap:8px;align-items:center;justify-content:space-between;padding:9px 12px;
+  border:1px solid var(--line);border-radius:var(--r-sm);background:var(--surface);font-size:12px}
+.bar{height:6px;border-radius:999px;background:var(--surface-3);overflow:hidden}
+.bar i{display:block;height:100%;background:var(--blue);border-radius:999px}
+.tl{display:flex;gap:10px;font-size:12px}
+.tl__d{display:flex;flex-direction:column;align-items:center;flex:none;width:14px}
+.tl__n{width:14px;height:14px;border-radius:50%;border:1px solid var(--line-2);background:var(--surface);flex:none}
+.tl__n.ok{background:var(--green);border-color:var(--green)}
+.tl__n.bad{background:var(--red);border-color:var(--red)}
+.tl__l{width:1px;flex:1;background:var(--line-2);min-height:12px}
+.tl__b{padding-bottom:9px}
+.tl__t{font-weight:600}
+.steps{display:flex;gap:6px;flex-wrap:wrap}
+.step{flex:1;min-width:96px;border:1px solid var(--line);border-radius:var(--r-sm);background:var(--surface);padding:8px 10px;font-size:11px}
+.step__n{font-family:var(--mono);color:var(--ink-3);font-size:10.5px}
+.step.now{border-color:var(--blue);background:var(--blue-bg);color:var(--blue)}
+.step.ok{border-color:var(--green);background:var(--green-bg);color:var(--green)}
+.modal{border:1px solid var(--line-2);border-radius:var(--r);background:var(--surface);box-shadow:0 8px 24px rgba(16,24,40,.14);overflow:hidden}
+.modal__h{padding:12px 14px;border-bottom:1px solid var(--line);font-weight:600;font-size:13px}
+.modal__b{padding:14px;font-size:12.5px}
+.modal__f{padding:11px 14px;border-top:1px solid var(--line);background:var(--surface-2);display:flex;gap:8px;justify-content:flex-end}
+.empty{padding:34px 14px;text-align:center;color:var(--ink-3);font-size:12.5px}
+.half{display:grid;grid-template-columns:1fr 1fr;min-height:100%}
+.half>div:first-child{border-right:1px solid var(--line)}
+@media (max-width:700px){.half{grid-template-columns:1fr}.half>div:first-child{border-right:0;border-bottom:1px solid var(--line)}}
+</style>
+</head>
+<body>
+<div class="wrap">
+
+  <h1>Platform 端完整页面</h1>
+  <p class="sub">Platform 控制面全量页面稿：Harness 业务模块（Endpoint / Enrollment / Session / 投递 / 证书）与 mss-boot-admin v1.3.7 Foundation 模块（用户 / 角色 / 菜单 / 通知 / 任务 / 系统）。页面稿为结构稿（F3），用于确认信息层级与字段，不做视觉定稿。</p>
+  <div class="badges">
+    <span class="badge badge--ver">v0.1</span>
+    <span class="badge badge--base">Visual baseline</span>
+    <span class="badge badge--wip">含未实现页面</span>
+    <span class="badge">使用者：管理员 + 运维</span>
+    <span class="badge">18 个页面</span>
+  </div>
+  <p class="hint">版本 v0.1 · 最后更新 2026-09-15 · 版本号只标识设计稿迭代，不代表产品版本或实现进度。取代 <span class="mono">platform-admin-v1/</span>。页面逐项状态见 §2 清单的「实现」列。</p>
+
+  <h2>1. 页面地图</h2>
+  <div class="map">
+    <div class="map__c"><div class="map__t">P0 入口</div>
+      <span class="map__i">P01 登录</span>
+      <span class="map__i">P18 403 / 错误页</span>
+    </div>
+    <div class="map__c"><div class="map__t">P1 总览与设备</div>
+      <span class="map__i">P02 Overview</span>
+      <span class="map__i">P03 Enrollments 列表</span>
+      <span class="map__i">P04 Enrollment 审批</span>
+      <span class="map__i">P05 Endpoints 列表</span>
+      <span class="map__i">P06 Endpoint 详情</span>
+    </div>
+    <div class="map__c"><div class="map__t">P2 会话与投递</div>
+      <span class="map__i">P07 Sessions 列表</span>
+      <span class="map__i">P08 Session 详情</span>
+      <span class="map__i">P09 Delivery 投递</span>
+    </div>
+    <div class="map__c"><div class="map__t">P3 信任与凭据</div>
+      <span class="map__i">P10 证书与 Trust Manifest</span>
+      <span class="map__i">P11 轮换任务</span>
+    </div>
+    <div class="map__c"><div class="map__t">P4 运营</div>
+      <span class="map__i">P12 审计日志</span>
+      <span class="map__i">P13 通知</span>
+      <span class="map__i">P17 系统健康</span>
+    </div>
+    <div class="map__c"><div class="map__t">F Foundation v1.3.7</div>
+      <span class="map__i">P14 用户管理</span>
+      <span class="map__i">P15 角色与权限</span>
+      <span class="map__i">P16 菜单与路由</span>
+    </div>
+  </div>
+
+  <h2>2. 页面清单、实现状态与文档对应</h2>
+  <div class="tbl">
+    <table>
+      <thead><tr><th>#</th><th>页面</th><th>路由</th><th>实现</th><th>文档依据</th></tr></thead>
+      <tbody>
+        <tr><td>P01</td><td>登录（Admin）</td><td class="mono">/admin/login</td><td><span class="pill pill--ok">已实现</span></td><td>Foundation v1.3.7</td></tr>
+        <tr><td>P02</td><td>Overview 总览</td><td class="mono">/admin/harness/overview</td><td><span class="pill pill--ok">已实现</span></td><td>M1 验证报告</td></tr>
+        <tr><td>P03</td><td>Enrollments 列表</td><td class="mono">/admin/harness/enrollments</td><td><span class="pill pill--ok">已实现</span></td><td>M1 验证报告</td></tr>
+        <tr><td>P04</td><td>Enrollment 审批</td><td class="mono">…/enrollments/:id</td><td><span class="pill pill--ok">已实现</span></td><td>ARCHITECTURE §6.1</td></tr>
+        <tr><td>P05</td><td>Endpoints 列表</td><td class="mono">/admin/harness/endpoints</td><td><span class="pill pill--ok">已实现</span></td><td>D-012</td></tr>
+        <tr><td>P06</td><td>Endpoint 详情</td><td class="mono">…/endpoints/:id</td><td><span class="pill pill--warn">部分实现</span></td><td>HC.md §10、D-031</td></tr>
+        <tr><td>P07</td><td>Sessions 列表</td><td class="mono">/admin/harness/sessions</td><td><span class="pill pill--ok">已实现</span></td><td>M1 验证报告</td></tr>
+        <tr><td>P08</td><td>Session 详情</td><td class="mono">…/sessions/:id</td><td><span class="pill pill--warn">部分实现</span></td><td>PROTOCOL、D-028</td></tr>
+        <tr><td>P09</td><td>Delivery 投递</td><td class="mono">/admin/harness/delivery</td><td><span class="pill pill--ok">已实现</span></td><td>M1 验证报告、D-028</td></tr>
+        <tr><td>P10</td><td>证书与 Trust Manifest</td><td class="mono">/admin/harness/trust</td><td><span class="pill pill--plan">未实现</span></td><td>HC.md §10、SECURITY</td></tr>
+        <tr><td>P11</td><td>轮换任务</td><td class="mono">/admin/harness/rotation</td><td><span class="pill pill--plan">未实现</span></td><td>D-030、D-031</td></tr>
+        <tr><td>P12</td><td>审计日志</td><td class="mono">/admin/audit</td><td><span class="pill pill--ok">已实现</span></td><td>Foundation + Harness 脱敏审计</td></tr>
+        <tr><td>P13</td><td>通知</td><td class="mono">/admin/notifications</td><td><span class="pill pill--ok">已实现</span></td><td>D-027</td></tr>
+        <tr><td>P14</td><td>用户管理</td><td class="mono">/admin/users</td><td><span class="pill pill--ok">Foundation</span></td><td>Foundation v1.3.7</td></tr>
+        <tr><td>P15</td><td>角色与权限</td><td class="mono">/admin/roles</td><td><span class="pill pill--ok">Foundation</span></td><td>AGENT.md §3.7</td></tr>
+        <tr><td>P16</td><td>菜单与路由</td><td class="mono">/admin/menus</td><td><span class="pill pill--ok">Foundation</span></td><td>AGENT.md §3.6</td></tr>
+        <tr><td>P17</td><td>系统健康</td><td class="mono">/admin/status</td><td><span class="pill pill--warn">部分实现</span></td><td>AGENT.md §5.16</td></tr>
+        <tr><td>P18</td><td>403 / 错误页</td><td class="mono">—</td><td><span class="pill pill--ok">已实现</span></td><td>M1 验证报告</td></tr>
+      </tbody>
+    </table>
+  </div>
+  <p class="hint">「已实现」指该界面在前端与后端存在并有对应验证记录；「部分实现」指列表或只读部分存在，详情/操作未完成；「未实现」为纯设计。此列不改变 <span class="mono">docs/roadmap/DELIVERY</span> 与验证报告的结论。</p>
+
+  <h2>3. 页面稿</h2>
+  <div class="gal">
+
+    <div class="screen">
+      <div class="screen__cap"><h3>P01 · 登录（Admin）</h3><span class="screen__meta">Foundation 登录；HttpOnly Session Cookie，Path 固定 /admin/api</span></div>
+      <div class="browser">
+        <div class="browser__bar"><span class="dot3"><i></i><i></i><i></i></span><span class="url">https://platform.example.invalid/admin/login</span></div>
+        <div class="pg" style="align-items:center;justify-content:center;min-height:300px">
+          <div style="width:300px;display:flex;flex-direction:column;gap:10px">
+            <div class="row" style="gap:7px"><span class="nav__logo"></span><b>Harness Platform</b></div>
+            <div class="card"><div class="card__b" style="display:flex;flex-direction:column;gap:9px">
+              <div><div class="screen__meta">账号</div><div class="inp" style="display:flex;justify-content:space-between">admin@example.invalid</div></div>
+              <div><div class="screen__meta">密码</div><div class="inp" style="display:flex;justify-content:space-between">••••••••••</div></div>
+              <button class="btn btn--pri" style="width:100%">登录</button>
+              <div class="screen__meta">二次认证在敏感操作时单独要求。</div>
+            </div></div>
+          </div>
+        </div>
+      </div>
+      <div class="ann"><b>说明</b><ul>
+        <li>Admin Session Cookie 的 Path 固定为 <span class="mono">/admin/api</span>，Gateway 永不把 Admin Cookie 当 Endpoint 身份（D-037）。</li>
+        <li>登录身份与 Endpoint 身份是两层，后台不提供任何端点私钥操作。</li>
+      </ul></div>
+    </div>
+
+    <div class="screen">
+      <div class="screen__cap"><h3>P02 · Overview 总览</h3><span class="screen__meta">只放计数与状态，不放任何内容摘要</span></div>
+      <div class="browser">
+        <div class="browser__bar"><span class="dot3"><i></i><i></i><i></i></span><span class="url">https://platform.example.invalid/admin/harness/overview</span></div>
+        <div class="app">
+          <div class="nav">
+            <div class="nav__brand"><span class="nav__logo"></span>Harness</div>
+            <div class="nav__g">HARNESS</div>
+            <div class="nav__i on">Overview</div>
+            <div class="nav__i">Enrollments <span class="nav__b">1</span></div>
+            <div class="nav__i">Endpoints</div>
+            <div class="nav__i">Sessions</div>
+            <div class="nav__i">Delivery</div>
+            <div class="nav__i">证书与轮换</div>
+            <div class="nav__g">FOUNDATION</div>
+            <div class="nav__i">用户</div>
+            <div class="nav__i">角色权限</div>
+            <div class="nav__i">审计日志</div>
+          </div>
+          <div class="main">
+            <div class="topbar"><span class="crumb">主页 / Harness / Overview</span><span class="ava">A</span></div>
+            <div class="pg">
+              <div class="pg__h"><div><div class="pg__t">Overview</div><div class="pg__d">Endpoint、Session 与密文投递的运行概况。本页不展示会话内容。</div></div>
+                <div class="row"><span class="btn">刷新</span><span class="btn btn--pri">导出快照</span></div></div>
+              <div class="grid g4">
+                <div class="stat"><div class="stat__k">在线 Endpoint</div><div class="stat__v">3</div><span class="pill pill--ok">全部认证通过</span></div>
+                <div class="stat"><div class="stat__k">待批准注册</div><div class="stat__v">1</div><span class="pill pill--warn">需人工处理</span></div>
+                <div class="stat"><div class="stat__k">活动 Session</div><div class="stat__v">2</div><span class="pill pill--info">gen 3</span></div>
+                <div class="stat"><div class="stat__k">投递积压</div><div class="stat__v">2</div><span class="pill pill--warn">ch-02</span></div>
+              </div>
+              <div class="grid g2">
+                <div class="card"><div class="card__h">端点健康</div>
+                  <table><thead><tr><th>Endpoint</th><th>类型</th><th>状态</th><th>最后可见</th></tr></thead><tbody>
+                    <tr><td class="mono">aba-lab-01</td><td>aba</td><td><span class="pill pill--ok">在线</span></td><td>2 分钟前</td></tr>
+                    <tr><td class="mono">aba-lab-02</td><td>aba</td><td><span class="pill">离线</span></td><td>6 小时前</td></tr>
+                    <tr><td class="mono">hc-web-lab</td><td>hc-web</td><td><span class="pill pill--ok">在线</span></td><td>刚刚</td></tr>
+                  </tbody></table></div>
+                <div class="card"><div class="card__h">信任状态</div><div class="card__b"><dl class="kv">
+                  <dt>Trust Manifest</dt><dd class="mono">rev 12 · 2026-10-01 到期</dd>
+                  <dt>Root / UCA</dt><dd>有效 · 未回滚</dd>
+                  <dt>被吊销端点</dt><dd>1（aba-lab-03）</dd>
+                  <dt>证书 30 天内到期</dt><dd>0</dd>
+                </dl>
+                <div class="note note--info" style="margin-top:10px"><b>Opaque</b><span>Platform 不持有端点私钥与 SRK，不解析 ACP Payload。</span></div>
+                </div></div>
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+      <div class="ann"><b>边界</b><ul>
+        <li>指标口径为「当前实例」；多实例全局口径取决于 P-001 的 Connection Directory 方案。</li>
+        <li>不提供任何「查看会话内容」入口。</li>
+      </ul></div>
+    </div>
+
+    <div class="screen">
+      <div class="screen__cap"><h3>P03 · Enrollments 列表</h3><span class="screen__meta">待批准与历史；写操作带 Idempotency-Key</span></div>
+      <div class="browser">
+        <div class="browser__bar"><span class="dot3"><i></i><i></i><i></i></span><span class="url">https://platform.example.invalid/admin/harness/enrollments</span></div>
+        <div class="app">
+          <div class="nav">
+            <div class="nav__brand"><span class="nav__logo"></span>Harness</div>
+            <div class="nav__g">HARNESS</div>
+            <div class="nav__i">Overview</div>
+            <div class="nav__i on">Enrollments <span class="nav__b">1</span></div>
+            <div class="nav__i">Endpoints</div>
+            <div class="nav__i">Sessions</div>
+            <div class="nav__i">Delivery</div>
+          </div>
+          <div class="main">
+            <div class="topbar"><span class="crumb">主页 / Harness / Enrollments</span>
+              <span class="pill pill--info">harness:approve</span><span class="ava">A</span></div>
+            <div class="pg">
+              <div class="pg__h"><div><div class="pg__t">Enrollments</div><div class="pg__d">端点注册申请。批准是敏感操作，需 harness:approve 与二次认证。</div></div></div>
+              <div class="tabs"><span class="on">待批准 1</span><span>已批准</span><span>已拒绝</span><span>已过期</span></div>
+              <div class="filters"><span class="inp">搜索 Endpoint ID / 指纹</span><span class="inp">时间范围：近 7 天 ▾</span></div>
+              <div class="tbl">
+                <table><thead><tr><th>Endpoint</th><th>类型</th><th>公钥指纹</th><th>申请时间</th><th>来源</th><th>状态</th><th>操作</th></tr></thead><tbody>
+                  <tr><td class="mono">aba-lab-03</td><td>aba</td><td class="mono">9f2c…4a71</td><td>2026-09-15 14:02</td><td class="mono">198.51.100.24</td><td><span class="pill pill--warn">待批准</span></td>
+                    <td class="row"><span class="btn btn--pri btn--sm">批准</span><span class="btn btn--bad btn--sm">拒绝</span></td></tr>
+                  <tr><td class="mono">aba-lab-02</td><td>aba</td><td class="mono">3ad9…b7e0</td><td>2026-09-15 09:41</td><td class="mono">198.51.100.11</td><td><span class="pill pill--ok">已批准</span></td><td class="muted">—</td></tr>
+                  <tr><td class="mono">hc-phone-b</td><td>hc-native</td><td class="mono">5c11…9d43</td><td>2026-09-13 18:20</td><td class="mono">203.0.113.7</td><td><span class="pill">已过期</span></td><td class="muted">—</td></tr>
+                </tbody></table>
+                <div class="pager"><span>共 3 条 · 每页 20</span><span class="row"><span class="btn btn--sm" disabled>上一页</span><span class="btn btn--sm" disabled>下一页</span></span></div>
+              </div>
+              <div class="note note--info"><b>审计</b><span>批准/拒绝写入脱敏审计，含操作人、时间与 Idempotency-Key；设备码明文不落库。</span></div>
+            </div>
+          </div>
+        </div>
+      </div>
+      <div class="ann"><b>注意</b><ul>
+        <li>批准前需核对设备码；列表不提供「全部批准」。</li>
+        <li>待批准数量在侧栏显示徽标，与 Overview 一致。</li>
+      </ul></div>
+    </div>
+
+    <div class="screen">
+      <div class="screen__cap"><h3>P04 · Enrollment 审批</h3><span class="screen__meta">二次认证确认对话框</span></div>
+      <div class="browser">
+        <div class="browser__bar"><span class="dot3"><i></i><i></i><i></i></span><span class="url">https://platform.example.invalid/admin/harness/enrollments/aba-lab-03</span></div>
+        <div class="app">
+          <div class="nav">
+            <div class="nav__brand"><span class="nav__logo"></span>Harness</div>
+            <div class="nav__g">HARNESS</div>
+            <div class="nav__i">Overview</div>
+            <div class="nav__i on">Enrollments</div>
+            <div class="nav__i">Endpoints</div>
+          </div>
+          <div class="main" style="position:relative">
+            <div class="topbar"><span class="crumb">主页 / Harness / Enrollments / aba-lab-03</span><span class="ava">A</span></div>
+            <div class="pg">
+              <div class="half" style="gap:0;border:1px solid var(--line);border-radius:var(--r);overflow:hidden;background:var(--surface)">
+                <div style="padding:14px">
+                  <div class="pg__t" style="font-size:13px;margin-bottom:9px">申请详情</div>
+                  <dl class="kv">
+                    <dt>Endpoint</dt><dd class="mono">aba-lab-03</dd>
+                    <dt>类型</dt><dd>aba</dd>
+                    <dt>平台</dt><dd>linux-x86_64</dd>
+                    <dt>签名指纹</dt><dd class="mono">SHA-256 9f2c…4a71</dd>
+                    <dt>KEM 指纹</dt><dd class="mono">SHA-256 1b77…c208</dd>
+                    <dt>申请时间</dt><dd>2026-09-15 14:02</dd>
+                    <dt>来源</dt><dd class="mono">198.51.100.24</dd>
+                    <dt>状态</dt><dd><span class="pill pill--warn">待批准</span></dd>
+                  </dl>
+                  <div class="note note--warn" style="margin-top:11px"><b>凭据封装</b><span>批准后凭据用该端点 KEM 公钥封装下发；Platform 不生成、不保存其私钥。</span></div>
+                </div>
+                <div style="padding:14px;background:var(--surface-2)">
+                  <div class="modal">
+                    <div class="modal__h">确认批准该端点？</div>
+                    <div class="modal__b">
+                      <p style="margin:0 0 9px">批准后 <span class="mono">aba-lab-03</span> 将获得凭据并可用于建立会话。</p>
+                      <dl class="kv">
+                        <dt>需要权限</dt><dd class="mono">harness:approve</dd>
+                        <dt>二次认证</dt><dd>已要求 · 密码 / Passkey</dd>
+                        <dt>审计</dt><dd>写入脱敏记录</dd>
+                      </dl>
+                    </div>
+                    <div class="modal__f"><span class="btn">取消</span><span class="btn btn--pri">二次认证并批准</span></div>
+                  </div>
+                  <div class="note note--info" style="margin-top:11px"><b>不提供</b><span>「记住并跳过」「永久允许该来源」。设备码过期需在 ABA 重新发起。</span></div>
+                </div>
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+      <div class="ann"><b>依据</b><ul>
+        <li>HC.md §9：新增/吊销 Endpoint 需二次 Human Auth。</li>
+        <li>D-013：Platform 不生成、不接收端点私钥。</li>
+      </ul></div>
+    </div>
+
+    <div class="screen">
+      <div class="screen__cap"><h3>P05 · Endpoints 列表</h3><span class="screen__meta">吊销为独立权限与独立入口</span></div>
+      <div class="browser">
+        <div class="browser__bar"><span class="dot3"><i></i><i></i><i></i></span><span class="url">https://platform.example.invalid/admin/harness/endpoints</span></div>
+        <div class="app">
+          <div class="nav">
+            <div class="nav__brand"><span class="nav__logo"></span>Harness</div>
+            <div class="nav__g">HARNESS</div>
+            <div class="nav__i">Overview</div>
+            <div class="nav__i">Enrollments</div>
+            <div class="nav__i on">Endpoints</div>
+            <div class="nav__i">Sessions</div>
+            <div class="nav__i">Delivery</div>
+          </div>
+          <div class="main">
+            <div class="topbar"><span class="crumb">主页 / Harness / Endpoints</span>
+              <span class="pill pill--info">harness:revoke</span><span class="ava">A</span></div>
+            <div class="pg">
+              <div class="pg__h"><div><div class="pg__t">Endpoints</div><div class="pg__d">每个 ABA / HC 安装实例独立密钥、独立证书与吊销状态。</div></div></div>
+              <div class="filters"><span class="inp">搜索 ID / 指纹</span><span class="inp">类型：全部 ▾</span><span class="inp">状态：有效 ▾</span></div>
+              <div class="tbl">
+                <table><thead><tr><th>Endpoint</th><th>类型</th><th>AEC/HEC 序列</th><th>状态</th><th>Key Gen</th><th>最后可见</th><th>操作</th></tr></thead><tbody>
+                  <tr><td class="mono">aba-lab-01</td><td>aba</td><td class="mono">…7c41</td><td><span class="pill pill--ok">有效</span></td><td class="mono">3</td><td>2 分钟前</td><td><span class="btn btn--sm">详情</span></td></tr>
+                  <tr><td class="mono">hc-web-lab</td><td>hc-web</td><td class="mono">…11b0</td><td><span class="pill pill--ok">有效</span></td><td class="mono">3</td><td>刚刚</td><td><span class="btn btn--sm">详情</span> <span class="btn btn--bad btn--sm">吊销</span></td></tr>
+                  <tr><td class="mono">aba-lab-03</td><td>aba</td><td class="mono">…90af</td><td><span class="pill pill--bad">已吊销</span></td><td class="mono">1</td><td>4 天前</td><td><span class="btn btn--sm">详情</span></td></tr>
+                </tbody></table>
+                <div class="pager"><span>共 3 条</span><span class="muted">前端隐藏不授权，后端权限为最终权威</span></div>
+              </div>
+              <div class="note note--bad"><b>吊销不可逆</b><span>吊销会撤销 Token/Ticket、关闭连接、禁止新 Key Package 并触发 Rekey。</span></div>
+            </div>
+          </div>
+        </div>
+      </div>
+      <div class="ann"><b>注意</b><ul>
+        <li>吊销与批准不在同一按钮组，避免误触。</li>
+        <li>无 <span class="mono">harness:revoke</span> 时按钮不渲染，但直连 API 仍被拒绝。</li>
+      </ul></div>
+    </div>
+
+    <div class="screen">
+      <div class="screen__cap"><h3>P06 · Endpoint 详情</h3><span class="screen__meta">凭据、轮换与吊销记录（部分实现）</span></div>
+      <div class="browser">
+        <div class="browser__bar"><span class="dot3"><i></i><i></i><i></i></span><span class="url">https://platform.example.invalid/admin/harness/endpoints/aba-lab-01</span></div>
+        <div class="app">
+          <div class="nav">
+            <div class="nav__brand"><span class="nav__logo"></span>Harness</div>
+            <div class="nav__g">HARNESS</div>
+            <div class="nav__i">Endpoints</div>
+          </div>
+          <div class="main">
+            <div class="topbar"><span class="crumb">主页 / Harness / Endpoints / aba-lab-01</span><span class="ava">A</span></div>
+            <div class="pg">
+              <div class="pg__h"><div><div class="pg__t mono" style="font-family:var(--mono)">aba-lab-01</div>
+                <div class="pg__d">aba · linux-x86_64 · 注册于 2026-09-15</div></div>
+                <div class="row"><span class="pill pill--ok">有效</span><span class="pill pill--ok">在线</span></div></div>
+              <div class="grid g3">
+                <div class="card"><div class="card__h">凭据</div><div class="card__b"><dl class="kv">
+                  <dt>AEC 序列</dt><dd class="mono">…7c41</dd>
+                  <dt>签名指纹</dt><dd class="mono">9f2c…4a71</dd>
+                  <dt>KEM 指纹</dt><dd class="mono">1b77…c208</dd>
+                  <dt>签发 CA</dt><dd>UCA-1</dd>
+                  <dt>到期</dt><dd>2026-12-14</dd>
+                </dl><div class="bar" style="margin-top:9px"><i style="width:8%"></i></div></div></div>
+                <div class="card"><div class="card__h">运行时</div><div class="card__b"><dl class="kv">
+                  <dt>ABA 版本</dt><dd class="mono">0.1.0</dd>
+                  <dt>协议</dt><dd class="mono">AWP v1 · suite 0001</dd>
+                  <dt>Runtime 数</dt><dd>2</dd>
+                  <dt>Workspace 数</dt><dd>3</dd>
+                  <dt>Journal 使用</dt><dd>128 / 4096</dd>
+                </dl>
+                <div class="note note--info" style="margin-top:10px"><b>不下发</b><span>Platform 不保存 Runtime 的 command/args/env 与 Workspace 真实路径。</span></div>
+                </div></div>
+                <div class="card"><div class="card__h">会话</div><div class="card__b"><dl class="kv">
+                  <dt>活动</dt><dd>2</dd>
+                  <dt>空闲</dt><dd>1</dd>
+                  <dt>最近关闭</dt><dd>2026-09-15 11:20</dd>
+                  <dt>UNCERTAIN</dt><dd>0</dd>
+                </dl>
+                <div class="row" style="margin-top:10px"><span class="btn btn--sm">查看会话</span><span class="btn btn--sm">轮换</span><span class="btn btn--bad btn--sm">吊销</span></div>
+                </div></div>
+              </div>
+              <div class="card"><div class="card__h">事件时间线</div><div class="card__b">
+                <div class="tl"><div class="tl__d"><div class="tl__n ok"></div><div class="tl__l"></div></div>
+                  <div class="tl__b"><div class="tl__t">注册获批</div><div class="muted">2026-09-15 14:05 · 操作人 admin · 二次认证通过</div></div></div>
+                <div class="tl"><div class="tl__d"><div class="tl__n ok"></div><div class="tl__l"></div></div>
+                  <div class="tl__b"><div class="tl__t">凭据下发并被端点解封</div><div class="muted">2026-09-15 14:05 · AEC …7c41</div></div></div>
+                <div class="tl"><div class="tl__d"><div class="tl__n"></div></div>
+                  <div class="tl__b"><div class="tl__t">会话密钥轮换</div><div class="muted">2026-09-15 14:11 · gen 2 → gen 3</div></div></div>
+              </div></div>
+            </div>
+          </div>
+        </div>
+      </div>
+      <div class="ann"><b>实现状态</b><ul>
+        <li>凭据字段已存在；轮换入口与完整事件时间线属未实现部分（P11 依赖）。</li>
+      </ul></div>
+    </div>
+
+    <div class="screen">
+      <div class="screen__cap"><h3>P07 · Sessions 列表</h3><span class="screen__meta">平台只见路由关系与 Generation</span></div>
+      <div class="browser">
+        <div class="browser__bar"><span class="dot3"><i></i><i></i><i></i></span><span class="url">https://platform.example.invalid/admin/harness/sessions</span></div>
+        <div class="app">
+          <div class="nav">
+            <div class="nav__brand"><span class="nav__logo"></span>Harness</div>
+            <div class="nav__g">HARNESS</div>
+            <div class="nav__i">Overview</div>
+            <div class="nav__i">Enrollments</div>
+            <div class="nav__i">Endpoints</div>
+            <div class="nav__i on">Sessions</div>
+            <div class="nav__i">Delivery</div>
+          </div>
+          <div class="main">
+            <div class="topbar"><span class="crumb">主页 / Harness / Sessions</span><span class="pill pill--info">harness:read</span><span class="ava">A</span></div>
+            <div class="pg">
+              <div class="pg__h"><div><div class="pg__t">Sessions</div><div class="pg__d">会话路由关系、状态与 Key Generation。Platform 不持有 SRK，也不展示会话内容。</div></div></div>
+              <div class="tabs"><span class="on">全部 3</span><span>活动 2</span><span>空闲 1</span><span>已关闭</span></div>
+              <div class="tbl">
+                <table><thead><tr><th>Session</th><th>ABA</th><th>HC</th><th>Key Gen</th><th>通道</th><th>状态</th><th>最近活动</th></tr></thead><tbody>
+                  <tr><td class="mono">sess-a41f</td><td class="mono">aba-lab-01</td><td class="mono">hc-web-lab</td><td class="mono">3</td><td class="mono">ch-01 / ch-02</td><td><span class="pill pill--info">活动</span></td><td>刚刚</td></tr>
+                  <tr><td class="mono">sess-77c2</td><td class="mono">aba-lab-01</td><td class="mono">hc-web-lab</td><td class="mono">1</td><td class="mono">ch-01 / ch-02</td><td><span class="pill">空闲</span></td><td>11 分钟前</td></tr>
+                  <tr><td class="mono">sess-0b93</td><td class="mono">aba-lab-02</td><td class="mono">hc-web-lab</td><td class="mono">1</td><td class="mono">ch-03</td><td><span class="pill pill--ok">已关闭</span></td><td>3 天前</td></tr>
+                </tbody></table>
+                <div class="pager"><span>共 3 条</span><span class="muted">Opaque 模式下不提供标题检索与内容索引</span></div>
+              </div>
+              <div class="note note--info"><b>标题策略</b><span>标题默认由用户手动输入或仅 HC 本地显示；不得通过解密内容生成服务端标题。</span></div>
+            </div>
+          </div>
+        </div>
+      </div>
+      <div class="ann"><b>依据</b><ul>
+        <li>D-015：Platform 只能做密文中继与元数据运营。</li>
+        <li>HC.md §21：服务端标题只能来自用户显式上传的非敏感元数据。</li>
+      </ul></div>
+    </div>
+
+    <div class="screen">
+      <div class="screen__cap"><h3>P08 · Session 详情</h3><span class="screen__meta">通道、ACK 游标与 Key Package 状态（部分实现）</span></div>
+      <div class="browser">
+        <div class="browser__bar"><span class="dot3"><i></i><i></i><i></i></span><span class="url">https://platform.example.invalid/admin/harness/sessions/sess-a41f</span></div>
+        <div class="app">
+          <div class="nav">
+            <div class="nav__brand"><span class="nav__logo"></span>Harness</div>
+            <div class="nav__g">HARNESS</div>
+            <div class="nav__i">Sessions</div>
+          </div>
+          <div class="main">
+            <div class="topbar"><span class="crumb">主页 / Harness / Sessions / sess-a41f</span><span class="ava">A</span></div>
+            <div class="pg">
+              <div class="pg__h"><div><div class="pg__t mono" style="font-family:var(--mono)">sess-a41f</div>
+                <div class="pg__d">aba-lab-01 ⇄ hc-web-lab · 创建于 2026-09-15 14:11</div></div>
+                <div class="row"><span class="pill pill--info">活动</span><span class="pill">Opaque</span></div></div>
+              <div class="grid g4">
+                <div class="stat"><div class="stat__k">Key Generation</div><div class="stat__v">3</div><span class="pill pill--ok">ACTIVE</span></div>
+                <div class="stat"><div class="stat__k">已持久化帧</div><div class="stat__v">469</div><span class="muted">ch-01 + ch-02</span></div>
+                <div class="stat"><div class="stat__k">已 ACK</div><div class="stat__v">467</div><span class="pill pill--warn">积压 2</span></div>
+                <div class="stat"><div class="stat__k">重放</div><div class="stat__v">0</div><span class="muted">无缺口</span></div>
+              </div>
+              <div class="grid g2">
+                <div class="card"><div class="card__h">通道与游标</div><div class="card__b">
+                  <div class="lead"><span class="mono">ch-01 · HC → ABA</span><span class="pill pill--ok">highest 128</span></div>
+                  <div class="lead" style="margin-top:7px"><span class="mono">ch-02 · ABA → HC</span><span class="pill pill--warn">highest 339 · 缺口 无</span></div>
+                  <div class="note note--info" style="margin-top:10px"><b>ACK 语义</b><span>ACK 表示安全持久接收，不等于本地 Agent 已执行。本页不提供「重试执行」。</span></div>
+                </div></div>
+                <div class="card"><div class="card__h">密钥与凭据</div><div class="card__b"><dl class="kv">
+                  <dt>SRK 持有者</dt><dd>ABA 本地（Platform 不可解密）</dd>
+                  <dt>Key Package</dt><dd>已分发给 hc-web-lab · 已 ACK</dd>
+                  <dt>方向密钥</dt><dd>每方向独立 · 每端点独立</dd>
+                  <dt>Nonce 规则</dt><dd>4 字节随机前缀 + 8 字节大端序号</dd>
+                  <dt>上一代</dt><dd class="mono">gen 2 · 待退役</dd>
+                </dl>
+                <div class="row" style="margin-top:10px"><span class="btn btn--sm">强制 Rekey</span><span class="btn btn--bad btn--sm">关闭会话</span></div>
+                </div></div>
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+      <div class="ann"><b>约束</b><ul>
+        <li>本页任何操作都不得解密 Payload 或展示 Method / Tool 参数。</li>
+        <li>强制 Rekey 属未实现范围，需先确定旧代退役时序。</li>
+      </ul></div>
+    </div>
+
+    <div class="screen">
+      <div class="screen__cap"><h3>P09 · Delivery 投递</h3><span class="screen__meta">只做投递层操作；无「重试执行」</span></div>
+      <div class="browser">
+        <div class="browser__bar"><span class="dot3"><i></i><i></i><i></i></span><span class="url">https://platform.example.invalid/admin/harness/delivery</span></div>
+        <div class="app">
+          <div class="nav">
+            <div class="nav__brand"><span class="nav__logo"></span>Harness</div>
+            <div class="nav__g">HARNESS</div>
+            <div class="nav__i">Overview</div>
+            <div class="nav__i">Enrollments</div>
+            <div class="nav__i">Endpoints</div>
+            <div class="nav__i">Sessions</div>
+            <div class="nav__i on">Delivery</div>
+          </div>
+          <div class="main">
+            <div class="topbar"><span class="crumb">主页 / Harness / Delivery</span><span class="pill pill--info">harness:operate</span><span class="ava">A</span></div>
+            <div class="pg">
+              <div class="pg__h"><div><div class="pg__t">Delivery</div><div class="pg__d">密文帧投递、ACK 游标与背压。Payload 为密文，本页不解析内容。</div></div></div>
+              <div class="grid g4">
+                <div class="stat"><div class="stat__k">活跃通道</div><div class="stat__v">3</div><span class="pill pill--ok">全部认证</span></div>
+                <div class="stat"><div class="stat__k">已持久化</div><div class="stat__v">469</div><span class="muted">at-least-once</span></div>
+                <div class="stat"><div class="stat__k">积压</div><div class="stat__v">2</div><span class="pill pill--warn">ch-02</span></div>
+                <div class="stat"><div class="stat__k">重放</div><div class="stat__v">0</div><span class="muted">无缺口</span></div>
+              </div>
+              <div class="tbl">
+                <table><thead><tr><th>Channel</th><th>Session</th><th>方向</th><th>已持久化</th><th>已 ACK</th><th>积压</th><th>背压</th><th>操作</th></tr></thead><tbody>
+                  <tr><td class="mono">ch-01</td><td class="mono">sess-a41f</td><td>HC → ABA</td><td class="mono">128</td><td class="mono">128</td><td class="mono">0</td><td><span class="pill pill--ok">正常</span></td><td class="row"><span class="btn btn--sm">暂停</span></td></tr>
+                  <tr><td class="mono">ch-02</td><td class="mono">sess-a41f</td><td>ABA → HC</td><td class="mono">341</td><td class="mono">339</td><td class="mono">2</td><td><span class="pill pill--warn">积压</span></td><td class="row"><span class="btn btn--sm">暂停</span><span class="btn btn--sm btn--pri">恢复</span></td></tr>
+                  <tr><td class="mono">ch-03</td><td class="mono">sess-0b93</td><td>ABA → HC</td><td class="mono">57</td><td class="mono">57</td><td class="mono">0</td><td><span class="pill">已关闭</span></td><td class="muted">—</td></tr>
+                </tbody></table>
+                <div class="pager"><span>保留策略：按 Tenant/Session 分区，加配额</span><span class="muted">Frame 明文不可查看</span></div>
+              </div>
+              <div class="note note--warn"><b>暂停的影响</b><span>暂停通道会推迟用户设备上的投递；建议二次确认。</span></div>
+            </div>
+          </div>
+        </div>
+      </div>
+      <div class="ann"><b>依据</b><ul>
+        <li>D-028：Platform 提供至少一次交付，端点按 Message ID / Channel / Sequence 去重。</li>
+        <li>D-027：ACP Gateway 与通知 Hub 分离，本页不涉及通知 WebSocket。</li>
+      </ul></div>
+    </div>
+
+    <div class="screen">
+      <div class="screen__cap"><h3>P10 · 证书与 Trust Manifest</h3><span class="screen__meta">未实现；跨实例信任根与签发域</span></div>
+      <div class="browser">
+        <div class="browser__bar"><span class="dot3"><i></i><i></i><i></i></span><span class="url">https://platform.example.invalid/admin/harness/trust</span></div>
+        <div class="app">
+          <div class="nav">
+            <div class="nav__brand"><span class="nav__logo"></span>Harness</div>
+            <div class="nav__g">HARNESS</div>
+            <div class="nav__i">Overview</div>
+            <div class="nav__i">Endpoints</div>
+            <div class="nav__i on">证书与轮换</div>
+          </div>
+          <div class="main">
+            <div class="topbar"><span class="crumb">主页 / Harness / 证书与轮换</span><span class="pill pill--plan">未实现</span><span class="ava">A</span></div>
+            <div class="pg">
+              <div class="pg__h"><div><div class="pg__t">信任与证书</div><div class="pg__d">Root/UCA、Endpoint 证书、Trust Manifest 版本与到期扫描。</div></div></div>
+              <div class="grid g2">
+                <div class="card"><div class="card__h">Trust Manifest<span class="pill pill--ok">rev 12</span></div><div class="card__b"><dl class="kv">
+                  <dt>当前 Root</dt><dd class="mono">root-1 · 2027-03-01 到期</dd>
+                  <dt>下一个 Root</dt><dd class="mono">root-2 · 已交叉签名</dd>
+                  <dt>在线 Signer</dt><dd>UCA-1 · KMS 后端</dd>
+                  <dt>允许 Suite</dt><dd class="mono">0001（唯一）</dd>
+                  <dt>最小客户端版本</dt><dd class="mono">0.1.0</dd>
+                  <dt>Revision 规则</dt><dd>只能单调增加</dd>
+                </dl></div></div>
+                <div class="card"><div class="card__h">签发域（UCA）</div><div class="card__b">
+                  <div class="lead"><span class="mono">UCA-1</span><span class="pill pill--ok">签发中 · 4 张</span></div>
+                  <div class="lead" style="margin-top:7px"><span class="mono">UCA-2（备用）</span><span class="pill">待启用</span></div>
+                  <div class="note note--info" style="margin-top:10px"><b>不托管</b><span>KMS/HSM 只承担 Platform Root/UCA 签名，Endpoint 私钥永不进入 KMS。</span></div>
+                </div></div>
+              </div>
+              <div class="tbl">
+                <table><thead><tr><th>证书</th><th>类型</th><th>持有端点</th><th>序列</th><th>到期</th><th>状态</th></tr></thead><tbody>
+                  <tr><td class="mono">AEC-aba-lab-01</td><td>AEC</td><td class="mono">aba-lab-01</td><td class="mono">…7c41</td><td>2026-12-14</td><td><span class="pill pill--ok">有效</span></td></tr>
+                  <tr><td class="mono">HEC-hc-web-lab</td><td>HEC</td><td class="mono">hc-web-lab</td><td class="mono">…11b0</td><td>2026-12-01</td><td><span class="pill pill--ok">有效</span></td></tr>
+                  <tr><td class="mono">AEC-aba-lab-03</td><td>AEC</td><td class="mono">aba-lab-03</td><td class="mono">…90af</td><td>—</td><td><span class="pill pill--bad">已吊销</span></td></tr>
+                </tbody></table>
+              </div>
+              <div class="note note--warn"><b>回滚防护</b><span>新 Root 未由当前 Root 交叉签名或用户恢复确认时拒绝；Manifest 回滚必须被检测。</span></div>
+            </div>
+          </div>
+        </div>
+      </div>
+      <div class="ann"><b>依据</b><ul>
+        <li>HC.md §10；SECURITY.md 轮换与回滚规则。</li>
+        <li>生产 KMS/HSM Signer Adapter 属未完成项。</li>
+      </ul></div>
+    </div>
+
+    <div class="screen">
+      <div class="screen__cap"><h3>P11 · 轮换任务</h3><span class="screen__meta">未实现；固定扫描任务，非每资产一个 Cron</span></div>
+      <div class="browser">
+        <div class="browser__bar"><span class="dot3"><i></i><i></i><i></i></span><span class="url">https://platform.example.invalid/admin/harness/rotation</span></div>
+        <div class="app">
+          <div class="nav">
+            <div class="nav__brand"><span class="nav__logo"></span>Harness</div>
+            <div class="nav__g">HARNESS</div>
+            <div class="nav__i on">证书与轮换</div>
+          </div>
+          <div class="main">
+            <div class="topbar"><span class="crumb">主页 / Harness / 证书与轮换 / 轮换任务</span><span class="pill pill--plan">未实现</span><span class="ava">A</span></div>
+            <div class="pg">
+              <div class="pg__h"><div><div class="pg__t">轮换任务</div><div class="pg__d">四层资产独立状态机：Root/UCA、Endpoint Credential、Token Family、Session Key。</div></div></div>
+              <div class="grid g4">
+                <div class="stat"><div class="stat__k">待执行</div><div class="stat__v">3</div><span class="muted">next_action_at 排序</span></div>
+                <div class="stat"><div class="stat__k">进行中</div><div class="stat__v">0</div><span class="pill pill--ok">无阻塞</span></div>
+                <div class="stat"><div class="stat__k">30 天内到期</div><div class="stat__v">0</div><span class="muted">证书</span></div>
+                <div class="stat"><div class="stat__k">紧急轮换</div><div class="stat__v">0</div><span class="muted">吊销触发</span></div>
+              </div>
+              <div class="tbl">
+                <table><thead><tr><th>对象</th><th>层级</th><th>下一个动作</th><th>周期</th><th>状态</th><th>操作</th></tr></thead><tbody>
+                  <tr><td class="mono">AEC-aba-lab-01</td><td>Endpoint Credential</td><td>2026-12-07</td><td>90 天</td><td><span class="pill">已排期</span></td><td><span class="btn btn--sm">立即执行</span></td></tr>
+                  <tr><td class="mono">HEC-hc-web-lab</td><td>Endpoint Credential</td><td>2026-11-24</td><td>90 天</td><td><span class="pill">已排期</span></td><td><span class="btn btn--sm">立即执行</span></td></tr>
+                  <tr><td class="mono">sess-a41f gen 3</td><td>Session Key</td><td>2026-09-22</td><td>7 天</td><td><span class="pill pill--info">下一个</span></td><td><span class="btn btn--sm">立即执行</span></td></tr>
+                  <tr><td class="mono">token-family:hc-web-lab</td><td>Token Family</td><td>2026-10-15</td><td>30 天</td><td><span class="pill">已排期</span></td><td><span class="btn btn--sm">立即执行</span></td></tr>
+                </tbody></table>
+                <div class="pager"><span>单一扫描任务驱动 · 多实例需 DB Lease 与幂等</span><span class="muted">不为每个资产创建 Cron</span></div>
+              </div>
+              <div class="note note--info"><b>吊销联动</b><span>吊销 HC 会触发 Token/Ticket/连接失效，并对相关 Session Key 做紧急轮换。</span></div>
+            </div>
+          </div>
+        </div>
+      </div>
+      <div class="ann"><b>依据</b><ul>
+        <li>D-030 固定数量轮换任务；D-031 分层轮换。</li>
+      </ul></div>
+    </div>
+
+    <div class="screen">
+      <div class="screen__cap"><h3>P12 · 审计日志</h3><span class="screen__meta">脱敏；不含 Token / 密钥 / ACP 明文</span></div>
+      <div class="browser">
+        <div class="browser__bar"><span class="dot3"><i></i><i></i><i></i></span><span class="url">https://platform.example.invalid/admin/audit</span></div>
+        <div class="app">
+          <div class="nav">
+            <div class="nav__brand"><span class="nav__logo"></span>Harness</div>
+            <div class="nav__g">HARNESS</div>
+            <div class="nav__i">Overview</div>
+            <div class="nav__g">FOUNDATION</div>
+            <div class="nav__i">用户</div>
+            <div class="nav__i">角色权限</div>
+            <div class="nav__i on">审计日志</div>
+          </div>
+          <div class="main">
+            <div class="topbar"><span class="crumb">主页 / 审计日志</span><span class="ava">A</span></div>
+            <div class="pg">
+              <div class="pg__h"><div><div class="pg__t">审计日志</div><div class="pg__d">管理写操作与安全事件。所有记录已脱敏，不含 Token、Ticket、私钥、SRK 与 ACP 明文。</div></div>
+                <div class="row"><span class="btn">导出 CSV</span></div></div>
+              <div class="filters"><span class="inp">操作人 ▾</span><span class="inp">动作 ▾</span><span class="inp">资源类型 ▾</span><span class="inp">时间范围：近 7 天 ▾</span></div>
+              <div class="tbl">
+                <table><thead><tr><th>时间</th><th>操作人</th><th>动作</th><th>资源</th><th>结果</th><th>来源</th><th>Idempotency-Key</th></tr></thead><tbody>
+                  <tr><td class="mono">14:05:12</td><td>admin</td><td>enrollment.approve</td><td class="mono">aba-lab-03</td><td><span class="pill pill--ok">成功</span></td><td class="mono">203.0.113.7</td><td class="mono">…f41c</td></tr>
+                  <tr><td class="mono">14:03:48</td><td>admin</td><td>endpoint.revoke</td><td class="mono">aba-lab-03</td><td><span class="pill pill--ok">成功</span></td><td class="mono">203.0.113.7</td><td class="mono">…9b02</td></tr>
+                  <tr><td class="mono">13:52:01</td><td>ops</td><td>delivery.pause</td><td class="mono">ch-02</td><td><span class="pill pill--warn">已拒绝</span></td><td class="mono">203.0.113.9</td><td class="mono">…77ae</td></tr>
+                  <tr><td class="mono">11:20:33</td><td>system</td><td>session.rekey</td><td class="mono">sess-a41f</td><td><span class="pill pill--ok">成功</span></td><td class="muted">—</td><td class="muted">—</td></tr>
+                </tbody></table>
+                <div class="pager"><span>共 4 条 · 保留策略由 Foundation 任务管理</span><span class="muted">失败记录同样保留</span></div>
+              </div>
+              <div class="note note--bad"><b>禁止内容</b><span>日志、Trace 与错误不得包含 Token、Ticket、私钥、SRK、ACP 明文、源码或 Tool 参数。</span></div>
+            </div>
+          </div>
+        </div>
+      </div>
+      <div class="ann"><b>依据</b><ul>
+        <li>AGENT.md §5.15；HC.md §24 遥测与日志禁止项。</li>
+      </ul></div>
+    </div>
+
+    <div class="screen">
+      <div class="screen__cap"><h3>P13 · 通知</h3><span class="screen__meta">普通 JSON 通知 Hub；与 ACP 数据面分离</span></div>
+      <div class="browser">
+        <div class="browser__bar"><span class="dot3"><i></i><i></i><i></i></span><span class="url">https://platform.example.invalid/admin/notifications</span></div>
+        <div class="app">
+          <div class="nav">
+            <div class="nav__brand"><span class="nav__logo"></span>Harness</div>
+            <div class="nav__g">HARNESS</div>
+            <div class="nav__i">Overview</div>
+            <div class="nav__g">FOUNDATION</div>
+            <div class="nav__i on">通知</div>
+          </div>
+          <div class="main">
+            <div class="topbar"><span class="crumb">主页 / 通知</span><span class="ava">A</span></div>
+            <div class="pg">
+              <div class="pg__h"><div><div class="pg__t">通知</div><div class="pg__d">运营提醒。通知是提醒而非可靠消息通道，不含未同意的敏感摘要。</div></div>
+                <div class="row"><span class="btn">全部已读</span><span class="btn">通知设置</span></div></div>
+              <div class="grid g2">
+                <div class="card"><div class="card__h">未读 3</div><div class="card__b" style="display:flex;flex-direction:column;gap:8px">
+                  <div class="lead"><span>新设备待批准 <span class="mono">aba-lab-03</span></span><span class="pill pill--warn">待处理</span></div>
+                  <div class="lead"><span>投递通道 <span class="mono">ch-02</span> 出现积压</span><span class="pill pill--warn">已恢复</span></div>
+                  <div class="lead"><span>端点 <span class="mono">aba-lab-02</span> 离线超过 6 小时</span><span class="pill">提醒</span></div>
+                </div></div>
+                <div class="card"><div class="card__h">通道配置</div><div class="card__b"><dl class="kv">
+                  <dt>站内</dt><dd>已启用</dd>
+                  <dt>邮件</dt><dd>已启用 · 管理员组</dd>
+                  <dt>Webhook</dt><dd>未配置</dd>
+                  <dt>投递保证</dt><dd>尽力而为，不作为权威状态</dd>
+                  <dt>内容策略</dt><dd>不含 Prompt / 文件名 / 命令 / Token</dd>
+                </dl>
+                <div class="note note--info" style="margin-top:10px"><b>权威状态</b><span>点开通知后必须回到对应页面查询权威状态。</span></div>
+                </div></div>
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+      <div class="ann"><b>依据</b><ul>
+        <li>D-027：ACP Gateway 与 mss-boot-admin 通知 WebSocket Hub 分离，不共用 Hub。</li>
+      </ul></div>
+    </div>
+
+    <div class="screen">
+      <div class="screen__cap"><h3>P14 · 用户管理（Foundation）</h3><span class="screen__meta">复用 v1.3.7，不复制源码</span></div>
+      <div class="browser">
+        <div class="browser__bar"><span class="dot3"><i></i><i></i><i></i></span><span class="url">https://platform.example.invalid/admin/users</span></div>
+        <div class="app">
+          <div class="nav">
+            <div class="nav__brand"><span class="nav__logo"></span>Harness</div>
+            <div class="nav__g">HARNESS</div>
+            <div class="nav__i">Overview</div>
+            <div class="nav__g">FOUNDATION</div>
+            <div class="nav__i on">用户</div>
+            <div class="nav__i">角色权限</div>
+            <div class="nav__i">菜单</div>
+            <div class="nav__i">审计日志</div>
+          </div>
+          <div class="main">
+            <div class="topbar"><span class="crumb">主页 / 用户</span><span class="ava">A</span></div>
+            <div class="pg">
+              <div class="pg__h"><div><div class="pg__t">用户</div><div class="pg__d">Foundation 用户体系。Harness 的端点与授权以此为基础但不共享身份。</div></div>
+                <div class="row"><span class="btn btn--pri">新建用户</span></div></div>
+              <div class="tbl">
+                <table><thead><tr><th>用户名</th><th>邮箱</th><th>角色</th><th>状态</th><th>最近登录</th><th>操作</th></tr></thead><tbody>
+                  <tr><td>admin</td><td class="mono">admin@example.invalid</td><td>平台管理员</td><td><span class="pill pill--ok">启用</span></td><td>刚刚</td><td class="row"><span class="btn btn--sm">编辑</span><span class="btn btn--sm">重置密码</span></td></tr>
+                  <tr><td>ops</td><td class="mono">ops@example.invalid</td><td>运维</td><td><span class="pill pill--ok">启用</span></td><td>2 小时前</td><td class="row"><span class="btn btn--sm">编辑</span></td></tr>
+                  <tr><td>auditor</td><td class="mono">auditor@example.invalid</td><td>审计只读</td><td><span class="pill">停用</span></td><td>2026-09-01</td><td class="row"><span class="btn btn--sm">编辑</span></td></tr>
+                </tbody></table>
+                <div class="pager"><span>共 3 条</span><span class="muted">用户身份 ≠ Endpoint 身份</span></div>
+              </div>
+              <div class="note note--info"><b>Thin Host</b><span>本页属 Foundation 受管文件，Harness 不修改其源码；扩展通过 business 模块与路由注册完成。</span></div>
+            </div>
+          </div>
+        </div>
+      </div>
+      <div class="ann"><b>依据</b><ul>
+        <li>AGENT.md §3：platform/ 为 Thin Host，禁止复制 Foundation 源码。</li>
+      </ul></div>
+    </div>
+
+    <div class="screen">
+      <div class="screen__cap"><h3>P15 · 角色与权限（Foundation）</h3><span class="screen__meta">harness:* 四项权限的实际绑定处</span></div>
+      <div class="browser">
+        <div class="browser__bar"><span class="dot3"><i></i><i></i><i></i></span><span class="url">https://platform.example.invalid/admin/roles</span></div>
+        <div class="app">
+          <div class="nav">
+            <div class="nav__brand"><span class="nav__logo"></span>Harness</div>
+            <div class="nav__g">FOUNDATION</div>
+            <div class="nav__i">用户</div>
+            <div class="nav__i on">角色权限</div>
+            <div class="nav__i">菜单</div>
+          </div>
+          <div class="main">
+            <div class="topbar"><span class="crumb">主页 / 角色权限</span><span class="ava">A</span></div>
+            <div class="pg">
+              <div class="pg__h"><div><div class="pg__t">角色与权限</div><div class="pg__d">后端权限是最终权威；前端隐藏不授权。</div></div>
+                <div class="row"><span class="btn btn--pri">新建角色</span></div></div>
+              <div class="grid g3">
+                <div class="card"><div class="card__h">平台管理员</div><div class="card__b" style="display:flex;flex-direction:column;gap:5px">
+                  <span class="pill pill--ok">harness:read</span><span class="pill pill--ok">harness:operate</span>
+                  <span class="pill pill--ok">harness:approve</span><span class="pill pill--ok">harness:revoke</span>
+                  <span class="muted" style="font-size:11px">3 个用户</span></div></div>
+                <div class="card"><div class="card__h">运维</div><div class="card__b" style="display:flex;flex-direction:column;gap:5px">
+                  <span class="pill pill--ok">harness:read</span><span class="pill pill--ok">harness:operate</span>
+                  <span class="pill">harness:approve（未授）</span><span class="pill">harness:revoke（未授）</span>
+                  <span class="muted" style="font-size:11px">1 个用户</span></div></div>
+                <div class="card"><div class="card__h">审计只读</div><div class="card__b" style="display:flex;flex-direction:column;gap:5px">
+                  <span class="pill pill--ok">harness:read</span>
+                  <span class="pill">其余未授</span>
+                  <span class="muted" style="font-size:11px">1 个用户</span></div></div>
+              </div>
+              <div class="tbl">
+                <table><thead><tr><th>权限码</th><th>允许的操作</th><th>影响页面</th></tr></thead><tbody>
+                  <tr><td class="mono">harness:read</td><td>只读查看列表与详情</td><td>Overview、Sessions、Delivery</td></tr>
+                  <tr><td class="mono">harness:operate</td><td>投递暂停/恢复等日常操作</td><td>Delivery</td></tr>
+                  <tr><td class="mono">harness:approve</td><td>批准 Enrollment 等敏感变更</td><td>Enrollments</td></tr>
+                  <tr><td class="mono">harness:revoke</td><td>吊销 Endpoint / Credential</td><td>Endpoints</td></tr>
+                </tbody></table>
+              </div>
+              <div class="note note--warn"><b>拒绝路径</b><span>缺少权限时后端返回 403；前端不渲染控件只是体验优化。</span></div>
+            </div>
+          </div>
+        </div>
+      </div>
+      <div class="ann"><b>依据</b><ul>
+        <li>AGENT.md §3.7；M1 验证报告中的授权 Migration、路由绑定与拒绝测试。</li>
+      </ul></div>
+    </div>
+
+    <div class="screen">
+      <div class="screen__cap"><h3>P16 · 菜单与路由（Foundation）</h3><span class="screen__meta">Harness 路由与中英文 Locale 维护处</span></div>
+      <div class="browser">
+        <div class="browser__bar"><span class="dot3"><i></i><i></i><i></i></span><span class="url">https://platform.example.invalid/admin/menus</span></div>
+        <div class="app">
+          <div class="nav">
+            <div class="nav__brand"><span class="nav__logo"></span>Harness</div>
+            <div class="nav__g">FOUNDATION</div>
+            <div class="nav__i">用户</div>
+            <div class="nav__i">角色权限</div>
+            <div class="nav__i on">菜单</div>
+          </div>
+          <div class="main">
+            <div class="topbar"><span class="crumb">主页 / 菜单</span><span class="ava">A</span></div>
+            <div class="pg">
+              <div class="pg__h"><div><div class="pg__t">菜单与路由</div><div class="pg__d">Harness 业务页面在 Foundation 菜单体系中的注册位置。</div></div>
+                <div class="row"><span class="btn btn--pri">新增菜单</span></div></div>
+              <div class="tbl">
+                <table><thead><tr><th>名称（zh-CN / en-US）</th><th>路径</th><th>权限</th><th>排序</th><th>状态</th></tr></thead><tbody>
+                  <tr><td>总览 / Overview</td><td class="mono">/harness/overview</td><td class="mono">harness:read</td><td>10</td><td><span class="pill pill--ok">显示</span></td></tr>
+                  <tr><td>注册申请 / Enrollments</td><td class="mono">/harness/enrollments</td><td class="mono">harness:approve</td><td>20</td><td><span class="pill pill--ok">显示</span></td></tr>
+                  <tr><td>端点 / Endpoints</td><td class="mono">/harness/endpoints</td><td class="mono">harness:revoke</td><td>30</td><td><span class="pill pill--ok">显示</span></td></tr>
+                  <tr><td>会话 / Sessions</td><td class="mono">/harness/sessions</td><td class="mono">harness:read</td><td>40</td><td><span class="pill pill--ok">显示</span></td></tr>
+                  <tr><td>投递 / Delivery</td><td class="mono">/harness/delivery</td><td class="mono">harness:operate</td><td>50</td><td><span class="pill pill--ok">显示</span></td></tr>
+                  <tr><td>证书与轮换 / Trust</td><td class="mono">/harness/trust</td><td class="mono">harness:read</td><td>60</td><td><span class="pill">隐藏（未实现）</span></td></tr>
+                </tbody></table>
+              </div>
+              <div class="note note--warn"><b>不建第二套体系</b><span>Harness 不新增与 Foundation 并行的导航或路由；服务路径投影与中英文 Locale 同步维护。</span></div>
+            </div>
+          </div>
+        </div>
+      </div>
+      <div class="ann"><b>依据</b><ul>
+        <li>AGENT.md §3.6：手写前端放 business/，同时维护路由、服务路径投影与 Locale。</li>
+      </ul></div>
+    </div>
+
+    <div class="screen">
+      <div class="screen__cap"><h3>P17 · 系统健康</h3><span class="screen__meta">安全依赖不可用时必须 Fail Closed</span></div>
+      <div class="browser">
+        <div class="browser__bar"><span class="dot3"><i></i><i></i><i></i></span><span class="url">https://platform.example.invalid/admin/status</span></div>
+        <div class="app">
+          <div class="nav">
+            <div class="nav__brand"><span class="nav__logo"></span>Harness</div>
+            <div class="nav__g">HARNESS</div>
+            <div class="nav__i">Overview</div>
+            <div class="nav__g">FOUNDATION</div>
+            <div class="nav__i on">系统健康</div>
+          </div>
+          <div class="main">
+            <div class="topbar"><span class="crumb">主页 / 系统健康</span><span class="ava">A</span></div>
+            <div class="pg">
+              <div class="pg__h"><div><div class="pg__t">系统健康</div><div class="pg__d">依赖状态与就绪检查。Redis/DB/KMS 不可用时不得静默关闭验证。</div></div></div>
+              <div class="grid g4">
+                <div class="stat"><div class="stat__k">数据库</div><div class="stat__v" style="font-size:14px">正常</div><span class="pill pill--ok">连接池 12/50</span></div>
+                <div class="stat"><div class="stat__k">Redis / 共享缓存</div><div class="stat__v" style="font-size:14px">正常</div><span class="pill pill--ok">Ticket / Nonce 可用</span></div>
+                <div class="stat"><div class="stat__k">KMS / Signer</div><div class="stat__v" style="font-size:14px">正常</div><span class="pill pill--ok">UCA-1</span></div>
+                <div class="stat"><div class="stat__k">就绪检查</div><div class="stat__v" style="font-size:14px">Ready</div><span class="pill pill--ok">唯一索引校验通过</span></div>
+              </div>
+              <div class="grid g2">
+                <div class="card"><div class="card__h">关键索引与约束</div><div class="card__b"><dl class="kv">
+                  <dt>Endpoint 唯一索引</dt><dd><span class="pill pill--ok">列集合与顺序匹配</span></dd>
+                  <dt>Frame 唯一性</dt><dd><span class="pill pill--ok">(session, gen, dir, seq)</span></dd>
+                  <dt>Enrollment 唯一性</dt><dd><span class="pill pill--ok">通过</span></dd>
+                  <dt>Migration 状态</dt><dd>显式前向 · 已应用 14 / 14</dd>
+                </dl></div></div>
+                <div class="card"><div class="card__h">Fail Closed 行为</div><div class="card__b">
+                  <div class="note note--bad"><b>依赖不可用</b><span>拒绝新连接与受保护操作，不降级为「跳过验证」。</span></div>
+                  <div class="note note--warn" style="margin-top:9px"><b>未知协议版本</b><span>未知 Wire Major / Crypto Suite / Critical Flag 一律拒绝。</span></div>
+                  <div class="note note--info" style="margin-top:9px"><b>未执行</b><span>负向安全、故障注入与容量测试尚未进行。</span></div>
+                </div></div>
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+      <div class="ann"><b>依据</b><ul>
+        <li>AGENT.md §5.16/§5.17；M1 验证报告中的 Readiness 索引校验。</li>
+      </ul></div>
+    </div>
+
+    <div class="screen">
+      <div class="screen__cap"><h3>P18 · 403 / 错误页</h3><span class="screen__meta">稳定错误码 + 下一步动作</span></div>
+      <div class="browser">
+        <div class="browser__bar"><span class="dot3"><i></i><i></i><i></i></span><span class="url">https://platform.example.invalid/admin/harness/delivery</span></div>
+        <div class="app">
+          <div class="nav">
+            <div class="nav__brand"><span class="nav__logo"></span>Harness</div>
+            <div class="nav__g">HARNESS</div>
+            <div class="nav__i">Overview</div>
+            <div class="nav__i">Delivery</div>
+          </div>
+          <div class="main">
+            <div class="topbar"><span class="crumb">主页 / Harness / Delivery</span><span class="ava">o</span></div>
+            <div class="pg">
+              <div class="grid g2">
+                <div class="card"><div class="card__h">403 Forbidden</div><div class="card__b">
+                  <div class="note note--warn"><b>无权限</b><span>当前账号缺少 <span class="mono">harness:operate</span>，无法执行投递暂停/恢复。请联系管理员分配角色。</span></div>
+                  <dl class="kv" style="margin-top:11px">
+                    <dt>错误码</dt><dd class="mono">HARNESS_PERMISSION_DENIED</dd>
+                    <dt>请求 ID</dt><dd class="mono">req-8f21c4</dd>
+                    <dt>下一步</dt><dd>联系管理员，或改用只读账号</dd>
+                  </dl>
+                  <div class="row" style="margin-top:11px"><span class="btn">返回总览</span><span class="btn">复制请求 ID</span></div>
+                </div></div>
+                <div class="card"><div class="card__h">加载失败（可重试）</div><div class="card__b">
+                  <div class="note note--bad"><b>依赖不可用</b><span>无法读取投递状态：共享缓存暂时不可用。系统已停止相关受保护操作，不会静默降级。</span></div>
+                  <dl class="kv" style="margin-top:11px">
+                    <dt>错误码</dt><dd class="mono">HARNESS_DEPENDENCY_UNAVAILABLE</dd>
+                    <dt>请求 ID</dt><dd class="mono">req-3d90aa</dd>
+                    <dt>下一步</dt><dd>稍后重试；持续失败请联系管理员</dd>
+                  </dl>
+                  <div class="row" style="margin-top:11px"><span class="btn btn--pri">重试</span></div>
+                </div></div>
+              </div>
+              <div class="card"><div class="card__h">404 / 空态</div><div class="card__b">
+                <div class="empty">未找到该 Endpoint。<br>它可能已被吊销或从未注册。</div>
+              </div></div>
+              <div class="note note--info"><b>不泄露内部信息</b><span>错误页不展示堆栈、SQL、真实本地路径、密钥材料或内部主机名。</span></div>
+            </div>
+          </div>
+        </div>
+      </div>
+      <div class="ann"><b>依据</b><ul>
+        <li>HC.md §23 错误展示原则（稳定错误码映射安全文案）。</li>
+        <li>M1 验证报告中的 403 禁止态浏览器验收。</li>
+      </ul></div>
+    </div>
+
+  </div>
+
+</div>
+</body>
+</html>
