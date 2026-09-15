@@ -66,6 +66,7 @@ pub struct Supervisor {
 pub(super) struct Scope {
     supervisor: Supervisor,
     record: Record,
+    cleanup_on_drop: bool,
 }
 
 fn unavailable<T>(_: T) -> ProcessError {
@@ -304,6 +305,7 @@ impl Supervisor {
         Ok(Scope {
             supervisor: self.clone(),
             record,
+            cleanup_on_drop: true,
         })
     }
 
@@ -377,6 +379,30 @@ impl Supervisor {
     }
 
     fn close_record(&self, record: &Record) -> Result<(), ProcessError> {
+        self.close_record_inner(record, true)
+    }
+
+    /// Explicit local diagnostic: persist the real close transition but leave its empty
+    /// directory, so a fresh process can test the post-commit/pre-removal recovery cut.
+    /// This creates a new non-executing scope and never changes an existing runtime.
+    pub fn probe_interrupted_retirement(
+        &self,
+        runtime: &RuntimeProfile,
+        workspace: &WorkspaceProfile,
+    ) -> Result<(), ProcessError> {
+        let mut id = [0; 16];
+        OsRng.fill_bytes(&mut id);
+        let mut scope = self.prepare(runtime, workspace, id)?;
+        self.close_record_inner(&scope.record, false)?;
+        scope.cleanup_on_drop = false;
+        Ok(())
+    }
+
+    fn close_record_inner(
+        &self,
+        record: &Record,
+        remove_directory: bool,
+    ) -> Result<(), ProcessError> {
         self.verify_delegation(record)?;
         {
             let registry = self.registry.lock().map_err(unavailable)?;
@@ -393,7 +419,9 @@ impl Supervisor {
             }
             if current.closed {
                 drop(registry);
-                if let Some(group) = self.closed_scope_remnant(record)? {
+                if let Some(group) = self.closed_scope_remnant(record)?
+                    && remove_directory
+                {
                     fs::remove_dir(group).map_err(unavailable)?;
                 }
                 return Ok(());
@@ -464,7 +492,8 @@ impl Supervisor {
         registry.state = next;
         registry.leases.remove(&record.run);
         // Empty scope may stay after a failure. Never remove a different/reused inode.
-        if record.boot == self.boot
+        if remove_directory
+            && record.boot == self.boot
             && let Ok(metadata) = fs::symlink_metadata(&group)
             && metadata.dev() == record.device
             && metadata.ino() == record.inode
@@ -812,7 +841,9 @@ pub fn enter_and_exec(
 
 impl Drop for Scope {
     fn drop(&mut self) {
-        let _ = self.close();
+        if self.cleanup_on_drop {
+            let _ = self.close();
+        }
     }
 }
 

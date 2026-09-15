@@ -53,6 +53,13 @@ enum Command {
         insecure_loopback_development: bool,
     },
     #[cfg(target_os = "linux")]
+    ScopeProbeRetirement {
+        #[arg(long)]
+        config: PathBuf,
+        #[arg(long)]
+        insecure_loopback_development: bool,
+    },
+    #[cfg(target_os = "linux")]
     #[command(hide = true)]
     ScopeRuntime {
         #[arg(long)]
@@ -213,6 +220,43 @@ fn execute(cli: Cli) -> Result<(), Box<dyn std::error::Error>> {
                 .ok_or("scope reconciliation requires isolation")?;
             let _supervisor = aba::process::supervision::Supervisor::open(isolation)?;
             println!("Recorded process scopes reconciled; no runtime was started.");
+        }
+        #[cfg(target_os = "linux")]
+        Command::ScopeProbeRetirement {
+            config: path,
+            insecure_loopback_development,
+        } => {
+            let config =
+                AgentConfig::load_with_loopback_development(&path, insecure_loopback_development)?;
+            let isolation = config
+                .isolation
+                .as_ref()
+                .ok_or("retirement probe requires isolation")?;
+            let supervisor = aba::process::supervision::Supervisor::open(isolation)?;
+            let runtime = config
+                .runtimes
+                .first()
+                .ok_or("retirement probe needs a runtime profile")?;
+            let workspace = config
+                .workspaces
+                .first()
+                .ok_or("retirement probe needs a workspace")?;
+            if !workspace.allowed_runtimes.contains(&runtime.id) {
+                return Err("retirement profile is not allowed".into());
+            }
+            supervisor.probe_interrupted_retirement(runtime, workspace)?;
+            drop(supervisor);
+            let mut command = std::process::Command::new(std::env::current_exe()?);
+            command.arg("scope-reconcile").arg("--config").arg(path);
+            if insecure_loopback_development {
+                command.arg("--insecure-loopback-development");
+            }
+            if !command.status()?.success() {
+                return Err("fresh-process retirement did not complete".into());
+            }
+            println!(
+                "Interrupted closed-scope retirement completed in a fresh process without runtime execution."
+            );
         }
         #[cfg(target_os = "linux")]
         Command::ScopeExec {
