@@ -6,6 +6,39 @@
 
 ---
 
+## 2026-09-15 08:50 +08:00 — 不装依赖，改用后端源头回填 Platform 还原稿（v0.2）
+
+分支 `design/prototype-gallery`。本检查点提交 `e5a578a9296408c91bd228091d0df1ea22eb737e`，提交消息 `docs(prototypes): backfill Platform replica from backend migrations (v0.2)`。
+
+触发：上一检查点提出「安装前端依赖以取得 `@mss-boot-io/admin-web` 实包样式」以消除 Platform 外壳的重建差距。用户明确否决：不装依赖，直接做成静态页面。因此改为在仓库内取证。
+
+取证结果（不装依赖也能确认的部分）：
+
+- `platform/internal/modules/harness/module.go` 的 `business.Menu`：`DisplayName: "Harness 平台"`、`DisplayNameEn: "Harness Platform"`、`Icon: "RobotOutlined"`、`Order: 45`、`Path: "/harness"`；模块 `DisplayName: "Harness Platform"`。
+- `platform/internal/modules/harness/authorization_migration.go` 写入的可见菜单记录：`name "Harness Platform"`、`path /harness`、`method GET`、`permission harness:read`、`sort 45`、`HideInMenu false`；以及 4 条隐藏的 `ComponentAccessType` 记录：查看 Harness 状态（`harness:read`）、操作 Harness 会话（`harness:operate`）、审批 Harness 注册（`harness:approve`）、暂停或吊销 Harness 端点（`harness:revoke`），组件路径分别为 `/harness/permissions/{read,operate,approve,revoke}`；另有若干隐藏 API 记录。
+- `docs/roadmap/verification/2026-09-04-platform-m1.md`：本地开发地址 `127.0.0.1:8001`（admin-web）与 `127.0.0.1:8080`（backend）；查询不存在 Session 时的错误态文案为 `session was not found`（英文稳定错误串，非中文包装）；Delivery 方向映射为 `HC_TO_ABA`。
+
+已编写并提交：
+
+- `platform-replica/` v0.1 → **v0.2**：新增 §3「源码级事实」记录上述菜单与权限数据；侧栏增加源码级事实说明栏，并明确同级 `Order≠45` 的 Foundation 菜单仍不可读、未虚构；新增 P7c 错误态（文案取自 M1 实测）；屏数声明与清单同步更正为 10；还原偏差由 6 条扩为 7 条，新增「图标 path 是近似」。
+- `hc-replica/`：更正屏数声明 10 → 11（实际 11 个画面，设计内容未变，按规则不递增版本号，在版本记录里注明修订）。
+- `CONVENTIONS.md` v0.5：修正版本规则自相矛盾 —— 原「页面集合变化 = MAJOR+1」在草案期会直接跳到 `v1.0`，与「禁止 `v1.0`」冲突；现明确 Draft 阶段（MAJOR=0）所有变化一律 MINOR，`v1.0` 仅用于定稿基线。地址规则新增例外：本机回环地址与验收报告记录的本地开发地址可照用，已核实的地址优先于虚构域名。
+- `README.md`（原型总入口）v0.5：清单版本列同步为 `v0.2 / 10 屏`，并追加版本记录行。
+
+已执行检查（本地静态检查，不等于完整验证）：
+
+- 版本/保真度三处一致逐项通过。
+- **新增「HTML 实际画面数 vs 声明的屏数」自检**，并据此修复两处不符（hc-replica 声明 10 实为 11、platform-replica 声明 7 实为 10）。
+- 8 个 HTML 标签配对校验通过。
+- 敏感模式与外部依赖扫描无匹配。
+- 主机字面量仅 `127.0.0.1`（回环）与 RFC 5737 保留网段。
+
+未执行：
+
+- 未安装前端依赖，Platform 顶栏与布局仍为按 antd 6 默认变量重建，未与实包 CSS 对比。
+- 未做与真实浏览器渲染的逐像素对比、真机与无障碍实测。
+- 未创建 PR，未请求评审；未改动任何代码、协议、Migration 或既有 Accepted 契约。
+
 ## 2026-09-15 08:35 +08:00 — 新增 F4 还原稿：HC Web 与 Platform 后台按源码复刻
 
 分支 `design/prototype-gallery`，承接同日 08:20 检查点。本检查点提交 `40eec902a5e66c7e153b20f23dae832e7b55f3b3`，提交消息 `docs(prototypes): add F4 replicas of HC Web and Platform admin`。
