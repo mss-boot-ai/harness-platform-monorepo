@@ -60,6 +60,10 @@ Platform 只负责当前用户/端点授权、最小路由元数据及密文投�
 
 关闭使用整个已验证范围的 `cgroup.kill`，再确认 `cgroup.events` 的 populated=0；leader 退出不提前返回。清理或持久提交失败继续占用工作区。范围记录及关闭 tombstone 保留以处理重启/丢失回执，缺失记录不等于已关闭。该 H1 元数据登记不是 H2 的业务操作存储，不宣称已经具备完整持久 Host。
 
+H1 scope registry v2 在启动前记录原始 delegation root。相同 boot 下，只能在该原位置核对；将同一 state directory 改配到另一服务 root 必须非破坏性地报显式迁移/核对需要，不能根据新 root 的缺失记录确认关闭，也不能越权操作旧 root。确定的新 boot 可按旧进程已不存在的规则退休，但不推断业务成功。历史 v1 或缺失位置绑定的记录一律保留并拒绝自动升级/猜测位置；开发验证使用新目录显式初始化，不能覆盖旧 registry。已持久关闭但尚未删除的已知空 cgroup，仅在位置、inode、shut gate 与空范围同时确认后继续退休。
+
+socketpair 使用正向域/类型/协议白名单：仅 AF_UNIX、protocol=0、SOCK_STREAM/SOCK_SEQPACKET，以及明确的 CLOEXEC/NONBLOCK flags。其余类型（含 SOCK_RAW/DGRAM）、域、协议与 flags 均拒绝；保留真实嵌套 bwrap 所需的私有已连接管道，而非“除了 datagram 都允许”。
+
 Adapter 保留有界的 runtime thread/turn/item 映射。A 结束后开始 B，A 的迟到工具结果仍只更新 A；没有可信归属时进入有界 unknown/诊断状态，不套用当前 awaiting，也不把 Turn 结束当成所有工具成功。
 
 ## H2：一个事务持久化边界

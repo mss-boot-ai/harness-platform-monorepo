@@ -26,6 +26,7 @@ fn fixture() -> Result<(tempfile::TempDir, Supervisor, Record), Box<dyn std::err
         run: run.clone(),
         scope: name,
         boot: "0".repeat(36),
+        delegation_root: Some(root.clone()),
         device: metadata.dev(),
         inode: metadata.ino(),
         workspace: workspace.clone(),
@@ -37,7 +38,7 @@ fn fixture() -> Result<(tempfile::TempDir, Supervisor, Record), Box<dyn std::err
         closed: false,
     };
     let mut state = State {
-        version: 1,
+        version: 2,
         records: BTreeMap::new(),
     };
     state.records.insert(run.clone(), record.clone());
@@ -72,7 +73,7 @@ fn explicit_install_never_overwrites_existing_state() -> Result<(), Box<dyn std:
     assert!(Supervisor::initialize_directory(directory.path()).is_err());
     assert_eq!(
         read_state(&directory.path().join("registry.json"))?.version,
-        1
+        2
     );
     Ok(())
 }
@@ -301,7 +302,7 @@ fn malformed_registry_scope_or_version_fails_closed() -> Result<(), Box<dyn std:
         .scope = "../../another-service".into();
     assert!(validate_state(&state).is_err());
     state.records.clear();
-    state.version = 2;
+    state.version = 3;
     assert!(validate_state(&state).is_err());
     assert!(!valid_scope_name("harness-run-../-scope"));
     Ok(())
@@ -346,6 +347,75 @@ fn parent_child_workspaces_conflict_but_siblings_do_not() {
         Path::new("/srv/harness-workspaces/a"),
         Path::new("/srv/harness-workspaces/ab")
     ));
+}
+
+#[test]
+fn another_delegation_cannot_certify_absence_in_the_original_root()
+-> Result<(), Box<dyn std::error::Error>> {
+    let (directory, mut supervisor, record) = fixture()?;
+    let original = supervisor.config.cgroup_root.clone();
+    let replacement = directory.path().join("different-root");
+    fs::create_dir(&replacement)?;
+    supervisor.config.cgroup_root = replacement;
+    assert_eq!(
+        supervisor.close_run([1; 16]),
+        Err(ProcessError::ScopeMigrationRequired)
+    );
+    assert!(
+        !read_state(&supervisor.config.state_directory.join("registry.json"))?.records[&record.run]
+            .closed
+    );
+    assert!(
+        fs::read(
+            original
+                .join("runs")
+                .join(&record.scope)
+                .join("cgroup.kill")
+        )?
+        .is_empty()
+    );
+    assert_eq!(
+        fs::read(
+            supervisor
+                .config
+                .state_directory
+                .join(format!("{}.gate", record.run))
+        )?,
+        b"open\n"
+    );
+    Ok(())
+}
+
+#[test]
+fn missing_historical_delegation_requires_explicit_migration()
+-> Result<(), Box<dyn std::error::Error>> {
+    let (_directory, supervisor, record) = fixture()?;
+    let mut state = supervisor
+        .registry
+        .lock()
+        .map_err(unavailable)?
+        .state
+        .clone();
+    state
+        .records
+        .get_mut(&record.run)
+        .ok_or("record missing")?
+        .delegation_root = None;
+    assert_eq!(
+        validate_state(&state),
+        Err(ProcessError::ScopeMigrationRequired)
+    );
+    assert_eq!(
+        supervisor.close_record(&state.records[&record.run]),
+        Err(ProcessError::ScopeMigrationRequired)
+    );
+    state.records.clear();
+    state.version = 1;
+    assert_eq!(
+        validate_state(&state),
+        Err(ProcessError::ScopeMigrationRequired)
+    );
+    Ok(())
 }
 
 #[test]

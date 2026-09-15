@@ -1,6 +1,7 @@
 #!/usr/bin/python3
 """Deterministic same-UID isolation fixture. No model, account, or real secret use."""
 import json
+import errno
 import os
 from pathlib import Path
 import signal
@@ -66,6 +67,29 @@ def check_local_relay():
         return not expected
 
 
+def socketpair_allowlist_enforced():
+    for kind in (socket.SOCK_STREAM, socket.SOCK_SEQPACKET):
+        for flags in (0, socket.SOCK_CLOEXEC, socket.SOCK_NONBLOCK, socket.SOCK_CLOEXEC | socket.SOCK_NONBLOCK):
+            left, right = socket.socketpair(socket.AF_UNIX, kind | flags, 0)
+            left.close()
+            right.close()
+    for family, kind, protocol in [
+        (socket.AF_UNIX, socket.SOCK_DGRAM, 0), (socket.AF_UNIX, socket.SOCK_RAW, 0),
+        (socket.AF_UNIX, 0, 0), (socket.AF_UNIX, 4, 0), (socket.AF_UNIX, 6, 0),
+        (socket.AF_UNIX, socket.SOCK_STREAM | 0x20000000, 0),
+        (socket.AF_UNIX, socket.SOCK_STREAM, 1), (socket.AF_INET, socket.SOCK_STREAM, 0),
+    ]:
+        try:
+            pair = socket.socketpair(family, kind, protocol)
+            for item in pair:
+                item.close()
+            return False
+        except OSError as error:
+            if error.errno != errno.EPERM:
+                return False  # Require the filter's explicit denial, not an incidental kernel error.
+    return True
+
+
 def probe():
     canary, port, abstract, host_pid_ns, expected_uid = sys.argv[1:]
     facts = {
@@ -86,6 +110,7 @@ def probe():
         "seqpacket_pairs_stay_private": connected_pair_stays_private(socket.SOCK_SEQPACKET, str(Path.cwd() / "host-seqpacket-sentinel.sock")),
         "isolated_home": os.environ.get("HOME") == "/home/runtime",
         "local_relay_policy_matches_mode": check_local_relay(),
+        "socketpair_domain_type_protocol_allowlist": socketpair_allowlist_enforced(),
     }
     pairs = []
     try:

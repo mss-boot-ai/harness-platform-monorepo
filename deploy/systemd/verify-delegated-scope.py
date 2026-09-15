@@ -204,6 +204,8 @@ try:
         "provider_socket_hidden_from_runtime", "upstream_credential_not_in_runtime_env",
         "isolated_home", "datagram_pair_cannot_reach_host", "stream_pairs_stay_private", "seqpacket_pairs_stay_private",
         "local_relay_policy_matches_mode", "no_host_state_descriptors"}
+    if not args.codex:
+        expected.add("socketpair_domain_type_protocol_allowlist")
     if set(facts) != expected or any(type(value) is not bool for value in facts.values()):
         raise RuntimeError("fixture omitted or changed a required assertion")
     registry = json.loads((state / "registry.json").read_text())

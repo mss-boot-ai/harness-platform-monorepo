@@ -752,10 +752,17 @@ fn syscall_filter() -> Result<std::fs::File, ProcessError> {
         (0x15, 0, 1, 1),
         (0x06, 0, 0, 0x00050001),
         (0x06, 0, 0, 0x7fff0000),
-        (0x15, 0, 4, 53),
+        (0x15, 0, 11, 53),
+        (0x20, 0, 0, 16), // domain: AF_UNIX only
+        (0x15, 1, 0, 1),
+        (0x06, 0, 0, 0x00050001),
+        (0x20, 0, 0, 32), // protocol: zero only
+        (0x15, 1, 0, 0),
+        (0x06, 0, 0, 0x00050001),
         (0x20, 0, 0, 24),
-        (0x54, 0, 0, 0xf),
-        (0x15, 0, 1, 2),
+        (0x54, 0, 0, !(0x80000 | 0x800)), // strip only CLOEXEC/NONBLOCK
+        (0x15, 2, 0, 1),                  // SOCK_STREAM
+        (0x15, 1, 0, 5),                  // SOCK_SEQPACKET
         (0x06, 0, 0, 0x00050001),
         (0x06, 0, 0, 0x7fff0000),
     ]);

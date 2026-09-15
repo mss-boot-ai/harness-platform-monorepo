@@ -27,6 +27,9 @@ struct Record {
     run: String,
     scope: String,
     boot: String,
+    /// None can be parsed from historical v1 records, but is never invented on recovery.
+    #[serde(default)]
+    delegation_root: Option<PathBuf>,
     device: u64,
     inode: u64,
     workspace: PathBuf,
@@ -179,7 +182,7 @@ impl Supervisor {
             .mode(0o600)
             .open(path.join("registry.json"))
             .map_err(unavailable)?;
-        file.write_all(b"{\"version\":1,\"records\":{}}")
+        file.write_all(b"{\"version\":2,\"records\":{}}")
             .and_then(|()| file.sync_all())
             .map_err(unavailable)?;
         File::open(path)
@@ -277,6 +280,7 @@ impl Supervisor {
             run: id.clone(),
             scope: scope_name,
             boot: self.boot.clone(),
+            delegation_root: Some(self.config.cgroup_root.clone()),
             device: group_metadata.dev(),
             inode: group_metadata.ino(),
             workspace: workspace_path,
@@ -373,6 +377,7 @@ impl Supervisor {
     }
 
     fn close_record(&self, record: &Record) -> Result<(), ProcessError> {
+        self.verify_delegation(record)?;
         {
             let registry = self.registry.lock().map_err(unavailable)?;
             if registry.faulted {
@@ -472,6 +477,10 @@ impl Supervisor {
     // Resume retirement after a crash between the durable close and rmdir. A known
     // closed directory is removable only with its sealed gate, exact inode, and no live tasks.
     fn closed_scope_remnant(&self, record: &Record) -> Result<Option<PathBuf>, ProcessError> {
+        self.verify_delegation(record)?;
+        if record.boot != self.boot {
+            return Ok(None);
+        } // Never inspect a current-boot namesake.
         let group = self.config.cgroup_root.join("runs").join(&record.scope);
         let metadata = match fs::symlink_metadata(&group) {
             Ok(metadata) => metadata,
@@ -499,6 +508,17 @@ impl Supervisor {
             return Err(ProcessError::CleanupUnconfirmed);
         }
         Ok(Some(group))
+    }
+
+    fn verify_delegation(&self, record: &Record) -> Result<(), ProcessError> {
+        let original = record
+            .delegation_root
+            .as_ref()
+            .ok_or(ProcessError::ScopeMigrationRequired)?;
+        if record.boot == self.boot && original != &self.config.cgroup_root {
+            return Err(ProcessError::ScopeMigrationRequired);
+        }
+        Ok(())
     }
 }
 
@@ -936,8 +956,15 @@ fn valid_scope_name(name: &str) -> bool {
         .is_some_and(|(run, nonce)| valid_hex(run, 32) && valid_hex(nonce, 32))
 }
 fn validate_state(state: &State) -> Result<(), ProcessError> {
-    if state.version != 1
-        || state.records.len() > MAX_RECORDS
+    if state.version != 2
+        || state
+            .records
+            .values()
+            .any(|record| record.delegation_root.is_none())
+    {
+        return Err(ProcessError::ScopeMigrationRequired);
+    }
+    if state.records.len() > MAX_RECORDS
         || state.records.iter().any(|(id, r)| {
             !valid_hex(id, 32)
                 || id != &r.run
@@ -947,6 +974,16 @@ fn validate_state(state: &State) -> Result<(), ProcessError> {
                 || r.workspace == Path::new("/")
                 || !valid_hex(&r.profile_digest, 64)
                 || r.boot.len() != 36
+                || r.delegation_root.as_ref().is_none_or(|root| {
+                    !root.is_absolute()
+                        || root == Path::new("/")
+                        || root.components().any(|part| {
+                            matches!(
+                                part,
+                                std::path::Component::ParentDir | std::path::Component::CurDir
+                            )
+                        })
+                })
         })
     {
         return Err(ProcessError::CleanupUnconfirmed);

@@ -53,6 +53,8 @@ pub enum ProcessError {
     WorkspaceBusy,
     #[error("local process scope cleanup is not confirmed")]
     CleanupUnconfirmed,
+    #[error("scope records require explicit reconciliation in their original delegation")]
+    ScopeMigrationRequired,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
